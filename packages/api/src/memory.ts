@@ -1,17 +1,30 @@
-import type { Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
-import { assertEvent, assertScope, matches, type RepositoryFactory, type TenantRepository } from './repository.js';
+import type { CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
+import { assertCrmWrites, assertEvent, assertScope, matches, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
-interface State { tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
+interface State { crm: Map<string, CrmEntity>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
   private states = new Map<string, State>();
   forTenant(tenantId: string): TenantRepository {
     requireId(tenantId);
     let state = this.states.get(tenantId);
-    if (!state) { state = {users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
+    if (!state) { state = {crm: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
     const s = state;
     const check = (event: OutboxEvent) => { assertScope(tenantId, event); if (s.events.has(event.id)) throw conflict(); };
     // Synchronous validation followed by synchronous map writes: no interleaved await or partial commits.
     return {
+      users: async () => structuredClone([...s.users.values()].filter(u => s.memberships.get(u.id)?.active)),
+      crmList: async kind => structuredClone([...s.crm.values()].filter(r => r.kind === kind)) as never,
+      crmGet: async (kind, id) => structuredClone(s.crm.get(`${kind}#${requireId(id)}`)) as never,
+      crmWrite: async writes => {
+        assertCrmWrites(tenantId, writes);
+        for (const {record, expectedVersion, event} of writes) {
+          requireId(record.id); check(event);
+          if ((s.crm.get(`${record.kind}#${record.id}`)?.version ?? 0) !== expectedVersion) throw conflict();
+        }
+        for (const {record, event} of writes) {
+          s.crm.set(`${record.kind}#${record.id}`, structuredClone(record)); s.events.set(event.id, structuredClone(event));
+        }
+      },
       membership: async id => structuredClone(s.memberships.get(id)),
       tenant: async () => structuredClone(s.tenant),
       list: async query => structuredClone([...s.vehicles.values()].filter(v => matches(v, query))),

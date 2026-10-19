@@ -9,9 +9,10 @@
     "provision": "node --import tsx src/provision.ts"
   },
   "dependencies": {
-    "@freedms/shared": "0.1.0",
     "@aws-sdk/client-dynamodb": "^3.900.0",
-    "@aws-sdk/lib-dynamodb": "^3.900.0"
+    "@aws-sdk/lib-dynamodb": "^3.900.0",
+    "@freedms/shared": "0.1.0",
+    "@xmldom/xmldom": "^0.9.12"
   },
   "license": "MIT"
 }

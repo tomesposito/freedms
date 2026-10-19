@@ -1,7 +1,12 @@
+import type { CrmEntity } from '@freedms/shared';
 import type { Membership, OutboxEvent, Tenant, User, Vehicle, VehicleStatus } from '@freedms/shared';
 export interface VehicleQuery { status?: VehicleStatus; search?: string }
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
+  users(): Promise<User[]>;
+  crmList<K extends CrmEntity['kind']>(kind: K): Promise<Extract<CrmEntity, {kind: K}>[]>;
+  crmGet<K extends CrmEntity['kind']>(kind: K, id: string): Promise<Extract<CrmEntity, {kind: K}> | undefined>;
+  crmWrite(writes: CrmWrite[]): Promise<void>;
   membership(userId: string): Promise<Membership | undefined>;
   tenant(): Promise<Tenant | undefined>;
   list(query: VehicleQuery): Promise<Vehicle[]>;
@@ -22,4 +27,18 @@ export function assertScope(tenantId: string, ...rows: {tenantId: string}[]): vo
 }
 export function assertEvent(vehicleId: string, version: number, event: OutboxEvent, type: OutboxEvent['type']): void {
   if (event.aggregateId !== vehicleId || event.aggregateVersion !== version || event.type !== type) throw new Error('Invalid outbox event');
+}
+
+export interface CrmWrite { record: CrmEntity; expectedVersion: number; event: OutboxEvent }
+export function assertCrmWrites(tenantId: string, writes: CrmWrite[]): void {
+  const keys = new Set<string>(); const events = new Set<string>();
+  if (!writes.length || writes.length > 10) throw new Error('Invalid CRM transaction');
+  for (const {record, expectedVersion, event} of writes) {
+    assertScope(tenantId, record, event);
+    assertEvent(record.id, expectedVersion + 1, event, `${record.kind}.${expectedVersion ? 'updated' : 'created'}`);
+    if (record.version !== expectedVersion + 1 || expectedVersion < 0 || !Number.isInteger(expectedVersion)) throw new Error('Invalid CRM version');
+    const key = `${record.kind}#${record.id}`;
+    if (keys.has(key) || events.has(event.id)) throw new Error('Duplicate CRM transaction item');
+    keys.add(key); events.add(event.id);
+  }
 }

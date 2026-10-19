@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: freeDMS inventory foundations (no deployment performed by the build)
+Description: freeDMS inventory and CRM foundations (no deployment performed by the build)
 Parameters:
   WebOrigin:
     Type: String
@@ -149,6 +149,14 @@ Resources:
               Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:PutItem, dynamodb:DeleteItem]
               Resource: !GetAtt Table.Arn
       Events:
+        AdfIntake:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/intake/adf'
+            Method: POST
+            Auth:
+              Authorizer: NONE
         Proxy:
           Type: HttpApi
           Properties:

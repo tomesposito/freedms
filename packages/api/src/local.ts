@@ -20,7 +20,9 @@ const server = createServer(async (req, res) => {
     const chunks: Buffer[] = []; let bytes = 0;
     for await (const chunk of req) { bytes += chunk.length; if (bytes > 65536) throw new ApiError(413, 'TOO_LARGE', 'Body exceeds 64 KiB.'); chunks.push(chunk); }
     const body = Buffer.concat(chunks).toString('utf8');
-    if (['POST', 'PUT', 'DELETE'].includes(req.method ?? '') && !req.headers['content-type']?.startsWith('application/json')) throw new ApiError(415, 'CONTENT_TYPE', 'Use application/json.');
+    const isIntake = req.method === 'POST' && url.pathname.replace(/\/$/, '') === '/intake/adf';
+    if (isIntake && !['application/xml', 'text/xml'].includes((req.headers['content-type'] ?? '').split(';')[0])) throw new ApiError(415, 'CONTENT_TYPE', 'Use application/xml.');
+    if (!isIntake && ['POST', 'PUT', 'DELETE'].includes(req.method ?? '') && !req.headers['content-type']?.startsWith('application/json')) throw new ApiError(415, 'CONTENT_TYPE', 'Use application/json.');
     if (req.method === 'POST' && url.pathname === '/local/session') {
       const input = parseBody(body); onlyKeys(input, ['dealership', 'name']);
       const name = text(input.name, 'Your name'); const dealership = text(input.dealership, 'Dealership');
@@ -30,7 +32,7 @@ const server = createServer(async (req, res) => {
       result = response(201, {data: {token: tokens.issue(userId, tenantId)}});
     } else {
       const token = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
-      result = await handle({method: req.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body, claims: tokens.verify(token)});
+      result = await handle({method: req.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body, ...(isIntake ? {intakeToken: token} : {claims: tokens.verify(token)})});
     }
   } catch (error) { result = errorResponse(error); }
   res.writeHead(result.statusCode, result.headers); res.end(result.body);

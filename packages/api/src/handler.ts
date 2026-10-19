@@ -1,3 +1,4 @@
+import { crm, intake } from './crm.js';
 import { randomUUID } from 'node:crypto';
 import { vehicleStatuses, type AuthClaims, type OutboxEvent, type Vehicle } from '@freedms/shared';
 import { authorize, requireWrite } from './auth.js';
@@ -5,7 +6,7 @@ import { ApiError, conflict, missing, requireId } from './errors.js';
 import type { RepositoryFactory } from './repository.js';
 import type { VinDecoder } from './vin.js';
 import { invalid, object, onlyKeys, text, vehicleInput, version, view, vin } from './validation.js';
-export interface ApiRequest { method: string; path: string; query?: Record<string, string | undefined>; body?: string; claims?: AuthClaims }
+export interface ApiRequest { method: string; path: string; query?: Record<string, string | undefined>; body?: string; claims?: AuthClaims; intakeToken?: string }
 export interface ApiResponse { statusCode: number; headers: Record<string, string>; body: string }
 export function response(statusCode: number, body: unknown): ApiResponse {
   return {statusCode, headers: {'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff'}, body: JSON.stringify(body)};
@@ -23,9 +24,11 @@ export function parseBody(body?: string): Record<string, unknown> {
 export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date()) {
   return async (request: ApiRequest): Promise<ApiResponse> => {
     try {
+      if (request.method.toUpperCase() === 'POST' && request.path.replace(/\/$/, '') === '/intake/adf') return await intake(request, repositories, now());
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
+      if (/^\/(customers|leads|users|intake-token)(\/|$)/.test(path)) return await crm(request, principal, repository, now());
       if (method === 'GET' && path === '/session') return response(200, {data: {principal, tenant: await repository.tenant()}});
       if (method === 'GET' && path.startsWith('/vin/')) return response(200, {data: await decoder.decode(vin(decodeURIComponent(path.slice(5))))});
       if (path !== '/vehicles' && !/^\/vehicles\/[^/]+$/.test(path)) throw new ApiError(404, 'NOT_FOUND', 'Endpoint not found.');

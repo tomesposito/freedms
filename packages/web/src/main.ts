@@ -1,3 +1,4 @@
+import { crmRoute } from './crm';
 import { vehicleStatuses, type ApiEnvelope, type DecodedVin, type Principal, type Tenant, type VehicleInput, type VehicleView } from '@freedms/shared';
 import { cents, currency, escapeHtml as e } from './format';
 import { finishSignIn, getToken, localMode, setToken, signIn, signOut } from './auth';
@@ -19,7 +20,7 @@ async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : 'Something went wrong. Please retry.'; }
 function flash(error: unknown): void { const el = document.querySelector<HTMLElement>('#message')!; el.textContent = errorMessage(error); el.hidden = false; el.focus(); }
 function shell(content: string): void {
-  app.innerHTML = `<header><a class="brand" href="#/">free<span>DMS</span></a><span class="workspace">${e(session?.tenant?.name || 'Your dealership')}</span><div class="header-right">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet">Sign out</button></div></header><main><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main><footer>freeDMS · Inventory${localMode ? ' · Local changes are cleared when the API restarts.' : ''}</footer>`;
+  app.innerHTML = `<header><a class="brand" href="#/">free<span>DMS</span></a><nav aria-label="Main navigation"><a href="#/">Inventory</a><a href="#/leads">Leads</a></nav><span class="workspace">${e(session?.tenant?.name || 'Your dealership')}</span><div class="header-right">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet">Sign out</button></div></header><main><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main><footer>freeDMS · Inventory & Leads${localMode ? ' · Local changes are cleared when the API restarts.' : ''}</footer>`;
   document.querySelector('#signout')?.addEventListener('click', signOut);
 }
 function badge(value: string): string { return `<span class="badge ${value.replace(' ', '-')}">${e(value)}</span>`; }
@@ -102,7 +103,8 @@ async function route(): Promise<void> {
   if (!session) return; const sequence = ++routeSequence;
   try {
     const parts = location.hash.replace(/^#\//, '').split('/');
-    if (parts[0] === 'new') await form(undefined, sequence);
+    if (parts[0] === 'leads') await crmRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
+    else if (parts[0] === 'new') await form(undefined, sequence);
     else if (parts[0] === 'vehicles' && parts[1]) { if (parts[2] === 'edit') await form(parts[1], sequence); else await detail(parts[1], sequence); }
     else await list(sequence);
   } catch (error) { if (sequence === routeSequence) { if (!getToken()) await login(); flash(error); } }

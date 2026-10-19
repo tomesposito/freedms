@@ -18,9 +18,29 @@ export interface Vehicle extends VehicleInput {
 export interface VehicleView extends Vehicle { agingDays: number; reconTotal: number }
 export interface OutboxEvent {
   id: string; tenantId: string; actorId: string; aggregateId: string; aggregateVersion: number;
-  type: 'vehicle.created' | 'vehicle.updated' | 'vehicle.deleted' | 'tenant.created';
+  type: 'vehicle.created' | 'vehicle.updated' | 'vehicle.deleted' | 'tenant.created' | 'customer.created' | 'customer.updated' | 'lead.created' | 'lead.updated' | 'intake.created' | 'intake.updated';
   occurredAt: string; deliveryStatus: 'pending';
 }
 export interface DecodedVin { vin: string; year: number | null; make: string; model: string; trim: string; warnings: string[] }
 export type ApiEnvelope<T> = { data: T } | { error: { code: string; message: string } };
 export interface AuthClaims { sub: string; 'custom:tenant_id': string; iss: string; aud: string; exp: number; token_use: 'id' }
+
+export const leadSources = ['walk-in', 'phone', 'website', 'marketplace', 'referral', 'other'] as const;
+export const leadStages = ['new', 'contacted', 'appointment', 'in-store', 'working-deal', 'sold', 'lost'] as const;
+export const communicationTypes = ['call', 'text', 'email', 'visit'] as const;
+export type LeadStage = typeof leadStages[number];
+export interface Consent { status: 'unknown' | 'granted' | 'revoked'; timestamp: string | null; source: string }
+export interface CustomerInput { name: string; phone: string; email: string; address: string; consent: Consent; notes: string }
+export interface CrmRecord { id: string; tenantId: string; version: number; createdAt: string; updatedAt: string }
+export interface Customer extends CrmRecord, CustomerInput { kind: 'customer' }
+export interface FollowUp { id: string; type: typeof communicationTypes[number]; dueAt: string; done: boolean }
+export interface Activity { id: string; kind: 'stage' | 'communication' | 'follow-up' | 'assignment'; actorId: string; timestamp: string; summary: string; type?: typeof communicationTypes[number]; direction?: 'inbound' | 'outbound' }
+export interface Lead extends CrmRecord {
+  kind: 'lead'; customerId: string; vehicleId: string | null; vehicleDescription: string;
+  source: typeof leadSources[number]; sourceDetail: string; stage: LeadStage; assigneeId: string | null;
+  activities: Activity[]; followUps: FollowUp[];
+}
+export interface IntakeCredential extends CrmRecord { kind: 'intake'; hash: string }
+export type CrmEntity = Customer | Lead | IntakeCredential;
+export interface LeadView extends Lead { customer: Customer; overdue: boolean }
+export function isOverdue(task: FollowUp, now: Date): boolean { return !task.done && Date.parse(task.dueAt) < now.getTime(); }

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?adf version="1.0"?>
+<adf>
+  <prospect status="new">
+    <id sequence="1" source="Dealer Website">web-123</id>
+    <requestdate>2026-10-19T10:15:00Z</requestdate>
+    <vehicle interest="buy" status="used">
+      <year>2003</year><make>Honda</make><model>Accord</model><trim>EX</trim>
+      <vin>1HGCM82633A004352</vin><stock>H123</stock>
+    </vehicle>
+    <customer>
+      <contact>
+        <name part="first">Jamie</name><name part="last">Rivera</name>
+        <email preferredcontact="1">jamie@example.test</email>
+        <phone type="voice" time="day">(555) 123-4567</phone>
+        <address type="home"><street line="1">12 Test Lane</street><city>Testville</city><regioncode>CA</regioncode><postalcode>90001</postalcode><country>US</country></address>
+      </contact>
+      <comments><![CDATA[Is this still available? I'd like a visit & trade appraisal.]]></comments>
+    </customer>
+    <vendor><id source="dealer">external-dealer-code</id><vendorname>Independent Motors</vendorname></vendor>
+    <provider><name part="full">Dealer Website</name><service>Contact form</service></provider>
+  </prospect>
+</adf>

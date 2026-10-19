@@ -1,7 +1,7 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
-import type { Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertEvent, assertScope, matches, type RepositoryFactory, type TenantRepository } from './repository.js';
+import type { CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
+import { assertCrmWrites, assertEvent, assertScope, matches, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   constructor(private table: string, private client = DynamoDBDocumentClient.from(new DynamoDBClient({}))) {}
@@ -26,7 +26,29 @@ export class DynamoRepositories implements RepositoryFactory {
         throw error;
       }
     };
+    const listRows = async <T>(prefix: string): Promise<T[]> => {
+      const rows: T[] = []; let cursor: Record<string, unknown> | undefined;
+      do {
+        const result = await this.client.send(new QueryCommand({TableName: this.table,
+          KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+          ExpressionAttributeValues: {':pk': PK, ':prefix': prefix}, ConsistentRead: true, ExclusiveStartKey: cursor}));
+        rows.push(...(result.Items ?? []).map(item => item.data as T)); cursor = result.LastEvaluatedKey;
+      } while (cursor);
+      return rows;
+    };
     return {
+      users: async () => {
+        const [users, members] = await Promise.all([listRows<User>('USER#'), listRows<Membership>('MEMBER#')]);
+        return users.filter(u => members.some(m => m.userId === u.id && m.active));
+      },
+      crmList: kind => listRows(`${kind.toUpperCase()}#`) as never,
+      crmGet: (kind, id) => get<CrmEntity>(`${kind.toUpperCase()}#${requireId(id)}`) as never,
+      crmWrite: async writes => {
+        assertCrmWrites(tenantId, writes);
+        await transact(writes.flatMap(({record, expectedVersion, event}) => [
+          put(`${record.kind.toUpperCase()}#${requireId(record.id)}`, record,
+            expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined), eventPut(event)]));
+      },
       membership: id => get<Membership>(`MEMBER#${requireId(id)}`),
       tenant: () => get<Tenant>('PROFILE'),
       get: id => get<Vehicle>(`VEHICLE#${requireId(id)}`),
