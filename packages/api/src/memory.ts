@@ -1,5 +1,5 @@
 import type { CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
-import { assertCrmWrites, assertEvent, assertScope, matches, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 interface State { crm: Map<string, CrmEntity>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
@@ -15,12 +15,18 @@ export class MemoryRepositories implements RepositoryFactory {
       users: async () => structuredClone([...s.users.values()].filter(u => s.memberships.get(u.id)?.active)),
       crmList: async kind => structuredClone([...s.crm.values()].filter(r => r.kind === kind)) as never,
       crmGet: async (kind, id) => structuredClone(s.crm.get(`${kind}#${requireId(id)}`)) as never,
-      crmWrite: async writes => {
+      crmWrite: async (writes, vehicles = []) => {
+        assertVehicleWrites(tenantId, vehicles, writes);
+        for (const {record, expectedVersion, event} of vehicles) {
+          requireId(record.id); check(event);
+          if (s.vehicles.get(record.id)?.version !== expectedVersion) throw conflict();
+        }
         assertCrmWrites(tenantId, writes);
         for (const {record, expectedVersion, event} of writes) {
           requireId(record.id); check(event);
           if ((s.crm.get(`${record.kind}#${record.id}`)?.version ?? 0) !== expectedVersion) throw conflict();
         }
+        for (const {record, event} of vehicles) { s.vehicles.set(record.id, structuredClone(record)); s.events.set(event.id, structuredClone(event)); }
         for (const {record, event} of writes) {
           s.crm.set(`${record.kind}#${record.id}`, structuredClone(record)); s.events.set(event.id, structuredClone(event));
         }

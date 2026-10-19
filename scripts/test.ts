@@ -5,3 +5,4 @@ import '../packages/api/test/vin.test.js';
 import '../packages/web/test/format.test.js';
 
 import '../packages/api/test/crm.test.js';
+import '../packages/api/test/desking.test.js';

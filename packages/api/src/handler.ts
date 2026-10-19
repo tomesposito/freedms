@@ -1,3 +1,4 @@
+import { desking } from './desking.js';
 import { crm, intake } from './crm.js';
 import { randomUUID } from 'node:crypto';
 import { vehicleStatuses, type AuthClaims, type OutboxEvent, type Vehicle } from '@freedms/shared';
@@ -28,6 +29,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
+      if (/^\/(deals|settings)(\/|$)/.test(path)) return await desking(request, principal, repository, now());
       if (/^\/(customers|leads|users|intake-token)(\/|$)/.test(path)) return await crm(request, principal, repository, now());
       if (method === 'GET' && path === '/session') return response(200, {data: {principal, tenant: await repository.tenant()}});
       if (method === 'GET' && path.startsWith('/vin/')) return response(200, {data: await decoder.decode(vin(decodeURIComponent(path.slice(5))))});
@@ -56,6 +58,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       const expected = version(body.version); if (existing.version !== expected) throw conflict();
       if (method === 'DELETE') {
         onlyKeys(body, ['version']);
+        if ((await repository.crmList('deal')).some(d => d.vehicleId === id)) throw conflict();
         await repository.delete(id!, expected, event('vehicle.deleted', id!, expected + 1));
         return response(200, {data: {id}});
       }

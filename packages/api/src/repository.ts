@@ -6,7 +6,7 @@ export interface TenantRepository {
   users(): Promise<User[]>;
   crmList<K extends CrmEntity['kind']>(kind: K): Promise<Extract<CrmEntity, {kind: K}>[]>;
   crmGet<K extends CrmEntity['kind']>(kind: K, id: string): Promise<Extract<CrmEntity, {kind: K}> | undefined>;
-  crmWrite(writes: CrmWrite[]): Promise<void>;
+  crmWrite(writes: CrmWrite[], vehicles?: VehicleWrite[]): Promise<void>;
   membership(userId: string): Promise<Membership | undefined>;
   tenant(): Promise<Tenant | undefined>;
   list(query: VehicleQuery): Promise<Vehicle[]>;
@@ -40,5 +40,17 @@ export function assertCrmWrites(tenantId: string, writes: CrmWrite[]): void {
     const key = `${record.kind}#${record.id}`;
     if (keys.has(key) || events.has(event.id)) throw new Error('Duplicate CRM transaction item');
     keys.add(key); events.add(event.id);
+  }
+}
+
+export interface VehicleWrite { record: Vehicle; expectedVersion: number; event: OutboxEvent }
+export function assertVehicleWrites(tenantId: string, writes: VehicleWrite[], crm: CrmWrite[]): void {
+  const ids = new Set<string>(); const events = new Set(crm.map(w => w.event.id));
+  if (writes.length > 1) throw new Error('Invalid vehicle transaction');
+  for (const {record, expectedVersion, event} of writes) {
+    assertScope(tenantId, record, event);
+    assertEvent(record.id, expectedVersion + 1, event, 'vehicle.updated');
+    if (record.version !== expectedVersion + 1 || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1 || ids.has(record.id) || events.has(event.id)) throw new Error('Invalid vehicle transaction');
+    ids.add(record.id); events.add(event.id);
   }
 }

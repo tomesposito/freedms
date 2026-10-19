@@ -1,0 +1,102 @@
+import { randomUUID } from 'node:crypto';
+import { defaultSettings, dealStatuses, pencilMath, type CrmEntity, type Deal, type DealView, type Pencil, type Principal, type TaxSettings, type Trade, type WorkspaceSettings } from '@freedms/shared';
+import { ApiError, conflict, missing, requireId } from './errors.js';
+import { parseBody, response, type ApiRequest } from './handler.js';
+import { invalid, money, object, onlyKeys, text, version } from './validation.js';
+import { choice } from './crm-validation.js';
+import type { CrmWrite, TenantRepository, VehicleWrite } from './repository.js';
+function integer(value: unknown, max: number, label: string, min = 0): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min || value > max) throw invalid(`Invalid ${label}.`);
+  return value;
+}
+function taxInput(b: Record<string, unknown>): TaxSettings {
+  if (typeof b.taxTradeDifference !== 'boolean') throw invalid('Trade tax toggle must be boolean.');
+  return {taxRateBps: integer(b.taxRateBps, 10000, 'tax rate'), taxTradeDifference: b.taxTradeDifference, docFee: money(b.docFee, 'Doc fee')};
+}
+function tradeInput(value: unknown): Trade | null {
+  if (value === null) return null;
+  const b = object(value); onlyKeys(b, ['year', 'make', 'model', 'vin', 'allowance', 'payoff', 'actualCashValue']);
+  return {year: text(b.year, 'Trade year', 20), make: text(b.make, 'Trade make'), model: text(b.model, 'Trade model'), vin: text(b.vin, 'Trade VIN', 100, true), allowance: money(b.allowance, 'Allowance'), payoff: money(b.payoff, 'Payoff'), actualCashValue: money(b.actualCashValue, 'Actual cash value')};
+}
+function pencilInput(value: unknown): Pencil {
+  const b = object(value); onlyKeys(b, ['id', 'name', 'price', 'down', 'term', 'aprBps']);
+  return {id: requireId(b.id), name: text(b.name, 'Pencil name', 80), price: money(b.price, 'Price'), down: money(b.down, 'Down payment'), term: integer(b.term, 120, 'term', 1), aprBps: integer(b.aprBps, 10000, 'APR')};
+}
+async function view(repo: TenantRepository, d: Deal): Promise<DealView> {
+  const [vehicle, customer] = await Promise.all([repo.get(d.vehicleId), repo.crmGet('customer', d.customerId)]);
+  if (!vehicle || !customer) throw missing();
+  return {...d, vehicle, customer};
+}
+export async function desking(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date) {
+  const method = request.method.toUpperCase(), path = request.path.replace(/\/$/, ''), query = request.query ?? {};
+  const date = now.toISOString();
+  const base = () => ({id: randomUUID(), tenantId: principal.tenantId, version: 1, createdAt: date, updatedAt: date});
+  const write = (record: CrmEntity, expectedVersion = 0): CrmWrite => ({record, expectedVersion, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: `${record.kind}.${expectedVersion ? 'updated' : 'created'}`, occurredAt: date, deliveryStatus: 'pending'}});
+  if (path === '/settings') {
+    onlyKeys(query, []);
+    const old = await repo.crmGet('settings', 'workspace');
+    if (method === 'GET') return response(200, {data: old ?? {...defaultSettings, version: 0}});
+    if (method !== 'PUT') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+    if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can change workspace settings.');
+    const b = parseBody(request.body); onlyKeys(b, ['version', 'taxRateBps', 'taxTradeDifference', 'docFee']);
+    const expected = integer(b.version, Number.MAX_SAFE_INTEGER, 'version'); if ((old?.version ?? 0) !== expected) throw conflict();
+    const record: WorkspaceSettings = {...base(), ...taxInput(b), id: 'workspace', kind: 'settings', version: expected + 1, createdAt: old?.createdAt ?? date};
+    await repo.crmWrite([write(record, expected)]); return response(200, {data: record});
+  }
+  if (path !== '/deals' && !/^\/deals\/[^/]+$/.test(path)) throw missing();
+  const id = path === '/deals' ? undefined : requireId(path.split('/')[2]);
+  if (method === 'GET') {
+    onlyKeys(query, id ? [] : ['status']);
+    if (id) { const d = await repo.crmGet('deal', id); if (!d) throw missing(); return response(200, {data: await view(repo, d)}); }
+    if (query.status) choice(query.status, dealStatuses, 'status');
+    const deals = (await repo.crmList('deal')).filter(d => !query.status || d.status === query.status).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+    return response(200, {data: await Promise.all(deals.map(d => view(repo, d)))});
+  }
+  onlyKeys(query, []); const b = parseBody(request.body);
+  if (method === 'POST' && !id) {
+    onlyKeys(b, ['vehicleId', 'customerId', 'leadId', 'type']);
+    const vehicleId = requireId(b.vehicleId), customerId = requireId(b.customerId), leadId = b.leadId ? requireId(b.leadId) : null;
+    const vehicle = await repo.get(vehicleId), customer = await repo.crmGet('customer', customerId);
+    if (!vehicle || !customer) throw invalid('Vehicle and buyer must belong to this workspace.');
+    if (vehicle.status === 'sold') throw invalid('This vehicle is already sold.');
+    if (leadId) { const lead = await repo.crmGet('lead', leadId); if (!lead || lead.customerId !== customerId || (lead.vehicleId && lead.vehicleId !== vehicleId)) throw invalid('Originating lead must match the buyer and vehicle.'); }
+    const settings = await repo.crmGet('settings', 'workspace') ?? defaultSettings;
+    const pencil: Pencil = {id: randomUUID(), name: 'Initial pencil', price: vehicle.listPrice, down: 0, term: 36, aprBps: 0};
+    const deal: Deal = {...base(), kind: 'deal', vehicleId, customerId, leadId, type: choice(b.type, ['cash', 'finance'] as const, 'deal type'), trade: null,
+      taxRateBps: settings.taxRateBps, taxTradeDifference: settings.taxTradeDifference, docFee: settings.docFee,
+      pencils: [pencil], workingPencilId: pencil.id, status: 'working', history: [{status: 'working', actorId: principal.userId, timestamp: date}]};
+    await repo.crmWrite([write(deal)]); return response(201, {data: await view(repo, deal)});
+  }
+  if (method !== 'PUT' || !id) throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+  onlyKeys(b, ['version', 'type', 'trade', 'docFee', 'pencils', 'workingPencilId', 'status']);
+  const old = await repo.crmGet('deal', id); if (!old) throw missing();
+  const expected = version(b.version); if (old.version !== expected) throw conflict();
+  if (old.status === 'sold' || old.status === 'dead') throw invalid('Closed deals cannot be changed.');
+  const status = b.status === undefined ? old.status : choice(b.status, dealStatuses, 'status');
+  if (status !== old.status && !(old.status === 'working' ? ['approved', 'dead'] : ['sold', 'dead']).includes(status)) throw invalid('Invalid deal status transition.');
+  let pencils = old.pencils;
+  if (b.pencils !== undefined) {
+    if (!Array.isArray(b.pencils) || !b.pencils.length || b.pencils.length > 20) throw invalid('Save between 1 and 20 pencils.');
+    pencils = b.pencils.map(pencilInput); if (new Set(pencils.map(p => p.id)).size !== pencils.length) throw invalid('Pencil IDs must be unique.');
+  }
+  const workingPencilId = b.workingPencilId === undefined ? old.workingPencilId : requireId(b.workingPencilId);
+  if (!pencils.some(p => p.id === workingPencilId)) throw invalid('Choose a saved working pencil.');
+  const deal: Deal = {...old, version: expected + 1, updatedAt: date, pencils, workingPencilId, status,
+    type: b.type === undefined ? old.type : choice(b.type, ['cash', 'finance'] as const, 'deal type'),
+    trade: b.trade === undefined ? old.trade : tradeInput(b.trade), docFee: b.docFee === undefined ? old.docFee : money(b.docFee, 'Doc fee'),
+    history: status === old.status ? old.history : [...old.history, {status, actorId: principal.userId, timestamp: date}]};
+  const result = await view(repo, deal);
+  for (const p of pencils) pencilMath(p, deal.trade, deal, result.vehicle, deal.type);
+  const writes = [write(deal, expected)]; const vehicles: VehicleWrite[] = [];
+  if (status === 'sold') {
+    const vehicle = result.vehicle; if (vehicle.status === 'sold') throw conflict();
+    const record = {...vehicle, status: 'sold' as const, version: vehicle.version + 1, updatedAt: date};
+    vehicles.push({record, expectedVersion: vehicle.version, event: {...write(deal).event, id: randomUUID(), aggregateId: vehicle.id, aggregateVersion: record.version, type: 'vehicle.updated'}});
+    result.vehicle = record;
+    if (deal.leadId) {
+      const lead = await repo.crmGet('lead', deal.leadId); if (!lead) throw missing();
+      writes.push(write({...lead, stage: 'sold', version: lead.version + 1, updatedAt: date, activities: [...lead.activities, {id: randomUUID(), kind: 'stage', actorId: principal.userId, timestamp: date, summary: `Deal ${deal.id} sold: ${lead.stage} → sold`}]}, lead.version));
+    }
+  }
+  await repo.crmWrite(writes, vehicles); return response(200, {data: result});
+}
