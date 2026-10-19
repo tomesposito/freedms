@@ -433,3 +433,37 @@ selected by dealer administrators.
 Record who approved what, recheck permission and current record state at execution,
 and make cancellation/revocation effective. Add bounded autonomy only after a
 specific workflow has demonstrated correctness, consent enforcement, and recoverability.
+
+## 9. AI direction — less dealer work (owner, 2026-10-19)
+
+The point of AI in freeDMS is not AI features. It is less work for the dealer:
+less typing, fewer clicks, follow-up that happens without someone remembering.
+Owner direction, recorded 2026-10-19. Three fronts:
+
+- **Data entry.** Photo intake (window sticker, auction sheet, title,
+  handwritten worksheet → structured record, dealer confirms), plain-language
+  entry ("stock a 2019 Silverado, cost $18,500, list $24,995" → a filled form
+  awaiting confirmation), and cleanup of messy inbound leads before a human
+  sees them.
+- **Actions.** Conversational commands against the same API the UI uses
+  ("knock $500 off the Camry", "show me everything over 90 days"). Agents
+  draft, the dealer approves, then the action executes — per D-8.
+- **Follow-up grind.** Drafted texts and emails for stale leads, appointment
+  reminders, and a morning brief: what is rotting on the lot and who is
+  waiting. Drafts first; sending stays human-approved until D-8 evolves.
+
+**Model strategy — split by job, not one winner.** Extraction and
+classification (photo → fields, lead scoring, message intent) run constantly
+and must be cheap: small or specialized models win there, possibly fine-tuned
+over time. Reasoning and drafting (pricing advice, follow-up messages, the
+morning brief) is where a standard frontier LLM earns its price. Consumption
+pricing (D-7) maps to that split: cheap tasks stay nearly free; reasoning is
+what dealers visibly pay for. Either way, the durable advantage is the
+aggregated dealer data (§4) making suggestions better than a generic model
+can offer a standalone dealer.
+
+**First AI feature, pulled forward:** AI quick entry — natural-language and
+photo intake for vehicles and leads, draft-then-confirm — ships right after
+the pencil/desking build, ahead of the rest of the P1 reporting work. It
+demonstrates the whole thesis in one feature and forces D-7 and D-8 to be
+decided against a real workflow instead of in the abstract.
