@@ -1,0 +1,1 @@
+{"name":"@freedms/api","version":"0.1.0","private":true,"type":"module","scripts":{"build":"esbuild src/lambda.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/lambda.cjs","dev":"tsx watch src/local.ts"},"dependencies":{"@freedms/shared":"0.1.0","@aws-sdk/client-dynamodb":"^3.900.0","@aws-sdk/lib-dynamodb":"^3.900.0"}}

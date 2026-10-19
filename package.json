@@ -1,0 +1,11 @@
+{
+  "name": "freedms", "private": true, "version": "0.1.0", "type": "module",
+  "workspaces": ["packages/*"], "engines": {"node": ">=20 <25"},
+  "scripts": {
+    "build": "npm run typecheck && npm run build -w @freedms/shared && npm run build -w @freedms/api && npm run build -w @freedms/web",
+    "typecheck": "tsc -p packages/shared && tsc -p packages/api && tsc -p packages/web",
+    "test": "tsx --test packages/api/test/*.test.ts packages/web/test/*.test.ts",
+    "dev": "node scripts/dev.mjs"
+  },
+  "devDependencies": {"@types/node": "^20.17.0", "typescript": "~5.7.3", "tsx": "^4.20.0", "esbuild": "^0.25.0"}
+}

@@ -1,0 +1,175 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: freeDMS inventory foundations (no deployment performed by the build)
+Parameters:
+  WebOrigin:
+    Type: String
+    Description: Exact HTTPS origin serving the static web app (no trailing slash)
+    AllowedPattern: 'https://[^/]+'
+  WebCallbackUrl:
+    Type: String
+    Description: Exact frontend URL ending with /, registered for sign-in and sign-out
+    AllowedPattern: 'https://.*/'
+  CognitoDomainPrefix:
+    Type: String
+    Description: Globally unique prefix for the Cognito hosted sign-in domain
+    AllowedPattern: '[a-z0-9-]+'
+Resources:
+  Table:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+  Documents:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+  DocumentsPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Documents
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt Documents.Arn
+              - !Sub '${Documents.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      MfaConfiguration: 'ON'
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+      Schema:
+        - Name: tenant_id
+          AttributeDataType: String
+          Mutable: false
+          StringAttributeConstraints:
+            MinLength: '1'
+            MaxLength: '128'
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, profile]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs: [!Ref WebCallbackUrl]
+      LogoutURLs: [!Ref WebCallbackUrl]
+      ReadAttributes: [email, name, 'custom:tenant_id']
+      WriteAttributes: [email, name]
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      IdTokenValidity: 1
+      AccessTokenValidity: 1
+      TokenValidityUnits:
+        IdToken: hours
+        AccessToken: hours
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref CognitoDomainPrefix
+      UserPoolId: !Ref UserPool
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      CorsConfiguration:
+        AllowOrigins: [!Ref WebOrigin]
+        AllowHeaders: [Authorization, Content-Type]
+        AllowMethods: [GET, POST, PUT, DELETE, OPTIONS]
+      Auth:
+        DefaultAuthorizer: Cognito
+        Authorizers:
+          Cognito:
+            IdentitySource: '$request.header.Authorization'
+            JwtConfiguration:
+              issuer: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
+              audience: [!Ref UserPoolClient]
+  InventoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../packages/api/dist/
+      Handler: lambda.handler
+      Runtime: nodejs20.x
+      MemorySize: 256
+      Timeout: 15
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+          TOKEN_ISSUER: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
+          TOKEN_AUDIENCE: !Ref UserPoolClient
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:PutItem, dynamodb:DeleteItem]
+              Resource: !GetAtt Table.Arn
+      Events:
+        Proxy:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/{proxy+}'
+            Method: ANY
+  InventoryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${InventoryFunction}'
+      RetentionInDays: 14
+Outputs:
+  ApiUrl:
+    Value: !Sub 'https://${Api}.execute-api.${AWS::Region}.amazonaws.com'
+  TableName:
+    Value: !Ref Table
+  DocumentsBucket:
+    Value: !Ref Documents
+  CognitoUserPoolId:
+    Value: !Ref UserPool
+  CognitoClientId:
+    Value: !Ref UserPoolClient
+  CognitoDomain:
+    Value: !Sub 'https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com'
