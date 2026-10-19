@@ -3,7 +3,7 @@
 > **Living document.** The source of truth for product direction, architecture,
 > and significant decisions. Fixed owner decisions are distinguished from proposals.
 >
-> - **Status:** Founding draft; implementation has not started.
+> - **Status:** First Phase 1 build implemented locally: scaffold, tenancy/auth, and inventory. Later modules remain planned.
 > - **Domain:** freeDMS.co.
 > - **License today:** MIT, as recorded in LICENSE; alternatives remain draft D-1.
 > - **Decision process:** IDDs D-1 onward record context, options, and a recommendation.
@@ -247,9 +247,11 @@ certified lender or OEM connection. Track those distinctions in release document
 ## 6. Architecture sketch
 
 Use a cloud-native, multi-tenant service with a web client and documented APIs.
-A modular application with a transactional relational database, object storage,
-and asynchronous workers is the proposed starting shape. Hosting is D-4; specific
-languages and infrastructure are not selected here.
+The first build is a TypeScript modular application on Node 20, with a Vite static
+client, AWS SAM, Lambda, HTTP API, DynamoDB on-demand, S3, and Cognito under D-4.
+Storage is behind tenant-bound repository interfaces; local development uses an
+empty in-memory implementation. The earlier relational-database proposal is
+superseded by D-4. Outbox delivery workers belong to a later build.
 
 All mutations enter through authorized domain commands. Commit business changes
 and durable event/outbox entries together; workers deliver integrations and agent

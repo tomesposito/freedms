@@ -1,1 +1,11 @@
-{"name":"@freedms/shared","version":"0.1.0","private":true,"type":"module","exports":"./src/index.ts","scripts":{"build":"tsc --noEmit false --declaration --outDir dist"}}
+{
+  "name": "@freedms/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit false --declaration --outDir dist"
+  },
+  "license": "MIT"
+}

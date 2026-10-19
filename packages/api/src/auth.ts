@@ -20,7 +20,7 @@ export class LocalTokens {
       const expected = Buffer.from(this.sign(`${header}.${payload}`)); const actual = Buffer.from(signature);
       if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) throw unauthorized();
       const claims = JSON.parse(Buffer.from(payload, 'base64url').toString()) as AuthClaims;
-      validateClaims(claims, LOCAL_ISSUER, LOCAL_AUDIENCE, this.now()); return claims;
+      validateClaims({...claims}, LOCAL_ISSUER, LOCAL_AUDIENCE, this.now()); return claims;
     } catch { throw unauthorized(); }
   }
 }
