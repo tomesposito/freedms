@@ -7,7 +7,8 @@
 > - **Domain:** freeDMS.co.
 > - **License today:** MIT, as recorded in LICENSE; alternatives remain draft D-1.
 > - **Decision process:** IDDs D-1 onward record context, options, and a recommendation.
->   All are **DRAFT — awaiting the owner's pick**, not implementation approvals.
+>   D-1, D-3, and D-4 were **DECIDED by the owner on 2026-10-19** (recorded in each
+>   IDD below). D-2 and D-5–D-8 remain **DRAFT — awaiting the owner's pick**.
 
 ## 1. Vision & positioning
 
@@ -296,7 +297,7 @@ The free-tier breadth requirement remains the destination throughout these phase
 
 ### D-1 — Open-source license
 
-**Status: DRAFT — awaiting the owner's pick.**
+**Status: DECIDED — owner, 2026-10-19: retain MIT (the recommendation).**
 
 **Context:** the public scaffold is MIT. Open source is fixed; whether competitors
 must share modifications to a hosted version is unresolved.
@@ -327,7 +328,8 @@ before adding dimensions, custom queries, or external aggregate downloads.
 
 ### D-3 — First-module scope
 
-**Status: DRAFT — awaiting the owner's pick.**
+**Status: DECIDED — owner, 2026-10-19: the middle option (the recommendation) —
+the P1 end-to-end independent sales slice.**
 
 **Context:** independents need usable workflows, but full accounting, F&I, service,
 and OEM depth cannot be assumed in the first delivery.
@@ -341,10 +343,24 @@ security, and a useful AI summary/draft capability from that first slice.
 
 ### D-4 — Hosting platform
 
-**Status: DRAFT — awaiting the owner's pick.**
+**Status: DECIDED — owner, 2026-10-19: AWS Lambda + serverless on free tiers.
+This overrides the recommendation below.**
+
+**Owner's reasoning:** stay on AWS free tiers to start, as with OpenSight's
+hosted setup — Lambda and serverless, so the product costs nothing while there
+is no activity and no revenue. Reassess if and when real traffic arrives; the
+first problem is shipping something that costs nothing to run idle.
 
 **Context:** SaaS must support isolation, durable transactions, background work,
 restores, and an affordable free tier without prematurely becoming an infrastructure project.
+
+**Decision (owner, 2026-10-19):** AWS serverless — Lambda, API Gateway, DynamoDB,
+S3, Cognito — on free tiers, pay only on activity. Implementation detail within
+that decision: DynamoDB is the data store because it is AWS's always-free,
+zero-idle-cost option; the design sketch's relational database would bill while
+idle (Aurora Serverless minimum capacity), which the owner's zero-cost rule
+rules out. The data layer sits behind an interface so storage can change when
+traffic justifies it.
 
 **Options:** managed application hosting with managed Postgres/object storage;
 AWS managed containers/database/queues; a serverless application/database platform.
