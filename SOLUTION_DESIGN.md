@@ -201,6 +201,43 @@ The checklist follows research Q3–Q4, including features beyond the first rele
 | Compliance | P1: roles, MFA, encryption, audit logs, retention controls, consent and privacy-request workflows, vendor/incident evidence. P2: supported Red Flags, OFAC, credit and F&I compliance workflows; extend through P4 | No security or compliance paywall; specialist services may be external |
 | Cross-cutting wedge | P1: documented API/webhooks, zero integration fees, full structured data and document export, import preview, self-serve onboarding, basic CRM and core reporting | No export fee or paid prerequisite |
 
+### Integrations: plug in vs build in
+
+"Integration" hides two different things. Some are other parties' networks or
+licensed data — no amount of building replaces plugging in. The rest are features
+incumbents sell as modules or toll as integrations; those we build natively and
+give away. Our own API stays open with zero integration fees either way.
+
+**Plug in — networks and licensed data, required to compete:**
+
+- **Lender rails** — Dealertrack and RouteOne carry credit applications to
+  lenders; F&I needs at least one, both for coverage.
+- **Credit bureaus** — Experian / Equifax / TransUnion pulls.
+- **Vehicle history** — Carfax and AutoCheck reports.
+- **Listing syndication** — outbound inventory feeds to Cars.com, Autotrader,
+  CarGurus, Facebook Marketplace.
+- **Lead intake** — ADF/XML is the industry standard; conforming intake is
+  mandatory, the parser is ours.
+- **Floorplan lenders** — NextGear, AFC, Westlake; how independents finance
+  inventory.
+- **DMV / title** — registration, title, and temp tags via state aggregators
+  (e.g., Vitu, Dealertrack RTS).
+- **Payments processing** — service, parts, and BHPH collections.
+- **Book values** — KBB / Black Book / J.D. Power on day one; our own
+  aggregated data is the long-term replacement.
+- **Messaging transport** — TCPA-compliant SMS/email carriers under the CRM.
+- **QuickBooks export** — many independents keep their books there; the P1
+  accounting export is the bridge.
+
+**Build in — features, not integrations:** CRM, desking calculators, F&I menu
+tooling, digital retailing, reporting and BI, pricing and appraisal workflows,
+VIN decode (the federal NHTSA vPIC database is free), service scheduling and
+repair orders, parts inventory, document management, and the FTC Buyers Guide
+and state forms.
+
+OEM certified integrations stay in P4 — they are the franchise barrier to
+entry, not the beachhead's price of admission.
+
 Buy-here-pay-here servicing/collections is a P2 candidate from Q4, contingent on
 scope and regulatory review. No initial claim of full BHPH support. Likewise,
 accounting export is not a general ledger, and a connector framework is not a
