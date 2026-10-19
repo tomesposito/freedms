@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { isOverdue, type CustomerInput, type CrmEntity, type Lead } from '@freedms/shared';
+import { isOverdue, type CustomerInput, type Lead } from '@freedms/shared';
 import { MemoryRepositories } from '../src/memory.js';
 import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
@@ -9,9 +9,9 @@ import { parseAdf } from '../src/adf.js';
 const now = new Date('2026-10-19T12:00:00Z');
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}.adf.xml`, import.meta.url), 'utf8');
 const customer: CustomerInput = {name: 'Jamie Rivera', phone: '5551234567', email: 'jamie@example.test', address: 'Test address', consent: {status: 'unknown', timestamp: null, source: ''}, notes: ''};
-async function setup() {
+async function setup(role: 'admin' | 'staff' = 'admin', active = true) {
   const repositories = new MemoryRepositories(); const tokens = new LocalTokens('crm-test-secret-at-least-32-characters', () => now.getTime());
-  for (const tenantId of ['A', 'B']) await repositories.forTenant(tenantId).provision({id: tenantId, name: tenantId, createdAt: now.toISOString()}, {id: `user${tenantId}`, name: `User ${tenantId}`}, {tenantId, userId: `user${tenantId}`, role: 'admin', active: true}, {id: 'provision', tenantId, actorId: `user${tenantId}`, aggregateId: tenantId, aggregateVersion: 1, type: 'tenant.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'});
+  for (const tenantId of ['A', 'B']) await repositories.forTenant(tenantId).provision({id: tenantId, name: tenantId, createdAt: now.toISOString()}, {id: `user${tenantId}`, name: `User ${tenantId}`}, {tenantId, userId: `user${tenantId}`, role, active}, {id: 'provision', tenantId, actorId: `user${tenantId}`, aggregateId: tenantId, aggregateVersion: 1, type: 'tenant.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'});
   const handler = createHandler(repositories, {decode: async () => { throw new Error('No network'); }}, () => now);
   const call = async (tenant: string, method = 'GET', path = '/leads', body?: unknown, query?: ApiRequest['query']) => {
     const result = await handler({method, path, body: body === undefined ? undefined : JSON.stringify(body), query, claims: tokens.verify(tokens.issue(`user${tenant}`, tenant))});
@@ -126,4 +126,17 @@ test('CRM transaction conflicts and scope violations cannot partially write memo
   const c = (await repo.crmGet('customer', lead.customerId))!;
   await assert.rejects(repo.crmWrite([{record: {...c, id: 'new-customer'}, expectedVersion: 0, event: {...event, id: 'new-event', type: 'customer.created', aggregateId: 'new-customer'}}, {record: {...lead, version: 2}, expectedVersion: 1, event: {...event, type: 'lead.updated', aggregateVersion: 2}}]));
   assert.equal(await repo.crmGet('customer', 'new-customer'), undefined); assert.equal((await repo.crmGet('lead', lead.id))?.version, 1);
+});
+
+test('staff can work leads but cannot rotate intake tokens; inactive users and absent claims fail closed', async () => {
+  const staff = await setup('staff'); const lead = await staff.makeLead();
+  assert.equal((await staff.call('A', 'POST', '/intake-token', {})).status, 403);
+  assert.equal((await staff.call('A', 'PUT', `/customers/${lead.customerId}`, {...customer, notes: 'Updated', version: 1})).status, 200);
+  assert.equal((await staff.call('A', 'PUT', `/customers/${lead.customerId}`, {...customer, version: 1})).status, 409);
+  const inactive = await setup('admin', false);
+  for (const path of ['/leads', '/customers', '/users', '/intake-token']) {
+    assert.equal((await inactive.call('A', path === '/intake-token' ? 'POST' : 'GET', path, {})).status, 403);
+    assert.equal((await staff.handler({method: 'GET', path})).statusCode, 401);
+  }
+  assert.deepEqual((await staff.call('A', 'GET', '/users')).data.map((u: {id: string}) => u.id), ['userA']);
 });

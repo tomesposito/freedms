@@ -26,9 +26,9 @@ and consumption-based AI and agentic-AI features.
 
 ## Status
 
-The first Phase 1 build implements tenancy/auth foundations and inventory end to
-end. [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
-Leads, desking, deal jackets, and reporting are future builds.
+Phase 1 builds 1–2 implement tenancy/auth foundations, inventory, and leads/CRM
+end to end locally. [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
+Desking, deal jackets, and reporting remain future builds.
 
 ## License
 
@@ -84,7 +84,8 @@ and pagination, decoder failures, safe HTML rendering, and exact money conversio
 
 ## API contract
 
-All routes except the local-only `POST /local/session` require a bearer ID token.
+User routes require a bearer ID token. The local-only `POST /local/session` creates
+a session; `POST /intake/adf` instead requires a separate intake bearer token.
 Success: `{ "data": ... }`; failure: `{ "error": { "code": "...", "message": "..." } }`.
 No route accepts tenant identity in the URL, body, or query. The authenticated
 principal's immutable tenant claim selects a repository; an active membership
@@ -110,7 +111,8 @@ are editable for corrections and incomplete NHTSA results. The server validates
 them on save, but does not claim NHTSA verified manually entered attributes.
 
 DynamoDB stores `PK=TENANT#<id>` with `PROFILE`, `USER#<sub>`, `MEMBER#<sub>`,
-`VEHICLE#<id>`, and `EVENT#<uuid>` sort keys. Every business mutation and its minimal,
+`VEHICLE#<id>`, `CUSTOMER#<id>`, `LEAD#<id>`, `INTAKE#token`, and `EVENT#<uuid>`
+sort keys. Every business mutation and its minimal,
 attributable event commit together via `TransactWriteItems`; conditional writes
 prevent stale edits. Events contain IDs, action, version, actor, and timestamp,
 not VINs or notes. Outbox delivery remains pending; no worker pretends to deliver
@@ -180,8 +182,104 @@ resolved license metadata. No heavy frontend framework is included.
 
 ## Deliberately outside this build
 
-Leads/CRM, desking/pencils, deal jackets/documents UI, report/export, integrations,
+Desking/pencils, deal jackets/documents UI, report/export, integrations,
 AI, analytics, outbox delivery workers, imports, price history UI, and seeded/demo
-inventory. This is a working first slice, not the complete Phase 1 product.
+inventory. These are working local slices, not the complete Phase 1 product.
 Cloud deployment, live Cognito/DynamoDB integration, backup/restore exercises, and
 production operational readiness have not been established by the offline tests.
+
+## Leads and CRM (build 2)
+
+Open **Leads** in the top navigation. An empty workspace has no customers or leads.
+Use **Add lead** to create a customer or pick an existing one, select an optional
+inventory vehicle, choose a source, and assign an active workspace user. Local
+onboarding creates one admin user; additional membership management is still out
+of scope. A matching normalized phone or case-insensitive email produces a warning
+after creation, never blocks creation or silently merges customers.
+
+The detail page shows customer contact/address/notes and TCPA consent (unknown,
+granted, revoked, with timestamp and source). Use **Edit customer / consent** to
+update it. Intake always records unknown consent; receiving a lead is not evidence
+of permission. Manual communication entries do not send calls, texts, or emails.
+Customer communication history spans all of that customer's leads.
+
+Stages are `new`, `contacted`, `appointment`, `in-store`, `working-deal`, `sold`, and
+`lost`. Every change records the old/new stage, actor, and server timestamp. Staff
+may skip stages or reopen a sold/lost lead to correct the pipeline. Assignment
+changes also appear in the timeline. Stage changes do not change inventory status.
+Follow-ups have a call/text/email/visit type, due timestamp, and done flag. An open
+task strictly before the current time is overdue. Forms display local time and
+send UTC timestamps; list overdue flags refresh when the list is loaded.
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| GET | `/users` | Active users in the authenticated workspace |
+| GET / POST | `/customers` | List/search customers; create with duplicate warnings |
+| GET / PUT | `/customers/{id}` | Read with communication history; replace editable fields + `version` |
+| GET | `/leads?stage=new&assignee=USER_ID&search=...` | Filter leads; `assignee=unassigned` is supported |
+| POST | `/leads` | Atomic customer + lead create, or use `customerId` |
+| GET / PUT | `/leads/{id}` | Detail; update `stage`, `assigneeId`, `vehicleId` + `version` |
+| POST | `/leads/{id}/follow-ups` | `type`, `dueAt` (UTC ISO timestamp), lead `version` |
+| PUT | `/leads/{id}/follow-ups/{taskId}` | `done` boolean + current lead `version` |
+| POST | `/leads/{id}/communications` | `type`, `direction` (inbound/outbound), `summary`, `timestamp`, lead `version` |
+| POST | `/intake-token` | Admin only; empty JSON body generates/rotates the workspace token |
+| POST | `/intake/adf` | ADF 1.0 XML using intake bearer authentication |
+
+Customer input is `{name, phone, email, address, notes, consent: {status,
+timestamp, source}}`; unknown consent may have a null timestamp. Granted/revoked
+consent requires a timestamp and source. Lead creation accepts exactly one of
+`customer` (that object) or `customerId`, plus `source`, optional `sourceDetail`,
+`vehicleId`, `vehicleDescription`, and `assigneeId`. Sources are `walk-in`, `phone`,
+`website`, `marketplace`, `referral`, and `other`. Customer/lead create responses
+contain `{customer|lead, duplicateCustomerIds}` inside `data`.
+
+### Local ADF intake
+
+In **Leads → ADF intake**, click **Generate / rotate intake token** as the workspace
+admin. Copy the token shown once. Rotation immediately invalidates the old token.
+Only a SHA-256 hash is stored; the token is separate from the browser's user token
+and carries no user privileges. Tokens last until rotation or local API restart.
+Treat them as credentials; do not put them in URLs or source control.
+
+Submit your own ADF file (the test fixtures are never loaded into the app):
+
+```sh
+read -rs INTAKE_TOKEN
+# Paste the generated token, then press Enter.
+curl -sS http://127.0.0.1:3001/intake/adf \
+  -H "Authorization: Bearer $INTAKE_TOKEN" \
+  -H 'Content-Type: application/xml' \
+  --data-binary @/path/to/your-lead.xml
+unset INTAKE_TOKEN
+```
+
+The token resolves the workspace; neither a vendor ID in the XML nor a tenant
+field/query can select a different workspace. A bad token returns 401. Malformed
+XML or invalid contact fields return 400 with no customer, lead, or outbox writes.
+The customer, lead, and their two events commit together. Intake attribution is
+`intake`. User tokens cannot be used as intake tokens, or vice versa.
+
+The endpoint accepts one `adf/prospect` per request, up to 64 KiB. It reads customer
+contact names, preferred phone/email, postal address, comments, vehicle fields,
+and provider/vendor names. Website is the intake source; original provider,
+service, and vendor names remain in `sourceDetail`. A unique same-workspace VIN
+match (or stock number when VIN is absent) links an inventory vehicle; otherwise
+vehicle details remain visible as text. DTD/entity declarations and malformed XML
+are rejected. Batch prospects, intake deduplication/idempotency, automatic routing,
+and real message sending are deliberately outside this build. Replaying a payload
+creates another lead and returns duplicate-customer warnings.
+
+CRM reads all tenant rows before filtering, matching the small-lot inventory
+approach. A lead embeds its timeline/tasks so changes and their outbox event are
+atomic with optimistic version checks. The current limit is 400 activities, 200
+tasks, and 250 KB per lead; further writes return a validation error. Pagination,
+archiving, automatic reminders, token expiry policies, and customer merging are
+future work. Restarting the local API clears all records and intake credentials.
+
+Offline tests include realistic handwritten ADF fixtures, parser failure cases,
+intake token isolation/rotation, customer/lead/follow-up isolation, assignment and
+stage filtering, stage history, overdue boundaries, and atomic transaction failures.
+The only new runtime library is MIT-licensed `@xmldom/xmldom` (no dependencies).
+The SAM proxy already covers CRM user routes; `/intake/adf` explicitly bypasses
+Cognito only to perform its separate intake-token authentication in the handler.
+No AWS resources were changed or deployed by this build.
