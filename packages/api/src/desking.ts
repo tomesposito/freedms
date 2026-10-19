@@ -95,7 +95,9 @@ export async function desking(request: ApiRequest, principal: Principal, repo: T
     result.vehicle = record;
     if (deal.leadId) {
       const lead = await repo.crmGet('lead', deal.leadId); if (!lead) throw missing();
-      writes.push(write({...lead, stage: 'sold', version: lead.version + 1, updatedAt: date, activities: [...lead.activities, {id: randomUUID(), kind: 'stage', actorId: principal.userId, timestamp: date, summary: `Deal ${deal.id} sold: ${lead.stage} → sold`}]}, lead.version));
+      const soldLead = {...lead, stage: 'sold' as const, version: lead.version + 1, updatedAt: date, activities: [...lead.activities, {id: randomUUID(), kind: 'stage' as const, actorId: principal.userId, timestamp: date, summary: `Deal ${deal.id} sold: ${lead.stage} → sold`}]};
+      if (soldLead.activities.length > 400 || Buffer.byteLength(JSON.stringify(soldLead)) > 250000) throw invalid('This lead has reached its activity limit.');
+      writes.push(write(soldLead, lead.version));
     }
   }
   await repo.crmWrite(writes, vehicles); return response(200, {data: result});

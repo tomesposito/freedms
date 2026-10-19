@@ -3,7 +3,7 @@
 > **Living document.** The source of truth for product direction, architecture,
 > and significant decisions. Fixed owner decisions are distinguished from proposals.
 >
-> - **Status:** Phase 1 builds 1–2 implemented locally: scaffold, tenancy/auth, inventory, and leads/CRM with ADF intake. Later modules remain planned.
+> - **Status:** Phase 1 builds 1–3 implemented locally: scaffold, tenancy/auth, inventory, leads/CRM with ADF intake, and cash/finance desking with saved pencils. Later modules remain planned.
 > - **Domain:** freeDMS.co.
 > - **License today:** MIT, as recorded in LICENSE; alternatives remain draft D-1.
 > - **Decision process:** IDDs D-1 onward record context, options, and a recommendation.

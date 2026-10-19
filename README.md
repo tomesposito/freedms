@@ -26,9 +26,9 @@ and consumption-based AI and agentic-AI features.
 
 ## Status
 
-Phase 1 builds 1–2 implement tenancy/auth foundations, inventory, and leads/CRM
-end to end locally. [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
-Desking, deal jackets, and reporting remain future builds.
+Phase 1 builds 1–3 implement tenancy/auth foundations, inventory, leads/CRM, and
+cash/finance desking end to end locally. [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
+Deal jackets and reporting remain future builds.
 
 ## License
 
@@ -111,7 +111,7 @@ are editable for corrections and incomplete NHTSA results. The server validates
 them on save, but does not claim NHTSA verified manually entered attributes.
 
 DynamoDB stores `PK=TENANT#<id>` with `PROFILE`, `USER#<sub>`, `MEMBER#<sub>`,
-`VEHICLE#<id>`, `CUSTOMER#<id>`, `LEAD#<id>`, `INTAKE#token`, and `EVENT#<uuid>`
+`VEHICLE#<id>`, `CUSTOMER#<id>`, `LEAD#<id>`, `INTAKE#token`, `DEAL#<id>`, `SETTINGS#workspace`, and `EVENT#<uuid>`
 sort keys. Every business mutation and its minimal,
 attributable event commit together via `TransactWriteItems`; conditional writes
 prevent stale edits. Events contain IDs, action, version, actor, and timestamp,
@@ -182,7 +182,7 @@ resolved license metadata. No heavy frontend framework is included.
 
 ## Deliberately outside this build
 
-Desking/pencils, deal jackets/documents UI, report/export, integrations,
+Lease desking, F&I menus, lender submission, deal jackets/documents UI, report/export, integrations,
 AI, analytics, outbox delivery workers, imports, price history UI, and seeded/demo
 inventory. These are working local slices, not the complete Phase 1 product.
 Cloud deployment, live Cognito/DynamoDB integration, backup/restore exercises, and
@@ -283,3 +283,65 @@ The only new runtime library is MIT-licensed `@xmldom/xmldom` (no dependencies).
 The SAM proxy already covers CRM user routes; `/intake/adf` explicitly bypasses
 Cognito only to perform its separate intake-token authentication in the handler.
 No AWS resources were changed or deployed by this build.
+
+
+## Desking / the pencil (build 3)
+
+Open **Deals**. As an admin, use **Workspace settings** to set sales tax (up to
+100%, in 0.01% increments), the trade-difference toggle, and default doc fee.
+New deals copy these settings; later settings changes never reprice existing deals.
+The initial defaults are zero tax and zero doc fee, with trade-difference off.
+
+Add a vehicle and a customer through **Leads → Add lead**, then **Start deal**
+from the vehicle, lead, or Deals page. Choose cash or finance. A lead-based start
+links the buyer and originating lead; a vehicle-based start lets you choose a buyer.
+Vehicle list price defaults the first pencil's selling price. Enter an optional
+trade (free-text year/make/model/VIN, allowance, payoff, actual cash value), cash
+down, doc fee, APR, and term. No VIN decode or external service is needed.
+
+Totals and the 3 × 3 payment grid recalculate on every numeric change. Unsaved
+changes are labeled, and invalid input clears computed values. **Save worksheet**
+updates the working scenario. **Save as new pencil** preserves its previously
+saved numbers and saves the draft as a new working scenario (up to 20 per deal).
+Pencils compare side by side; **Use pencil** switches the draft selection, then
+save to persist it. Trade, tax, and doc fee are shared by all pencils on the deal.
+
+Calculation rules are intentionally simple and visible:
+
+- Money is integer USD cents; tax and APR are integer basis points (600 = 6%).
+- Taxable base is selling price, or max(0, price − trade allowance). Doc fees,
+  payoff, and down payment do not affect tax. Tax rounds half up to cents.
+- Net equity = allowance − payoff. Finance principal = max(0, price + doc fee +
+  tax − net equity − cash down). Cash deals show the remaining cash due instead.
+  Excess down/equity appears separately as credit due.
+- Monthly payment uses standard amortization with exact rational arithmetic,
+  rounding half up to cents. Zero APR divides principal by term. Terms are 1–120
+  months and APR is 0–100%. Total payments = rounded payment × term; this is a
+  worksheet estimate, and a lender's final payment may differ due to rounding.
+- Total cost = price + doc fee + tax + finance charge, before down/trade equity.
+  Front gross = price − vehicle cost − recon − (trade allowance − actual cash value).
+- The payment grid uses the current term and nearby 12-month terms (three distinct
+  terms at the boundaries) and three cash-down options $500 apart. It is never stored.
+
+Status follows **working → approved → sold**, or **dead** from working/approved.
+Every transition records actor and server timestamp. Sold atomically changes the
+vehicle and linked lead to sold, with an outbox event for each changed record.
+Competing sales or stale versions conflict without partial writes. Dead changes
+only the deal. Sold/dead deals are read only. Inventory referenced by a deal cannot
+be deleted. No lease, F&I menu, lender submission, documents, or reporting is included.
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| GET | `/deals?status=working` | Tenant-scoped deals with vehicle/buyer; optional status |
+| POST | `/deals` | Required `vehicleId`, `customerId`, `type`; optional `leadId` |
+| GET | `/deals/{id}` | Worksheet data and saved pencils |
+| PUT | `/deals/{id}` | Required `version`; optional `type`, `trade`, `docFee`, `pencils`, `workingPencilId`, `status` |
+| GET | `/settings` | Tenant defaults; version 0 before first settings save |
+| PUT | `/settings` | Admin only: `version`, `taxRateBps`, `taxTradeDifference`, `docFee` |
+
+Pencil input is `{id, name, price, down, term, aprBps}`; trade input is null or
+`{year, make, model, vin, allowance, payoff, actualCashValue}` with string identity
+fields. Deal references and snapshotted tax rules are immutable. Like inventory
+and CRM, list queries read all tenant rows before filtering. Local storage remains
+ephemeral. This build adds no dependencies, deployment changes, runtime seed data,
+or network-dependent tests.

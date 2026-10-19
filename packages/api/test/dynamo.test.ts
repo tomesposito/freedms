@@ -70,3 +70,29 @@ test('Dynamo CRM reads remain partition-bound and customer/lead/event writes for
   await assert.rejects(repo.crmWrite([{...writes[1], event: {...writes[1].event, tenantId: 'B'}}]), /scope/);
   assert.equal(commands.length, count);
 });
+
+test('Dynamo desking/settings use scoped keys and mixed sold writes are one conditional transaction', async () => {
+  const commands: (GetCommand | QueryCommand | TransactWriteCommand)[] = [];
+  const client = {send: async (command: GetCommand | QueryCommand | TransactWriteCommand) => { commands.push(command); return {}; }} as unknown as DynamoDBDocumentClient;
+  const repo = new DynamoRepositories('table', client).forTenant('A');
+  await repo.crmGet('deal', 'd'); await repo.crmGet('settings', 'workspace'); await repo.crmList('deal');
+  assert.deepEqual(commands.slice(0, 2).map(c => (c as GetCommand).input.Key), [{PK: 'TENANT#A', SK: 'DEAL#d'}, {PK: 'TENANT#A', SK: 'SETTINGS#workspace'}]);
+  assert.equal((commands[2] as QueryCommand).input.ExpressionAttributeValues?.[':pk'], 'TENANT#A');
+  const settings = {id: 'workspace', kind: 'settings' as const, tenantId: 'A', version: 1, createdAt: vehicle.createdAt, updatedAt: vehicle.updatedAt, taxRateBps: 625, taxTradeDifference: true, docFee: 25000};
+  const settingsWrite = {record: settings, expectedVersion: 0, event: {...event, id: 'settings-event', aggregateId: 'workspace', type: 'settings.created' as const}};
+  await repo.crmWrite([settingsWrite]);
+  assert.equal((commands.at(-1) as TransactWriteCommand).input.TransactItems?.length, 2);
+  const d = {id: 'd', kind: 'deal' as const, tenantId: 'A', version: 3, createdAt: vehicle.createdAt, updatedAt: vehicle.updatedAt, taxRateBps: 0, taxTradeDifference: false, docFee: 0, vehicleId: 'v', customerId: 'c', leadId: 'l', type: 'cash' as const, trade: null, pencils: [{id: 'p', name: 'Cash', price: 100, down: 0, term: 36, aprBps: 0}], workingPencilId: 'p', status: 'sold' as const, history: []};
+  const l = {id: 'l', kind: 'lead' as const, tenantId: 'A', version: 2, createdAt: vehicle.createdAt, updatedAt: vehicle.updatedAt, customerId: 'c', vehicleId: 'v', vehicleDescription: '', source: 'walk-in' as const, sourceDetail: '', stage: 'sold' as const, assigneeId: null, followUps: [], activities: []};
+  const writes = [{record: d, expectedVersion: 2, event: {...event, id: 'ed', aggregateId: 'd', aggregateVersion: 3, type: 'deal.updated' as const}}, {record: l, expectedVersion: 1, event: {...event, id: 'el', aggregateId: 'l', aggregateVersion: 2, type: 'lead.updated' as const}}];
+  const vehicles = [{record: {...vehicle, version: 2, status: 'sold' as const}, expectedVersion: 1, event: {...event, id: 'ev', aggregateVersion: 2, type: 'vehicle.updated' as const}}];
+  await repo.crmWrite(writes, vehicles);
+  const items = (commands.at(-1) as TransactWriteCommand).input.TransactItems!;
+  assert.equal(items.length, 6); assert.ok(items.every(i => i.Put?.Item?.PK === 'TENANT#A'));
+  assert.deepEqual(items.filter(i => !i.Put?.Item?.SK.startsWith('EVENT#')).map(i => i.Put?.ExpressionAttributeValues?.[':v']), [1, 2, 1]);
+  const count = commands.length;
+  await assert.rejects(repo.crmWrite([{...settingsWrite, record: {...settings, tenantId: 'B'}}]), /scope/);
+  await assert.rejects(repo.crmWrite(writes, [{...vehicles[0], record: {...vehicles[0].record, tenantId: 'B'}}]), /scope/);
+  await assert.rejects(repo.crmWrite(writes, [{...vehicles[0], event: {...vehicles[0].event, id: 'ed'}}]), /Invalid/);
+  assert.equal(commands.length, count);
+});

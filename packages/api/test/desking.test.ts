@@ -108,3 +108,28 @@ test('mixed transaction conflict rolls back all rows and events', async () => {
   await assert.rejects(repo.crmWrite([{record: {...d, version: 2}, expectedVersion: 1, event}], [{record: {...v, version: 3, status: 'sold'}, expectedVersion: 2, event: {...event, id: 'vehicle-failure', aggregateId: v.id, aggregateVersion: 3, type: 'vehicle.updated'}}]), {code: 'CONFLICT'});
   assert.equal((await repo.crmGet('deal', d.id))?.version, 1); assert.equal((await repo.get(v.id))?.status, 'available'); assert.deepEqual(repositories.eventsForTest('A'), before);
 });
+
+test('invalid references and pencil/settings values leave deal and outbox unchanged', async () => {
+  const {call, create, repositories, v, lead} = await setup(); const d = await create();
+  const other = (await call('B', 'POST', '/leads', {customer: {name: 'Other', phone: '', email: '', address: '', notes: '', consent: {status: 'unknown', timestamp: null, source: ''}}, source: 'phone'})).data.lead;
+  const count = repositories.eventsForTest('A').length;
+  for (const fields of [{vehicleId: 'missing'}, {customerId: other.customerId}, {leadId: other.id}, {type: 'lease'}]) {
+    assert.equal((await call('A', 'POST', '/deals', {vehicleId: v.id, customerId: lead.customerId, type: 'finance', ...fields})).status, 400);
+  }
+  for (const fields of [{docFee: -1}, {docFee: 1.1}, {pencils: []}, {pencils: [p, p]}, {pencils: [{...p, term: 0}]}, {pencils: [{...p, aprBps: 10001}]}, {trade: {...trade, allowance: -1}}, {vehicleId: 'missing'}, {taxRateBps: 0}]) {
+    assert.equal((await call('A', 'PUT', `/deals/${d.id}`, {version: 1, ...fields})).status, 400);
+  }
+  for (const fields of [{taxRateBps: 1.5}, {taxRateBps: -1}, {taxTradeDifference: 'yes'}, {docFee: -1}, {tenantId: 'B'}]) assert.equal((await call('A', 'PUT', '/settings', {...defaultSettings, version: 0, ...fields})).status, 400);
+  assert.equal(repositories.eventsForTest('A').length, count);
+  assert.equal((await call('A', 'GET', `/deals/${d.id}`)).data.version, 1);
+});
+
+test('stale lead in mixed sold transaction rolls back the vehicle and deal too', async () => {
+  const {repositories, create, v, lead} = await setup(); const d = await create(); const repo = repositories.forTenant('A'); const before = repositories.eventsForTest('A');
+  const event = {id: 'ed', tenantId: 'A', actorId: 'userA', aggregateId: d.id, aggregateVersion: 2, type: 'deal.updated' as const, occurredAt: now.toISOString(), deliveryStatus: 'pending' as const};
+  await assert.rejects(repo.crmWrite([
+    {record: {...d, version: 2, status: 'sold'}, expectedVersion: 1, event},
+    {record: {...lead, version: 3, stage: 'sold'}, expectedVersion: 2, event: {...event, id: 'el', aggregateId: lead.id, aggregateVersion: 3, type: 'lead.updated'}}
+  ], [{record: {...v, version: 2, status: 'sold'}, expectedVersion: 1, event: {...event, id: 'ev', aggregateId: v.id, type: 'vehicle.updated'}}]), {code: 'CONFLICT'});
+  assert.equal((await repo.get(v.id))?.version, 1); assert.equal((await repo.crmGet('deal', d.id))?.version, 1); assert.deepEqual(repositories.eventsForTest('A'), before);
+});
