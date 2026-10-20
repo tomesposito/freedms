@@ -239,6 +239,26 @@ and state forms.
 OEM certified integrations stay in P4 — they are the franchise barrier to
 entry, not the beachhead's price of admission.
 
+**Build our own networks — later phases (Tom, Oct 20, 2026):** some plug-ins
+are other parties' networks today only because our own base doesn't exist yet.
+As the dealer base grows, we build native versions and the integrations become
+the bridge, not the destination:
+
+- **Wholesale auction network** — dealers on freeDMS buying and selling
+  inventory with each other inside the platform, instead of paying Manheim /
+  ACV-style fees per car. Liquidity comes from the tenant base itself; every
+  new dealer makes the network worth more to the rest.
+- **Consumer-facing listing aggregator** — a public marketplace over freeDMS
+  dealers' inventory (the freeDMS.co consumer side), alongside — not instead
+  of — syndication out to Cars.com / Autotrader / CarGurus. Owning the
+  consumer surface also owns the demand data: what shoppers search for, click,
+  and buy is the strongest pricing signal there is, and it feeds the data
+  products directly.
+
+Both are network plays: worthless at ten dealers, decisive at ten thousand.
+That is why they are sequenced after the base exists, and why the plug-ins
+above stay mandatory until then.
+
 Buy-here-pay-here servicing/collections is a P2 candidate from Q4, contingent on
 scope and regulatory review. No initial claim of full BHPH support. Likewise,
 accounting export is not a general ledger, and a connector framework is not a
