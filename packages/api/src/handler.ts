@@ -1,3 +1,4 @@
+import { reports } from './reports.js';
 import { jacket } from './jacket.js';
 import type { DocumentStore } from './document-store.js';
 import { desking } from './desking.js';
@@ -13,6 +14,9 @@ export interface ApiRequest { method: string; path: string; query?: Record<strin
 export interface ApiResponse { statusCode: number; headers: Record<string, string>; body: string }
 export function response(statusCode: number, body: unknown): ApiResponse {
   return {statusCode, headers: {'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff'}, body: JSON.stringify(body)};
+}
+export function csvResponse(filename: string, body: string): ApiResponse {
+  return {statusCode: 200, headers: {'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="${filename}"`, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff'}, body};
 }
 export function errorResponse(error: unknown): ApiResponse {
   if (error instanceof ApiError) return response(error.status, {error: {code: error.code, message: error.message}});
@@ -31,6 +35,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
+      if (/^\/reports(\/|$)/.test(path)) return await reports(request, repository, now());
       if (/^\/deals\/[^/]+\/(jacket|documents)(\/|$)/.test(path)) return await jacket(request, principal, repository, now(), documents);
       if (/^\/(deals|settings)(\/|$)/.test(path)) return await desking(request, principal, repository, now());
       if (/^\/(customers|leads|users|intake-token)(\/|$)/.test(path)) return await crm(request, principal, repository, now());

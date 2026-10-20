@@ -27,8 +27,8 @@ and consumption-based AI and agentic-AI features.
 ## Status
 
 Phase 1 builds 1–3 implement tenancy/auth foundations, inventory, leads/CRM, and
-cash/finance desking and printable deal jackets end to end locally. [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
-Reporting remains a future build. Deal jackets include generated buyer documents, attachments, and a derived completeness checklist.
+cash/finance desking, printable deal jackets, and core reporting/CSV exports end to end locally. [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
+Deal jackets include generated buyer documents, attachments, and a derived completeness checklist.
 
 ## License
 
@@ -182,7 +182,7 @@ resolved license metadata. No heavy frontend framework is included.
 
 ## Deliberately outside this build
 
-Lease desking, F&I menus, lender submission, deal jackets/documents UI, report/export, integrations,
+Lease desking, F&I menus, lender submission, integrations,
 AI, analytics, outbox delivery workers, imports, price history UI, and seeded/demo
 inventory. These are working local slices, not the complete Phase 1 product.
 Cloud deployment, live Cognito/DynamoDB integration, backup/restore exercises, and
@@ -384,3 +384,52 @@ shows cash or finance fields as appropriate, and excludes front gross and vehicl
 cost. The guide defaults to AS IS with unfilled warranty fields; no warranty terms
 are inferred. Signatures, PDFs, retention/search and production storage remain
 outside this local slice.
+
+
+### Reporting and exports (local build)
+
+Open **Reports** at `#/reports` from the main navigation. A new workspace shows
+empty inventory and sales, with an honest zero-count lead snapshot. Inventory
+includes every vehicle except sold stock, with UTC aging buckets `0-30`, `31-60`,
+`61-90`, and `91+`, ordered oldest first then stock number. Bucket costs and total
+inventory cost include acquisition cost plus recon; list price totals are separate.
+
+| Method | Path | Contract |
+|---|---|---|
+| GET | `/reports/inventory` | `{data: {rows, buckets, totals: {count, totalCost, totalListPrice}}}` |
+| GET | `/reports/sales?from&to` | `{data: {from, to, rows, totals: {dealsSold, totalFrontGross, averageGross}}}` |
+| GET | `/reports/leads` | `{data: {byStage, bySource, total}}`; current snapshot, all domain stages/sources in order, zero-filled |
+| GET | `/reports/inventory.csv` | Inventory table as `inventory.csv` |
+| GET | `/reports/sales.csv?from&to` | Sales table as `sales.csv` |
+| GET | `/reports/leads.csv` | Stage/source counts and total as `lead-pipeline.csv` |
+| GET | `/reports/accounting.csv?from&to` | Sold deals as `accounting.csv`; columns exactly `date,deal,buyer,vehicle,price,cost,recon,tax,fees,gross` |
+
+Sales and accounting use the UTC calendar date of the last sold history entry,
+falling back to `updatedAt` if no sold entry exists. Only currently sold deals
+are included, sorted by sold date then deal ID. Optional `from` and `to` are real
+`YYYY-MM-DD` dates, inclusive at both ends; an omitted bound is open-ended, both
+omitted means all time (JSON returns null bounds). Invalid dates, reversed ranges,
+and unknown query keys return 400. Inventory and leads accept no query keys.
+The Reports date controls apply only to sales and accounting, with Clear restoring
+all time. Lead counts are explicitly a current snapshot.
+
+Money in JSON remains integer USD cents. Sales rows include the working pencil
+price and `pencilMath` front gross using that deal's trade, tax/doc-fee snapshot,
+and vehicle. Average gross rounds total front gross divided by count to the nearest
+cent, or zero for no sales. Accounting uses those same computed sales rows,
+including acquisition cost, recon, sales tax and snapshotted doc fee. Missing
+buyer/vehicle/working-pencil references fail closed with 404, never partial totals.
+
+Each CSV serializes the same report structure used by JSON; no separate report
+math is used. CSVs have a header, RFC 4180 conditional quoting/doubled quotes,
+CRLF line endings including the final line, and plain two-decimal dollar amounts.
+They return `text/csv; charset=utf-8`, an attachment filename, `cache-control:
+no-store`, and `x-content-type-options: nosniff`. Browser downloads fetch with the
+same bearer authentication as JSON and surface API errors on the page.
+
+All report reads use the authenticated tenant repository, create no records or
+outbox events, and require authentication for JSON and CSV alike. Offline tests
+create fixtures through the public handler and reconcile reports and exports,
+including date boundaries, escaping, isolation, and unchanged records/events.
+The accounting CSV is the P1 QuickBooks bridge; GL posting, QuickBooks API
+integration, custom reporting and cloud deployment remain outside this build.

@@ -25,3 +25,4 @@ nav{display:flex;gap:20px}nav a{font-weight:600;text-decoration:none}fieldset{bo
   .jacket-numbers div, .jacket-document p { break-inside: avoid; }
   @page { margin: 15mm; }
 }
+.report-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}@media(max-width:760px){.report-metrics{grid-template-columns:1fr}header{height:auto;min-height:78px;padding-top:12px;padding-bottom:12px}nav{gap:14px}}

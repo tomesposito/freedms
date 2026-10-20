@@ -48,3 +48,4 @@ export interface IntakeCredential extends CrmRecord { kind: 'intake'; hash: stri
 export type CrmEntity = Customer | Lead | IntakeCredential | Deal | WorkspaceSettings | DealDocument;
 export interface LeadView extends Lead { customer: Customer; overdue: boolean }
 export function isOverdue(task: FollowUp, now: Date): boolean { return !task.done && Date.parse(task.dueAt) < now.getTime(); }
+export * from './reports.js';

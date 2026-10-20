@@ -1,3 +1,4 @@
+import { reportsRoute } from './reports';
 import { jacketRoute } from './jacket';
 import { dealsRoute } from './desking';
 import { crmRoute } from './crm';
@@ -19,10 +20,22 @@ async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
   if (!response.ok) throw new Error('The request could not be completed.');
   return result.data;
 }
+async function download(path: string, filename: string): Promise<void> {
+  const token = getToken();
+  const result = await fetch(`${base}${path}`, {headers: token ? {authorization: `Bearer ${token}`} : {}});
+  if (!result.ok) {
+    const body = await result.json() as {error?: {message: string}};
+    throw new Error(body.error?.message || 'The download could not be completed.');
+  }
+  const url = URL.createObjectURL(await result.blob());
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename;
+  document.body.append(anchor); anchor.click(); anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : 'Something went wrong. Please retry.'; }
 function flash(error: unknown): void { const el = document.querySelector<HTMLElement>('#message')!; el.textContent = errorMessage(error); el.hidden = false; el.focus(); }
 function shell(content: string): void {
-  app.innerHTML = `<header><a class="brand" href="#/">free<span>DMS</span></a><nav aria-label="Main navigation"><a href="#/">Inventory</a><a href="#/leads">Leads</a><a href="#/deals">Deals</a></nav><span class="workspace">${e(session?.tenant?.name || 'Your dealership')}</span><div class="header-right">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet">Sign out</button></div></header><main><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main><footer>freeDMS · Inventory, Leads & Deals${localMode ? ' · Local changes are cleared when the API restarts.' : ''}</footer>`;
+  app.innerHTML = `<header><a class="brand" href="#/">free<span>DMS</span></a><nav aria-label="Main navigation"><a href="#/">Inventory</a><a href="#/leads">Leads</a><a href="#/deals">Deals</a><a href="#/reports">Reports</a></nav><span class="workspace">${e(session?.tenant?.name || 'Your dealership')}</span><div class="header-right">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet">Sign out</button></div></header><main><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main><footer>freeDMS · Inventory, Leads, Deals & Reports${localMode ? ' · Local changes are cleared when the API restarts.' : ''}</footer>`;
   document.querySelector('#signout')?.addEventListener('click', signOut);
 }
 function badge(value: string): string { return `<span class="badge ${value.replace(' ', '-')}">${e(value)}</span>`; }
@@ -110,6 +123,7 @@ async function route(): Promise<void> {
       if (parts[2] === 'jacket' && parts[1]) await jacketRoute(parts[1], ui);
       else await dealsRoute(parts, ui);
     }
+    else if (parts[0] === 'reports') await reportsRoute({api, download, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'leads') await crmRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'new') await form(undefined, sequence);
     else if (parts[0] === 'vehicles' && parts[1]) { if (parts[2] === 'edit') await form(parts[1], sequence); else await detail(parts[1], sequence); }
