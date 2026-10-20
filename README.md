@@ -433,3 +433,34 @@ create fixtures through the public handler and reconcile reports and exports,
 including date boundaries, escaping, isolation, and unchanged records/events.
 The accounting CSV is the P1 QuickBooks bridge; GL posting, QuickBooks API
 integration, custom reporting and cloud deployment remain outside this build.
+
+## AI quick entry (local build)
+
+Inventory and Leads offer plain-language intake into a draft. Review and edit the
+existing add form, then save explicitly; extraction never creates or updates a
+vehicle, customer, or lead. Mileage is kept in vehicle notes and trade details in
+customer notes. Extraction never supplies outreach consent.
+
+Configure `FREEDMS_AI_ENDPOINT` (the full OpenAI-compatible chat-completions URL),
+`FREEDMS_AI_API_KEY`, and `FREEDMS_AI_MODEL` on the API process. No vendor or model
+is assumed. Missing configuration shows “AI quick entry isn't set up”; there is
+no simulated extraction or local parser fallback. Requests time out after 15 seconds.
+Set `FREEDMS_AI_VISION=1` only for a vision-capable provider to enable vehicle photo
+intake. Otherwise the photo control explains that it is unsupported.
+
+Photos accept JPEG, PNG, WebP, or GIF, up to 5 MiB of base64 (3.75 MiB decoded).
+Only `POST /quick-entry/vehicle-photo` allows the larger JSON body (5 MiB + 1 KiB
+metadata); other routes retain the 64 KiB cap. Text is limited to 2,000 characters.
+Text/images are sent to the configured provider; prompts and responses are not
+logged. Drafts stay in browser memory until consumed by the review form.
+
+Authenticated endpoints: `GET /quick-entry/status` returns `{configured, vision}`;
+`POST /quick-entry/vehicle` and `/quick-entry/lead` accept `{text}`;
+`POST /quick-entry/vehicle-photo` accepts `{mediaType, dataBase64}`. Responses use
+the normal `{data: ...}` envelope and extraction returns `{draft}`. Unconfigured,
+vision-unsupported, and provider failures return honest 503, 422, and 502 errors.
+Every validated extraction attempt records a tenant-scoped usage entry with actor,
+kind, and timestamp, including unavailable, unsupported, and failed attempts.
+Invalid input and unauthenticated requests are not metered. This is a metering stub
+only: no billing, prices, credits, or spend limits. Usage contains no prompt/image
+content and has no public listing endpoint. Offline tests use injected fakes.

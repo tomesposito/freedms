@@ -1,8 +1,11 @@
+import type { QuickEntryUsage } from '@freedms/shared';
 import type { CrmEntity } from '@freedms/shared';
 import type { Membership, OutboxEvent, Tenant, User, Vehicle, VehicleStatus } from '@freedms/shared';
 export interface VehicleQuery { status?: VehicleStatus; search?: string }
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
+  appendUsage(usage: QuickEntryUsage): Promise<void>;
+  usageForTest(): Promise<QuickEntryUsage[]>;
   users(): Promise<User[]>;
   crmList<K extends CrmEntity['kind']>(kind: K): Promise<Extract<CrmEntity, {kind: K}>[]>;
   crmGet<K extends CrmEntity['kind']>(kind: K, id: string): Promise<Extract<CrmEntity, {kind: K}> | undefined>;

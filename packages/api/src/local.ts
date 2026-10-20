@@ -1,3 +1,5 @@
+import { bodyLimit } from './quick-entry.js';
+import { providerFromEnv } from './ai-provider.js';
 import { MemoryDocumentStore } from './document-store.js';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -10,7 +12,7 @@ import { NhtsaVinDecoder } from './vin.js';
 if (process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NODE_ENV === 'production') throw new Error('Local auth must never run in production');
 const repositories = new MemoryRepositories();
 const tokens = new LocalTokens(randomBytes(48).toString('hex'));
-const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore());
+const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv());
 const server = createServer(async (req, res) => {
   let result;
   try {
@@ -19,7 +21,7 @@ const server = createServer(async (req, res) => {
         (req.headers.origin && !['http://127.0.0.1:5173', 'http://localhost:5173'].includes(req.headers.origin))) throw new ApiError(403, 'FORBIDDEN', 'Local origin not allowed.');
     const url = new URL(req.url ?? '/', 'http://127.0.0.1:3001');
     const chunks: Buffer[] = []; let bytes = 0;
-    for await (const chunk of req) { bytes += chunk.length; if (bytes > 65536) throw new ApiError(413, 'TOO_LARGE', 'Body exceeds 64 KiB.'); chunks.push(chunk); }
+    for await (const chunk of req) { bytes += chunk.length; if (bytes > bodyLimit(req.method ?? 'GET', url.pathname)) throw new ApiError(413, 'TOO_LARGE', 'Body exceeds the limit for this endpoint.'); chunks.push(chunk); }
     const body = Buffer.concat(chunks).toString('utf8');
     const isIntake = req.method === 'POST' && url.pathname.replace(/\/$/, '') === '/intake/adf';
     if (isIntake && !['application/xml', 'text/xml'].includes((req.headers['content-type'] ?? '').split(';')[0])) throw new ApiError(415, 'CONTENT_TYPE', 'Use application/xml.');

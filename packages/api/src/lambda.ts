@@ -1,3 +1,4 @@
+import { providerFromEnv } from './ai-provider.js';
 import type { AuthClaims } from '@freedms/shared';
 import { validateClaims } from './auth.js';
 import { DynamoRepositories } from './dynamo.js';
@@ -8,7 +9,7 @@ interface GatewayEvent {
   requestContext: {http: {method: string}; authorizer?: {jwt?: {claims: Record<string, unknown>}}};
 }
 const repositories = new DynamoRepositories(process.env.TABLE_NAME!);
-const handle = createHandler(repositories, new NhtsaVinDecoder());
+const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), undefined, providerFromEnv());
 export async function handler(event: GatewayEvent) {
   try {
     // API Gateway verifies signature/issuer/audience. Never decode a caller header as trusted claims.

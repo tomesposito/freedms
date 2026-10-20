@@ -1,3 +1,4 @@
+import type { QuickEntryUsage } from '@freedms/shared';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
@@ -37,6 +38,8 @@ export class DynamoRepositories implements RepositoryFactory {
       return rows;
     };
     return {
+      appendUsage: async usage => { assertScope(tenantId, usage); await transact([put(`USAGE#${requireId(usage.id)}`, usage)]); },
+      usageForTest: () => listRows<QuickEntryUsage>('USAGE#'),
       users: async () => {
         const [users, members] = await Promise.all([listRows<User>('USER#'), listRows<Membership>('MEMBER#')]);
         return users.filter(u => members.some(m => m.userId === u.id && m.active));

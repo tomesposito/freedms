@@ -8,3 +8,4 @@ import '../packages/api/test/crm.test.js';
 import '../packages/api/test/desking.test.js';
 import '../packages/api/test/jacket.test.js';
 import '../packages/api/test/reports.test.js';
+import '../packages/api/test/quick-entry.test.js';

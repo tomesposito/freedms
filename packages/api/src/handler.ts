@@ -1,3 +1,5 @@
+import { quickEntry } from './quick-entry.js';
+import { UnconfiguredProvider, type QuickEntryProvider } from './ai-provider.js';
 import { reports } from './reports.js';
 import { jacket } from './jacket.js';
 import type { DocumentStore } from './document-store.js';
@@ -24,17 +26,18 @@ export function errorResponse(error: unknown): ApiResponse {
   console.error('API operation failed', error instanceof Error ? error.name : 'UnknownError');
   return response(500, {error: {code: 'INTERNAL', message: 'The operation could not be completed.'}});
 }
-export function parseBody(body?: string): Record<string, unknown> {
-  if (!body || Buffer.byteLength(body) > 64 * 1024) throw invalid('A JSON body of at most 64 KiB is required.');
+export function parseBody(body?: string, limit = 64 * 1024): Record<string, unknown> {
+  if (!body || Buffer.byteLength(body) > limit) throw invalid(`A JSON body of at most ${limit} bytes is required.`);
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
-export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore) {
+export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider()) {
   return async (request: ApiRequest): Promise<ApiResponse> => {
     try {
       if (request.method.toUpperCase() === 'POST' && request.path.replace(/\/$/, '') === '/intake/adf') return await intake(request, repositories, now());
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
+      if (/^\/quick-entry(\/|$)/.test(path)) return await quickEntry(request, principal, repository, now(), provider);
       if (/^\/reports(\/|$)/.test(path)) return await reports(request, repository, now());
       if (/^\/deals\/[^/]+\/(jacket|documents)(\/|$)/.test(path)) return await jacket(request, principal, repository, now(), documents);
       if (/^\/(deals|settings)(\/|$)/.test(path)) return await desking(request, principal, repository, now());
