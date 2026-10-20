@@ -27,8 +27,8 @@ and consumption-based AI and agentic-AI features.
 ## Status
 
 Phase 1 builds 1–3 implement tenancy/auth foundations, inventory, leads/CRM, and
-cash/finance desking end to end locally. [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
-Deal jackets and reporting remain future builds.
+cash/finance desking and printable deal jackets end to end locally. [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
+Reporting remains a future build. Deal jackets include generated buyer documents, attachments, and a derived completeness checklist.
 
 ## License
 
@@ -111,7 +111,7 @@ are editable for corrections and incomplete NHTSA results. The server validates
 them on save, but does not claim NHTSA verified manually entered attributes.
 
 DynamoDB stores `PK=TENANT#<id>` with `PROFILE`, `USER#<sub>`, `MEMBER#<sub>`,
-`VEHICLE#<id>`, `CUSTOMER#<id>`, `LEAD#<id>`, `INTAKE#token`, `DEAL#<id>`, `SETTINGS#workspace`, and `EVENT#<uuid>`
+`VEHICLE#<id>`, `CUSTOMER#<id>`, `LEAD#<id>`, `INTAKE#token`, `DEAL#<id>`, `SETTINGS#workspace`, `DOCUMENT#<id>`, and `EVENT#<uuid>`
 sort keys. Every business mutation and its minimal,
 attributable event commit together via `TransactWriteItems`; conditional writes
 prevent stale edits. Events contain IDs, action, version, actor, and timestamp,
@@ -345,3 +345,42 @@ fields. Deal references and snapshotted tax rules are immutable. Like inventory
 and CRM, list queries read all tenant rows before filtering. Local storage remains
 ephemeral. This build adds no dependencies, deployment changes, runtime seed data,
 or network-dependent tests.
+
+
+### Deal jackets and attachments (local build)
+
+| Method | Path | Contract |
+|---|---|---|
+| GET | `/deals/{id}/jacket` | Approved/sold only; deal with buyer/vehicle, working pencil, `pencilMath` numbers, AS IS Buyers Guide data, documents and checklist |
+| GET | `/deals/{id}/documents` | Attachment metadata list; any deal status |
+| POST | `/deals/{id}/documents` | `{name, type, content}`; canonical base64 content, nonempty, at most 40 KiB decoded |
+| GET | `/deals/{id}/documents/{documentId}/content` | `{data: {content}}` containing base64 bytes; owning tenant and matching deal only |
+
+Names are required (160 characters maximum). Types are `id`, `insurance`, `title`,
+`registration`, `signed-form`, and `other`. The existing 64 KiB JSON request cap
+still applies. Unknown keys, malformed base64 and oversize files return 400;
+foreign/missing deals or documents return 404. Working/dead jackets return 400
+with an explanation; those deals may still collect attachments.
+
+`document` metadata records and minimal `document.created` outbox events commit
+through `crmWrite`. The shared event union also permits `document.updated` for the
+generic repository contract; there is no attachment update/delete endpoint.
+File bytes never enter business records or events. `DocumentStore.forTenant`
+binds storage to authenticated tenant claims; its in-memory implementation is
+explicitly injected into the local handler and tests. Files, like other local
+records, disappear on restart. Failed metadata commits remove staged local bytes.
+Production S3 wiring is deferred: without an injected store, upload/content
+requests return 503 rather than pretending files are durable. No infrastructure
+or deployment changes are part of this build.
+
+The checklist derives generated buyer’s order and Buyers Guide as present,
+plus ID and insurance as present only when matching attachment categories exist.
+It checks presence, not document validity. No ID or insurance documents are generated.
+The worksheet links to the jacket once approved/sold. Browser printing includes
+only the buyer’s order and Buyers Guide, keeping attachment management and the
+checklist off buyer paperwork. Attachments download separately as binary files.
+The buyer’s order uses the saved working pencil and deal tax/doc-fee snapshot,
+shows cash or finance fields as appropriate, and excludes front gross and vehicle
+cost. The guide defaults to AS IS with unfilled warranty fields; no warranty terms
+are inferred. Signatures, PDFs, retention/search and production storage remain
+outside this local slice.

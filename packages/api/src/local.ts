@@ -1,3 +1,4 @@
+import { MemoryDocumentStore } from './document-store.js';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { LocalTokens } from './auth.js';
@@ -9,7 +10,7 @@ import { NhtsaVinDecoder } from './vin.js';
 if (process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NODE_ENV === 'production') throw new Error('Local auth must never run in production');
 const repositories = new MemoryRepositories();
 const tokens = new LocalTokens(randomBytes(48).toString('hex'));
-const handle = createHandler(repositories, new NhtsaVinDecoder());
+const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore());
 const server = createServer(async (req, res) => {
   let result;
   try {

@@ -1,3 +1,4 @@
+import { jacketRoute } from './jacket';
 import { dealsRoute } from './desking';
 import { crmRoute } from './crm';
 import { vehicleStatuses, type ApiEnvelope, type DecodedVin, type Principal, type Tenant, type VehicleInput, type VehicleView } from '@freedms/shared';
@@ -104,7 +105,11 @@ async function route(): Promise<void> {
   if (!session) return; const sequence = ++routeSequence;
   try {
     const parts = location.hash.replace(/^#\//, '').split('/');
-    if (parts[0] === 'deals') await dealsRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
+    if (parts[0] === 'deals') {
+      const ui = {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'};
+      if (parts[2] === 'jacket' && parts[1]) await jacketRoute(parts[1], ui);
+      else await dealsRoute(parts, ui);
+    }
     else if (parts[0] === 'leads') await crmRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'new') await form(undefined, sequence);
     else if (parts[0] === 'vehicles' && parts[1]) { if (parts[2] === 'edit') await form(parts[1], sequence); else await detail(parts[1], sequence); }

@@ -1,0 +1,37 @@
+import { documentTypes, maxDocumentBytes, type DealJacket } from '@freedms/shared';
+import { currency, escapeHtml as e } from './format';
+import type { UI } from './desking';
+const row = (label: string, value: unknown) => `<div><dt>${e(label)}</dt><dd>${e(value)}</dd></div>`;
+/** Explicit buyer-facing fields: never render dealer cost, notes, or front gross. */
+export function renderPacket(j: DealJacket): string {
+  const {deal: d, pencil: p, numbers: m} = j, v = d.vehicle, c = d.customer, t = d.trade;
+  const identity = (v: DealJacket['buyersGuide']['vehicle']) => `<p>${e(`${v.year} ${v.make} ${v.model}`)} · Stock ${e(v.stockNumber)}<br>VIN ${e(v.vin)}</p>`;
+  const numbers: [string, number][] = [['Selling price', p.price], ['Doc fee', d.docFee], ['Taxable base', m.taxableBase], ['Sales tax', m.salesTax], ['Cash down', p.down], ...(d.type === 'finance' ? [['Amount financed', m.amountFinanced], ['Monthly payment', m.payment], ['Finance charge', m.financeCharge], ['Total of payments', m.totalPayments]] as [string, number][] : [['Remaining cash due', m.cashDue]] as [string, number][]), ['Total cost before down / trade equity', m.totalCost], ['Credit due for excess down / equity', m.creditDue]];
+  return `<div class="jacket-packet"><article class="card jacket-document"><h1>Buyer’s order / deal summary</h1><p>Deal ${e(d.id)} · ${e(d.status)} · ${e(d.type)}</p><h2>Vehicle</h2>${identity(v)}<p>Trim: ${e(v.trim || 'Not on file')}</p><h2>Buyer</h2><p>${e(c.name)}<br>Phone: ${e(c.phone || 'Not on file')}<br>Email: ${e(c.email || 'Not on file')}<br>Address: ${e(c.address || 'Not on file')}</p><h2>Trade-in</h2>${t ? `<p>${e(`${t.year} ${t.make} ${t.model}`)} · VIN ${e(t.vin || 'Not on file')}</p><dl class="jacket-numbers">${[['Allowance', t.allowance], ['Payoff', t.payoff], ['Actual cash value', t.actualCashValue], ['Net equity', m.netEquity], ['Overallowance', m.tradeOverallowance]].map(([label, value]) => row(String(label), currency(Number(value)))).join('')}</dl>` : '<p>No trade-in.</p>'}<h2>Sale numbers</h2><p>Sales tax: ${e((d.taxRateBps / 100).toFixed(2))}% of ${d.taxTradeDifference ? 'selling price minus trade allowance (minimum zero)' : 'selling price'}. Doc fee and payoff excluded from taxable base.</p><dl class="jacket-numbers">${numbers.map(([label, value]) => row(label, currency(value))).join('')}${d.type === 'finance' ? row('Term', `${p.term} months`) + row('APR', `${(p.aprBps / 100).toFixed(2)}%`) : ''}</dl>${d.type === 'finance' ? '<p>Equal-payment estimate: total of payments is rounded monthly payment × term. A lender’s final payment may differ.</p>' : ''}</article><article class="card jacket-document buyers-guide"><h1>BUYERS GUIDE</h1>${identity(j.buyersGuide.vehicle)}<p>IMPORTANT: Spoken promises are difficult to enforce. Ask the dealer to put all promises in writing. Keep this form.</p><h2>☒ AS IS — NO DEALER WARRANTY</h2><p>The dealer does not provide a warranty for repairs after sale. You will pay all costs for any repairs. The dealer assumes no responsibility for any repairs regardless of any oral statements about the vehicle.</p><h2>☐ DEALER WARRANTY</h2><p>☐ Full warranty &nbsp; ☐ Limited warranty</p><p>Dealer pays ______% of labor and ______% of parts for covered systems.</p><p>Systems covered: ________________________________________</p><p>Duration: ______________________________________________</p><p>Ask for a copy of the warranty document and an explanation of coverage, exclusions, and repair obligations.</p><h2>☐ MANUFACTURER’S WARRANTY</h2><p>☐ Original warranty still applies &nbsp; ☐ Used vehicle warranty applies</p><p>Coverage: ______________________________________________</p><p>Duration: ______________________________________________</p><h2>Before you buy</h2><p>Ask whether your mechanic can inspect the vehicle on or off the lot. Obtain a vehicle history report and check for open safety recalls. Ask for all promises in writing and keep your sale documents.</p><p>No warranty terms are on file. Warranty fields are intentionally blank.</p></article></div>`;
+}
+export async function jacketRoute(id: string, ui: UI) {
+  ui.shell('<p>Loading deal jacket…</p>');
+  const base = `/deals/${encodeURIComponent(id)}`, j = await ui.api<DealJacket>(`${base}/jacket`); if (!ui.current()) return;
+  ui.shell(`<div class="jacket-screen"><a class="back" href="#/deals/${e(id)}">← Worksheet</a><div class="heading"><h1>Deal jacket</h1><button id="print-jacket" class="primary">Print packet</button></div><p class="muted">Print includes the buyer’s order and Buyers Guide. Attachments remain separate files. Uses the saved working pencil.</p><section class="card"><h2>Completeness</h2><ul>${j.checklist.map(item => `<li>${e(item.label)}: <strong>${item.present ? 'Present' : 'Missing'}</strong></li>`).join('')}</ul></section><section class="card"><h2>Attached documents</h2>${j.documents.length ? `<ul>${j.documents.map(d => `<li><button class="quiet" data-download="${e(d.id)}">${e(d.name)}</button> · ${e(d.type)} · Uploaded by ${e(d.uploadedBy)} at ${e(d.uploadedAt)}</li>`).join('')}</ul>` : '<p>No documents attached.</p>'}<form id="attach-document"><div class="form-grid"><label>Document name<input name="name" required maxlength="160"></label><label>Type<select name="type">${documentTypes.map(t => `<option>${e(t)}</option>`).join('')}</select></label><label>File (40 KiB maximum)<input name="file" type="file" required></label></div><button>Attach document</button></form></section></div>${renderPacket(j)}`);
+  document.querySelector('#print-jacket')!.addEventListener('click', () => window.print());
+  document.querySelector<HTMLFormElement>('#attach-document')!.addEventListener('submit', async event => {
+    event.preventDefault(); const form = event.currentTarget as HTMLFormElement, button = form.querySelector('button')!; button.disabled = true;
+    try {
+      const data = new FormData(form), file = data.get('file') as File;
+      if (!file.size || file.size > maxDocumentBytes) throw new Error('Choose a nonempty file of at most 40 KiB.');
+      const bytes = new Uint8Array(await file.arrayBuffer()); let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte);
+      await ui.api(`${base}/documents`, 'POST', {name: data.get('name'), type: data.get('type'), content: btoa(binary)});
+      if (ui.current()) ui.refresh();
+    } catch (error) { if (ui.current()) ui.flash(error); } finally { button.disabled = false; }
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-download]').forEach(button => button.addEventListener('click', async () => {
+    button.disabled = true;
+    try {
+      const d = j.documents.find(d => d.id === button.dataset.download)!;
+      const result = await ui.api<{content: string}>(`${base}/documents/${encodeURIComponent(d.id)}/content`); if (!ui.current()) return;
+      const bytes = Uint8Array.from(atob(result.content), c => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], {type: 'application/octet-stream'}));
+      const link = document.createElement('a'); link.href = url; link.download = d.name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) { if (ui.current()) ui.flash(error); } finally { button.disabled = false; }
+  }));
+}

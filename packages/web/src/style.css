@@ -8,3 +8,20 @@ nav{display:flex;gap:20px}nav a{font-weight:600;text-decoration:none}fieldset{bo
 #worksheet > fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 #worksheet fieldset:disabled { opacity: .8; }
 [hidden] { display: none !important; }
+
+.jacket-document { max-width: 850px; margin: 1.5rem auto; }
+.jacket-numbers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem 2rem; }
+.jacket-numbers div { display: flex; justify-content: space-between; gap: 1rem; border-bottom: 1px solid #ddd; padding: .3rem 0; }
+.jacket-numbers dd { margin: 0; white-space: nowrap; font-weight: 600; }
+@media print {
+  body:has(.jacket-packet) { background: white; color: black; font-size: 10pt; }
+  body:has(.jacket-packet) #app > header, body:has(.jacket-packet) footer,
+  body:has(.jacket-packet) #message, .jacket-screen { display: none !important; }
+  body:has(.jacket-packet) main { max-width: none; margin: 0; padding: 0; }
+  .jacket-document { border: 0; box-shadow: none; margin: 0; padding: 0; max-width: none; }
+  .jacket-document + .jacket-document { break-before: page; }
+  .jacket-document h1 { font-size: 18pt; }
+  .jacket-document h2 { font-size: 12pt; break-after: avoid; }
+  .jacket-numbers div, .jacket-document p { break-inside: avoid; }
+  @page { margin: 15mm; }
+}

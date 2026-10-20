@@ -1,3 +1,5 @@
+import { jacket } from './jacket.js';
+import type { DocumentStore } from './document-store.js';
 import { desking } from './desking.js';
 import { crm, intake } from './crm.js';
 import { randomUUID } from 'node:crypto';
@@ -22,13 +24,14 @@ export function parseBody(body?: string): Record<string, unknown> {
   if (!body || Buffer.byteLength(body) > 64 * 1024) throw invalid('A JSON body of at most 64 KiB is required.');
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
-export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date()) {
+export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore) {
   return async (request: ApiRequest): Promise<ApiResponse> => {
     try {
       if (request.method.toUpperCase() === 'POST' && request.path.replace(/\/$/, '') === '/intake/adf') return await intake(request, repositories, now());
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
+      if (/^\/deals\/[^/]+\/(jacket|documents)(\/|$)/.test(path)) return await jacket(request, principal, repository, now(), documents);
       if (/^\/(deals|settings)(\/|$)/.test(path)) return await desking(request, principal, repository, now());
       if (/^\/(customers|leads|users|intake-token)(\/|$)/.test(path)) return await crm(request, principal, repository, now());
       if (method === 'GET' && path === '/session') return response(200, {data: {principal, tenant: await repository.tenant()}});
