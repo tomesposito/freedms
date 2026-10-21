@@ -1,3 +1,4 @@
+import type { Track } from './analytics.js';
 import { agingBuckets, leadSources, leadStages, pencilMath, type Deal, type InventoryReport, type LeadReport, type SalesReport, type Vehicle } from '@freedms/shared';
 import { ApiError, missing } from './errors.js';
 import { csvResponse, response, type ApiRequest } from './handler.js';
@@ -61,16 +62,21 @@ export function salesCsv(data: SalesReport, accounting = false): string {
 export function leadCsv(data: LeadReport): string {
   return toCsv([['dimension', 'value', 'count'], ...data.byStage.map(r => ['stage', r.stage, String(r.count)]), ...data.bySource.map(r => ['source', r.source, String(r.count)]), ['total', 'all', String(data.total)]]);
 }
-export async function reports(request: ApiRequest, repo: TenantRepository, now: Date) {
+export async function reports(request: ApiRequest, repo: TenantRepository, now: Date, track: Track = async () => {}) {
   const match = /^\/reports\/(inventory|sales|leads|accounting)(\.csv)?$/.exec(request.path.replace(/\/$/, ''));
   if (!match || (match[1] === 'accounting' && !match[2])) throw missing();
   if (request.method.toUpperCase() !== 'GET') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
   const name = match[1], csv = Boolean(match[2]);
+  const exported = async (filename: string, body: string) => {
+    const result = csvResponse(filename, body);
+    try { await track({event: 'report_exported', report: name === 'inventory' ? 'aging' : name === 'leads' ? 'pipeline' : name as 'sales' | 'accounting'}); } catch { /* Export remains usable. */ }
+    return result;
+  };
   if (name === 'sales' || name === 'accounting') {
     const data = await salesReport(repo, dateRange(request.query));
-    return csv ? csvResponse(`${name}.csv`, salesCsv(data, name === 'accounting')) : response(200, {data});
+    return csv ? await exported(`${name}.csv`, salesCsv(data, name === 'accounting')) : response(200, {data});
   }
   onlyKeys(request.query ?? {}, []);
-  if (name === 'inventory') { const data = await inventoryReport(repo, now); return csv ? csvResponse('inventory.csv', inventoryCsv(data)) : response(200, {data}); }
-  const data = await leadReport(repo); return csv ? csvResponse('lead-pipeline.csv', leadCsv(data)) : response(200, {data});
+  if (name === 'inventory') { const data = await inventoryReport(repo, now); return csv ? await exported('inventory.csv', inventoryCsv(data)) : response(200, {data}); }
+  const data = await leadReport(repo); return csv ? await exported('lead-pipeline.csv', leadCsv(data)) : response(200, {data});
 }

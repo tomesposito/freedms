@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { documentTypes, maxDocumentBytes, pencilMath, type DealDocument, type DealJacket, type Principal } from '@freedms/shared';
+import { jacketChecklist, documentTypes, maxDocumentBytes, pencilMath, type DealDocument, type DealJacket, type Principal } from '@freedms/shared';
 import { ApiError, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
 import { invalid, onlyKeys, text } from './validation.js';
@@ -21,7 +21,7 @@ export async function jacket(request: ApiRequest, principal: Principal, repo: Te
     const attached = documents.filter(d => d.dealId === deal.id);
     const data: DealJacket = {deal: {...deal, vehicle, customer}, pencil, numbers: pencilMath(pencil, deal.trade, deal, vehicle, deal.type),
       buyersGuide: {vehicle: {year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vehicle.vin, stockNumber: vehicle.stockNumber}, asIs: true, dealerWarranty: null, manufacturerWarranty: null}, documents: attached,
-      checklist: [{key: 'buyers-order', label: "Buyer’s order", present: true}, {key: 'buyers-guide', label: 'Buyers Guide', present: true}, {key: 'id', label: 'Driver’s license / ID', present: attached.some(d => d.type === 'id')}, {key: 'insurance', label: 'Proof of insurance', present: attached.some(d => d.type === 'insurance')}]};
+      checklist: jacketChecklist(attached)};
     return response(200, {data});
   }
   if (method === 'GET' && !match[3]) return response(200, {data: (await repo.crmList('document')).filter(d => d.dealId === deal.id)});
@@ -45,4 +45,19 @@ export async function jacket(request: ApiRequest, principal: Principal, repo: Te
   try { await repo.crmWrite([{record, expectedVersion: 0, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: id, aggregateVersion: 1, type: 'document.created', occurredAt: date, deliveryStatus: 'pending'}}]); }
   catch (error) { await storage.remove(id); throw error; }
   return response(201, {data: record});
+}
+
+/** Observe the transition around a successful domain command, including approval after uploads.
+ * This signal is best effort; the outbox-backed projection remains authoritative.
+ */
+export async function observeJacketCompletion<T>(repo: TenantRepository, dealId: string, track: import('./analytics.js').Track, command: () => Promise<T>): Promise<T> {
+  const complete = async () => {
+    const [deal, docs] = await Promise.all([repo.crmGet('deal', dealId), repo.crmList('document')]);
+    return !!deal && ['approved', 'sold'].includes(deal.status) && jacketChecklist(docs.filter(d => d.dealId === dealId)).every(c => c.present);
+  };
+  let before: boolean | undefined;
+  try { before = await complete(); } catch { /* Observation must not block the command. */ }
+  const result = await command();
+  try { if (before === false && await complete()) await track({event: 'jacket_checklist_completed'}); } catch { /* Preserve the committed response. */ }
+  return result;
 }

@@ -7,4 +7,5 @@ export interface LeadDraft {
 export interface QuickEntryUsage {
   id: string; tenantId: string; actorId: string;
   kind: 'vehicle-text' | 'vehicle-photo' | 'lead-text'; occurredAt: string;
+  signal?: Extract<import('./analytics.js').BehavioralEvent, {event: 'quick_entry_used'}>;
 }

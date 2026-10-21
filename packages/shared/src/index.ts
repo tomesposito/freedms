@@ -51,3 +51,4 @@ export function isOverdue(task: FollowUp, now: Date): boolean { return !task.don
 export * from './reports.js';
 
 export * from './quick-entry.js';
+export * from './analytics.js';

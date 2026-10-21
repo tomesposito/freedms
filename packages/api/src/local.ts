@@ -1,3 +1,4 @@
+import { analyticsFromEnv } from './analytics.js';
 import { bodyLimit } from './quick-entry.js';
 import { providerFromEnv } from './ai-provider.js';
 import { MemoryDocumentStore } from './document-store.js';
@@ -12,7 +13,7 @@ import { NhtsaVinDecoder } from './vin.js';
 if (process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NODE_ENV === 'production') throw new Error('Local auth must never run in production');
 const repositories = new MemoryRepositories();
 const tokens = new LocalTokens(randomBytes(48).toString('hex'));
-const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv());
+const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv());
 const server = createServer(async (req, res) => {
   let result;
   try {

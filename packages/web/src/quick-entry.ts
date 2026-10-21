@@ -1,10 +1,13 @@
+import { track } from './analytics';
 import type { LeadDraft, VehicleDraft } from '@freedms/shared';
 type Api = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
+let draftInput: 'text' | 'photo' = 'text';
+let discardReview: (() => void) | undefined;
 let vehicleDraft: VehicleDraft | undefined;
 let leadDraft: LeadDraft | undefined;
 export function takeVehicleDraft() { const draft = vehicleDraft; vehicleDraft = undefined; return draft; }
 export function takeLeadDraft() { const draft = leadDraft; leadDraft = undefined; return draft; }
-export function clearDrafts() { vehicleDraft = undefined; leadDraft = undefined; }
+export function clearDrafts() { discardReview?.(); vehicleDraft = undefined; leadDraft = undefined; }
 export const reviewNote = '<p class="warning">Review the AI draft — nothing is saved until you save.</p>';
 export const quickEntryCard = '<section id="quick-entry" class="card"><h2>Quick entry</h2><p class="muted" role="status">Checking AI availability…</p></section>';
 export async function bindQuickEntry(kind: 'vehicle' | 'lead', api: Api, current: () => boolean): Promise<void> {
@@ -26,6 +29,7 @@ export async function bindQuickEntry(kind: 'vehicle' | 'lead', api: Api, current
   } catch { if (active()) message.textContent = 'AI availability could not be checked. You can still add records manually.'; return; }
   const draft = async (path: string, body: unknown) => {
     busy(true); message.textContent = 'Extracting draft…';
+    draftInput = path.endsWith('-photo') ? 'photo' : 'text';
     try {
       if (kind === 'vehicle') {
         const result = await api<{draft: VehicleDraft}>(path, 'POST', body); if (!active()) return;
@@ -57,4 +61,24 @@ export function fillDraft(form: HTMLFormElement, values: Record<string, unknown>
       control.value = money.includes(key) && typeof value === 'number' ? (value / 100).toFixed(2) : String(value ?? '');
     }
   }
+}
+
+/** Bound only after an AI draft fills the review form. No draft content enters telemetry. */
+export function bindDraftOutcome(form: HTMLFormElement, surface: 'inventory' | 'lead', api: Api): () => void {
+  const input = draftInput;
+  let edited = false, finished = false;
+  const edit = () => { edited = true; };
+  const finish = (outcome: 'saved' | 'edited' | 'discarded') => {
+    if (finished) return;
+    finished = true;
+    window.removeEventListener('hashchange', discard);
+    form.removeEventListener('input', edit); form.removeEventListener('change', edit);
+    if (discardReview === discard) discardReview = undefined;
+    void track(api, {event: 'quick_entry_used', surface, input, outcome});
+  };
+  const discard = () => finish('discarded');
+  discardReview = discard;
+  form.addEventListener('input', edit); form.addEventListener('change', edit);
+  window.addEventListener('hashchange', discard);
+  return () => finish(edited ? 'edited' : 'saved');
 }

@@ -11,3 +11,7 @@ export interface DealJacket {
   documents: DealDocument[];
   checklist: {key: string; label: string; present: boolean}[];
 }
+
+export function jacketChecklist(attached: Pick<DealDocument, 'type'>[]): DealJacket['checklist'] {
+  return [{key: 'buyers-order', label: "Buyer’s order", present: true}, {key: 'buyers-guide', label: 'Buyers Guide', present: true}, {key: 'id', label: 'Driver’s license / ID', present: attached.some(d => d.type === 'id')}, {key: 'insurance', label: 'Proof of insurance', present: attached.some(d => d.type === 'insurance')}];
+}

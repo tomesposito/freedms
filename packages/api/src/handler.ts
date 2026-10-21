@@ -1,7 +1,8 @@
+import { analytics, analyticsFromEnv, track, type AnalyticsVendor } from './analytics.js';
 import { quickEntry } from './quick-entry.js';
 import { UnconfiguredProvider, type QuickEntryProvider } from './ai-provider.js';
 import { reports } from './reports.js';
-import { jacket } from './jacket.js';
+import { jacket, observeJacketCompletion } from './jacket.js';
 import type { DocumentStore } from './document-store.js';
 import { desking } from './desking.js';
 import { crm, intake } from './crm.js';
@@ -30,17 +31,25 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
   if (!body || Buffer.byteLength(body) > limit) throw invalid(`A JSON body of at most ${limit} bytes is required.`);
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
-export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider()) {
+export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({})) {
   return async (request: ApiRequest): Promise<ApiResponse> => {
     try {
       if (request.method.toUpperCase() === 'POST' && request.path.replace(/\/$/, '') === '/intake/adf') return await intake(request, repositories, now());
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
+      const record = (data: import('@freedms/shared').BehavioralEvent) => track(repository, principal, now(), data, vendor);
+      if (/^\/analytics(\/|$)/.test(path)) return await analytics(request, principal, repository, record);
       if (/^\/quick-entry(\/|$)/.test(path)) return await quickEntry(request, principal, repository, now(), provider);
-      if (/^\/reports(\/|$)/.test(path)) return await reports(request, repository, now());
-      if (/^\/deals\/[^/]+\/(jacket|documents)(\/|$)/.test(path)) return await jacket(request, principal, repository, now(), documents);
-      if (/^\/(deals|settings)(\/|$)/.test(path)) return await desking(request, principal, repository, now());
+      if (/^\/reports(\/|$)/.test(path)) return await reports(request, repository, now(), record);
+      if (/^\/(deals|settings)(\/|$)/.test(path)) {
+        const command = () => /^\/deals\/[^/]+\/(jacket|documents)(\/|$)/.test(path)
+          ? jacket(request, principal, repository, now(), documents)
+          : desking(request, principal, repository, now());
+        return ['POST', 'PUT'].includes(method) && path.startsWith('/deals/')
+          ? await observeJacketCompletion(repository, requireId(path.split('/')[2]), record, command)
+          : await command();
+      }
       if (/^\/(customers|leads|users|intake-token)(\/|$)/.test(path)) return await crm(request, principal, repository, now());
       if (method === 'GET' && path === '/session') return response(200, {data: {principal, tenant: await repository.tenant()}});
       if (method === 'GET' && path.startsWith('/vin/')) return response(200, {data: await decoder.decode(vin(decodeURIComponent(path.slice(5))))});

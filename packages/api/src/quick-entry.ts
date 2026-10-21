@@ -84,3 +84,8 @@ export async function quickEntry(request: ApiRequest, principal: Principal, repo
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw providerFailure();
   return response(200, {data: {draft: lead ? sanitizeLead(raw) : sanitizeVehicle(raw, now)}});
 }
+
+/** Outcome signals share the existing usage ledger; they do not represent billable calls. */
+export async function meterQuickEntryOutcome(repo: TenantRepository, principal: Principal, now: Date, signal: Extract<import('@freedms/shared').BehavioralEvent, {event: 'quick_entry_used'}>) {
+  await repo.appendUsage({id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, kind: signal.surface === 'lead' ? 'lead-text' : signal.input === 'photo' ? 'vehicle-photo' : 'vehicle-text', occurredAt: now.toISOString(), signal});
+}

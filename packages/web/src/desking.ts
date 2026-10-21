@@ -1,3 +1,4 @@
+import { track } from './analytics';
 import { dealStatuses, pencilMath, paymentGrid, type Customer, type DealView, type LeadView, type Pencil, type TaxSettings, type Vehicle, type WorkspaceSettings } from '@freedms/shared';
 import { cents, currency, escapeHtml as e } from './format';
 export interface UI { api: <T>(path: string, method?: string, body?: unknown) => Promise<T>; shell: (content: string) => void; flash: (error: unknown) => void; current: () => boolean; refresh: () => void; admin: boolean }
@@ -55,12 +56,14 @@ function worksheet(original: DealView, ui: UI) {
     if (!Number.isInteger(pencil.term) || pencil.term < 1 || pencil.term > 120 || pencil.aprBps > 10000) throw new Error('Enter a term of 1–120 months and APR of 0–100%.');
     pencilMath(pencil, trade, next, next.vehicle, next.type); d = next;
   };
+  let gridTracked = false;
   const render = () => {
     const p = working(), m = pencilMath(p, d.trade, d, d.vehicle, d.type);
     const rows: [string, number][] = [['Taxable base', m.taxableBase], ['Sales tax', m.salesTax], ['Trade net equity', m.netEquity], ['Trade overallowance', m.tradeOverallowance], ['Front gross', m.frontGross], ...(d.type === 'finance' ? [['Amount financed', m.amountFinanced], ['Monthly payment', m.payment], ['Total of payments', m.totalPayments], ['Finance charge', m.financeCharge]] as [string, number][] : [['Remaining cash due', m.cashDue]] as [string, number][]), ['Total cost (price + fees + tax + finance charge)', m.totalCost], ['Credit due for excess down / equity', m.creditDue]];
     document.querySelector('#totals')!.innerHTML = `<div class="metrics pencil-totals">${rows.map(([name, value]) => `<div><span>${name}</span><strong>${currency(value)}</strong></div>`).join('')}</div><p class="muted">Total of payments = rounded monthly payment × term. This is an equal-payment estimate; a lender's final payment may differ. Total cost is before cash down and trade equity.</p>`;
     const grid = paymentGrid(p, d.trade, d, d.vehicle);
     document.querySelector('#payment-grid')!.innerHTML = d.type === 'cash' ? '<p class="muted">Select finance to compare monthly payments.</p>' : `<div class="table-wrap"><table><thead><tr><th>Term / cash down</th>${grid[0].options.map(o => `<th>${currency(o.down)}</th>`).join('')}</tr></thead><tbody>${grid.map(row => `<tr><th>${row.term} months</th>${row.options.map(o => `<td>${currency(o.payment)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+    if (d.type === 'finance' && !gridTracked) { gridTracked = true; void track(ui.api, {event: 'pencil_grid_viewed'}); }
     document.querySelector('#pencil-comparison')!.innerHTML = `<table><thead><tr><th>Scenario</th>${d.pencils.map(p => `<th>${e(p.name)}${p.id === d.workingPencilId ? ' · Working' : ''}</th>`).join('')}</tr></thead><tbody>${(['price', 'down', 'term', 'aprBps'] as const).map(key => `<tr><th>${{price: 'Selling price', down: 'Cash down', term: 'Months', aprBps: 'APR'}[key]}</th>${d.pencils.map(p => `<td>${key === 'term' ? p.term : key === 'aprBps' ? `${(p.aprBps / 100).toFixed(2)}%` : currency(p[key])}</td>`).join('')}</tr>`).join('')}<tr><th>${d.type === 'finance' ? 'Monthly payment' : 'Remaining cash due'}</th>${d.pencils.map(p => { const m = pencilMath(p, d.trade, d, d.vehicle, d.type); return `<td>${currency(d.type === 'finance' ? m.payment : m.cashDue)}</td>`; }).join('')}</tr>${closed ? '' : `<tr><th>Working pencil</th>${d.pencils.map(p => `<td><button type="button" data-pencil="${e(p.id)}" ${p.id === d.workingPencilId ? 'disabled' : ''}>Use pencil</button></td>`).join('')}</tr>`}</tbody></table>`;
   };
   const invalid = (error: unknown) => { document.querySelector('#totals')!.textContent = error instanceof Error ? error.message : 'Enter valid numbers.'; document.querySelector('#payment-grid')!.textContent = 'Enter valid numbers to calculate payments.'; document.querySelector('#pencil-comparison')!.textContent = 'Enter valid numbers to compare pencils.'; };

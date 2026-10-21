@@ -1,18 +1,21 @@
-import type { QuickEntryUsage } from '@freedms/shared';
+import type { AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import type { CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
 import { assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
-interface State { usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
+interface State { analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
   private states = new Map<string, State>();
   forTenant(tenantId: string): TenantRepository {
     requireId(tenantId);
     let state = this.states.get(tenantId);
-    if (!state) { state = {usage: new Map(), crm: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
+    if (!state) { state = {analytics: new Map(), usage: new Map(), crm: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
     const s = state;
     const check = (event: OutboxEvent) => { assertScope(tenantId, event); if (s.events.has(event.id)) throw conflict(); };
     // Synchronous validation followed by synchronous map writes: no interleaved await or partial commits.
     return {
+      events: async () => structuredClone([...s.events.values()]),
+      appendAnalytics: async record => { assertScope(tenantId, record); requireId(record.id); if (s.analytics.has(record.id)) throw conflict(); s.analytics.set(record.id, structuredClone(record)); },
+      analytics: async () => structuredClone([...s.analytics.values()]),
       appendUsage: async usage => { assertScope(tenantId, usage); requireId(usage.id); if (s.usage.has(usage.id)) throw conflict(); s.usage.set(usage.id, structuredClone(usage)); },
       usageForTest: async () => structuredClone([...s.usage.values()]),
       users: async () => structuredClone([...s.users.values()].filter(u => s.memberships.get(u.id)?.active)),

@@ -1,3 +1,4 @@
+import { bindDraftOutcome } from './quick-entry';
 import { quickEntryCard, bindQuickEntry, takeLeadDraft, fillDraft, reviewNote } from './quick-entry';
 import { communicationTypes, isOverdue, leadSources, leadStages, type Customer, type CustomerInput, type LeadView, type User, type VehicleView } from '@freedms/shared';
 import { escapeHtml as e } from './format';
@@ -32,9 +33,11 @@ export async function crmRoute(parts: string[], ui: UI): Promise<void> {
     ui.shell(`<a class="back" href="#/leads">← Leads</a><h1>Add lead</h1>${draft ? reviewNote : ''}<form id="lead-form"><section class="card"><h2>Customer</h2>${select('Choose customer', 'customerId', '<option value="">Create a new customer</option>' + customers.map(c => `<option value="${c.id}">${e(`${c.name} · ${c.email || c.phone}`)}</option>`).join(''))}<fieldset id="new-customer">${customerFields()}</fieldset></section><section class="card"><h2>Lead details</h2><div class="form-grid">${select('Source', 'source', options(leadSources))}${input('Vehicle description / interest', 'vehicleDescription', '', 'maxlength="1000"')}${input('Source details', 'sourceDetail', '', 'maxlength="500"')}${select('Assigned to', 'assigneeId', userOptions(users))}${select('Vehicle of interest', 'vehicleId', vehicleOptions(vehicles))}</div></section><div class="form-actions"><a class="button" href="#/leads">Cancel</a><button class="primary">Save lead</button></div></form>`);
     if (draft) fillDraft(document.querySelector<HTMLFormElement>('#lead-form')!, {...draft.customer, vehicleDescription: draft.vehicleDescription ?? '', source: draft.source ?? 'walk-in', sourceDetail: draft.sourceDetail ?? ''});
     document.querySelector<HTMLSelectElement>('[name=customerId]')!.addEventListener('change', event => { const fieldset = document.querySelector<HTMLFieldSetElement>('#new-customer')!; fieldset.disabled = !!(event.target as HTMLSelectElement).value; fieldset.hidden = fieldset.disabled; });
+    const draftSaved = draft ? bindDraftOutcome(document.querySelector<HTMLFormElement>('#lead-form')!, 'lead', ui.api) : () => {};
     bind(ui, 'lead-form', async d => {
       const result = await ui.api<{lead: LeadView; duplicateCustomerIds: string[]}>('/leads', 'POST', { ...(d.get('customerId') ? {customerId: d.get('customerId')} : {customer: customerData(d)}), source: d.get('source'), sourceDetail: d.get('sourceDetail'), vehicleDescription: d.get('vehicleDescription'), assigneeId: d.get('assigneeId') || null, vehicleId: d.get('vehicleId') || null});
       if (!ui.current()) return;
+      draftSaved();
       warning = result.duplicateCustomerIds.length ? `Customer saved. ${result.duplicateCustomerIds.length} existing customer(s) share this phone or email. Review the customer before further outreach.` : '';
       location.hash = `#/leads/${result.lead.id}`;
     }); return;

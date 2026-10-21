@@ -445,6 +445,17 @@ Configure `FREEDMS_AI_ENDPOINT` (the full OpenAI-compatible chat-completions URL
 `FREEDMS_AI_API_KEY`, and `FREEDMS_AI_MODEL` on the API process. No vendor or model
 is assumed. Missing configuration shows “AI quick entry isn't set up”; there is
 no simulated extraction or local parser fallback. Requests time out after 15 seconds.
+Behavioral analytics always retains accepted events in the tenant-scoped own log.
+Vendor delivery is off by default. Set `ANALYTICS_ENABLED=1` and
+`ANALYTICS_VENDOR_KEY` to the project token for the single freeDMS US PostHog
+project to opt in; unset either to disable delivery. Project creation is manual.
+Only typed categorical properties and dealership identity go to the
+[PostHog capture API](https://posthog.com/docs/api/capture); no customer content,
+user IDs, VINs, or economics. `GET /analytics/funnel` derives milestones from the
+owned outbox joined to deal history and document metadata. Client signals use
+`POST /analytics/events` and never determine funnel milestones. Quick-entry
+outcomes are usage signals only, with no billing or pricing behavior.
+
 Set `FREEDMS_AI_VISION=1` only for a vision-capable provider to enable vehicle photo
 intake. Otherwise the photo control explains that it is unsupported.
 
