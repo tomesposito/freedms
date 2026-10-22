@@ -87,6 +87,11 @@ always carry a reason.
 
 ![Webhooks delivery log](docs/screenshots/webhooks.png)
 
+**Account security** — TOTP MFA with one-time recovery codes; admins see who
+has MFA on and can reset it.
+
+![Account MFA](docs/screenshots/account-mfa.png)
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
