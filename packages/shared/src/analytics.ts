@@ -1,5 +1,6 @@
 /** Deliberately closed: customer content and deal economics are never analytics properties. */
 export type BehavioralEvent =
+  | {event: 'feed_generated'}
   | {event: 'quick_entry_used'; surface: 'inventory' | 'lead'; input: 'text' | 'photo'; outcome: 'saved' | 'edited' | 'discarded'}
   | {event: 'report_exported'; report: 'aging' | 'sales' | 'pipeline' | 'accounting'}
   | {event: 'pencil_grid_viewed'}

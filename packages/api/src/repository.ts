@@ -1,9 +1,15 @@
+import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import type { CrmEntity } from '@freedms/shared';
 import type { Membership, OutboxEvent, Tenant, User, Vehicle, VehicleStatus } from '@freedms/shared';
 export interface VehicleQuery { status?: VehicleStatus; search?: string }
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
+  feedConfig(): Promise<FeedConfig | undefined>;
+  saveFeedConfig(record: FeedConfig, expectedVersion: number, event: OutboxEvent): Promise<void>;
+  appendFeedRun(record: FeedRun, event: OutboxEvent): Promise<void>;
+  feedRuns(): Promise<FeedRun[]>;
+  feedRun(id: string): Promise<FeedRun | undefined>;
   appendImport(record: InventoryImport, event: OutboxEvent): Promise<void>;
   imports(): Promise<InventoryImport[]>;
   events(): Promise<OutboxEvent[]>;
@@ -61,4 +67,10 @@ export function assertVehicleWrites(tenantId: string, writes: VehicleWrite[], cr
     if (record.version !== expectedVersion + 1 || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1 || ids.has(record.id) || events.has(event.id)) throw new Error('Invalid vehicle transaction');
     ids.add(record.id); events.add(event.id);
   }
+}
+
+export function assertFeedConfig(tenantId: string, record: FeedConfig, expectedVersion: number, event: OutboxEvent): void {
+  assertScope(tenantId, record, event);
+  assertEvent(record.id, record.version, event, 'feed.configured');
+  if (record.id !== 'feed-config' || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid feed config version');
 }

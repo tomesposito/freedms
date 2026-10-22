@@ -475,3 +475,25 @@ kind, and timestamp, including unavailable, unsupported, and failed attempts.
 Invalid input and unauthenticated requests are not metered. This is a metering stub
 only: no billing, prices, credits, or spend limits. Usage contains no prompt/image
 content and has no public listing endpoint. Offline tests use injected fakes.
+
+### Listing feed exports (local only)
+
+Open **Feeds** at `#/feeds` to save formats, included statuses, price requirements,
+and a manual/daily/weekly cadence preference. Generation happens only when you
+click **Generate**; no background scheduler or marketplace connection exists,
+and nothing is transmitted. Unsaved defaults include only priced **available**
+vehicles (reserved, in-recon, and sold require explicit inclusion). Each run lists
+all exclusions and preserves its generated snapshot for later downloads.
+CSV `listPrice` is USD dollars with two decimals; JSON `listPriceCents` is integer
+USD cents. Public files exclude dealer cost, recon, notes, and aging. Run snapshots
+are limited to 300 KB; oversized generations fail before saving anything.
+Local in-memory configurations and runs are cleared when the API restarts.
+
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/feeds/config` | Saved config or `null`, defaults, and local-only generation/scheduling flags |
+| PUT | `/feeds/config` | Save formats, includedStatuses, requirePrice, schedule; authenticated write role |
+| POST | `/feeds/generate` | Body `{}`; save an immutable run with counts, included identities, excluded identities/reasons, and public snapshot rows |
+| GET | `/feeds/runs` | Tenant run history, newest first |
+| GET | `/feeds/runs/{id}.csv` | Download CSV snapshot if generated for this run |
+| GET | `/feeds/runs/{id}.json` | Download JSON array snapshot if generated for this run |

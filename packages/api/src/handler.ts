@@ -1,3 +1,4 @@
+import { feeds } from './feed.js';
 import { inventoryImport } from './import.js';
 import { analytics, analyticsFromEnv, track, type AnalyticsVendor } from './analytics.js';
 import { quickEntry } from './quick-entry.js';
@@ -42,6 +43,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       const record = (data: import('@freedms/shared').BehavioralEvent) => track(repository, principal, now(), data, vendor);
       if (/^\/analytics(\/|$)/.test(path)) return await analytics(request, principal, repository, record);
       if (/^\/quick-entry(\/|$)/.test(path)) return await quickEntry(request, principal, repository, now(), provider);
+      if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repository, now());
       if (/^\/reports(\/|$)/.test(path)) return await reports(request, repository, now(), record);
       if (/^\/(deals|settings)(\/|$)/.test(path)) {
         const command = () => /^\/deals\/[^/]+\/(jacket|documents)(\/|$)/.test(path)

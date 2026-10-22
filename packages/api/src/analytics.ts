@@ -16,7 +16,7 @@ export function behavioralEvent(value: unknown): BehavioralEvent {
     case 'report_exported':
       onlyKeys(b, ['event', 'report']);
       return {event: b.event, report: choice(b.report, ['aging', 'sales', 'pipeline', 'accounting'] as const, 'report')};
-    case 'pencil_grid_viewed': case 'jacket_checklist_completed':
+    case 'feed_generated': case 'pencil_grid_viewed': case 'jacket_checklist_completed':
       onlyKeys(b, ['event']); return {event: b.event};
     default: throw invalid('Unknown analytics event.');
   }
