@@ -26,9 +26,65 @@ and consumption-based AI and agentic-AI features.
 
 ## Status
 
-Phase 1 builds 1–3 implement tenancy/auth foundations, inventory, leads/CRM, and
-cash/finance desking, printable deal jackets, and core reporting/CSV exports end to end locally. [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
-Deal jackets include generated buyer documents, attachments, and a derived completeness checklist.
+Phase 1 is complete locally: tenancy/auth foundations, inventory (with CSV
+import), leads/CRM, cash/finance desking, printable deal jackets with attachments
+and a completeness checklist, core reporting/CSV exports, AI quick entry
+(draft-then-confirm), listing feed exports, webhooks, and usage tracking.
+[SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
+Phase 2 — F&I, full accounting, credit applications — is queued. Nothing is
+deployed yet; everything runs locally.
+
+## Screenshots
+
+Real captures from the local app on the current build — the same screens the
+verification tours use. The sample dealership data is local-only; the app itself
+always starts empty.
+
+**Inventory** — every vehicle with aging, cost, and status.
+
+![Inventory list](docs/screenshots/inventory-list.png)
+
+**Leads** — the pipeline, with assignment, stage history, and follow-ups.
+
+![Leads list](docs/screenshots/leads-list.png)
+
+**The pencil** — cash/finance worksheet with live totals and a 3×3 payment grid.
+
+![Deal worksheet](docs/screenshots/deal-worksheet.png)
+
+**Deal jacket** — buyer's order, FTC Buyers Guide, attachments, and the
+completeness checklist.
+
+![Deal jacket](docs/screenshots/deal-jacket.png)
+
+**Reports** — inventory aging, sales and gross, lead pipeline. Each exports to
+CSV, plus a QuickBooks-format accounting export.
+
+![Reports](docs/screenshots/reports.png)
+
+**AI quick entry** — type a sentence, get a draft vehicle to review. Nothing
+saves without confirmation.
+
+![AI quick entry draft](docs/screenshots/quick-entry-draft.png)
+
+**Photo intake** — a window-sticker or VIN-plate photo becomes the same kind
+of draft.
+
+![AI quick entry from a photo](docs/screenshots/quick-entry-photo.png)
+
+**Inventory import** — the preview shows every row's verdict (valid, error,
+duplicate) before anything is written.
+
+![Import preview](docs/screenshots/import-preview.png)
+
+**Listing feeds** — outbound feed generation with a run log; excluded vehicles
+always carry a reason.
+
+![Listing feeds](docs/screenshots/listing-feeds.png)
+
+**Webhooks** — signed event deliveries with a full delivery log.
+
+![Webhooks delivery log](docs/screenshots/webhooks.png)
 
 ## License
 
@@ -182,8 +238,8 @@ resolved license metadata. No heavy frontend framework is included.
 
 ## Deliberately outside this build
 
-Lease desking, F&I menus, lender submission, integrations,
-AI, analytics, outbox delivery workers, imports, price history UI, and seeded/demo
+Lease desking, F&I menus, lender submission, live integrations,
+outbox delivery workers, price history UI, and seeded/demo
 inventory. These are working local slices, not the complete Phase 1 product.
 Cloud deployment, live Cognito/DynamoDB integration, backup/restore exercises, and
 production operational readiness have not been established by the offline tests.
