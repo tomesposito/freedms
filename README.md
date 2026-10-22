@@ -29,7 +29,8 @@ and consumption-based AI and agentic-AI features.
 Phase 1 is complete locally: tenancy/auth foundations, inventory (with CSV
 import), leads/CRM, cash/finance desking, printable deal jackets with attachments
 and a completeness checklist, core reporting/CSV exports, AI quick entry
-(draft-then-confirm), listing feed exports, webhooks, and usage tracking.
+(draft-then-confirm), listing feed exports, webhooks, MFA (TOTP) with recovery codes and admin reset,
+and usage tracking.
 [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
 Phase 2 — F&I, full accounting, credit applications — is queued. Nothing is
 deployed yet; everything runs locally.
@@ -150,7 +151,7 @@ client fields. Admin and staff can create/update; only admin can delete.
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| GET | `/session` | Current dealership and effective principal |
+| GET | `/session` | Current dealership, effective principal, and `mfaEnabled` boolean |
 | GET | `/vehicles?status=available&search=...` | Search stock, VIN, make/model/trim, location; optional status |
 | GET | `/vehicles/{id}` | Vehicle with derived aging and recon total |
 | POST | `/vehicles` | Create from `VehicleInput` |
@@ -167,7 +168,7 @@ are editable for corrections and incomplete NHTSA results. The server validates
 them on save, but does not claim NHTSA verified manually entered attributes.
 
 DynamoDB stores `PK=TENANT#<id>` with `PROFILE`, `USER#<sub>`, `MEMBER#<sub>`,
-`VEHICLE#<id>`, `CUSTOMER#<id>`, `LEAD#<id>`, `INTAKE#token`, `DEAL#<id>`, `SETTINGS#workspace`, `DOCUMENT#<id>`, and `EVENT#<uuid>`
+`VEHICLE#<id>`, `CUSTOMER#<id>`, `LEAD#<id>`, `INTAKE#token`, `DEAL#<id>`, `SETTINGS#workspace`, `DOCUMENT#<id>`, `MFA#<userId>`, and `EVENT#<uuid>`
 sort keys. Every business mutation and its minimal,
 attributable event commit together via `TransactWriteItems`; conditional writes
 prevent stale edits. Events contain IDs, action, version, actor, and timestamp,
@@ -602,3 +603,54 @@ Both adapters isolate endpoints (`WEBHOOK#<id>`) and delivery records
 (`DELIVERY#<id>`) under `TENANT#<id>`. Offline tests use injected senders and a
 real HTTP receiver bound to `127.0.0.1`; they never send to external services.
 No cloud resources or live integrations were deployed for this slice.
+
+
+## Account security (MFA)
+
+The Account page (`#/account`) supports TOTP setup, eight one-time recovery codes,
+verification, disabling, recovery-code regeneration, and admin reset. MFA records
+are isolated by both tenant and user, including when the same user belongs to more
+than one tenant. Staff can manage their own MFA; only admins can list workspace
+MFA status or reset another active member.
+
+**Sign-in boundary:** there is no password authentication in this repository.
+`POST /local/session` creates a brand-new tenant and admin with MFA off. It does
+not sign back into an existing account or prompt for a second factor. Hosted
+pre-token enforcement is Cognito's responsibility. `/account/mfa/verify` is a real,
+authenticated second-factor check that a sign-in flow can call before treating a
+session as fully verified; it neither issues nor upgrades a session token and does
+not change the existing authorization of other API routes. The stored account
+TOTP enrollment is not automatically synchronized with Cognito enrollment.
+
+All requests below use normal bearer authentication and the existing data/error
+envelopes. No request accepts tenant identity.
+
+| Method | Path | Body / result |
+| --- | --- | --- |
+| GET | `/account/mfa` | Own `userId`, `enabled`, `recoveryCodesRemaining`, `lockedUntil` |
+| POST | `/account/mfa/setup` | `{}` → pending `secret`, `otpauthUrl`, `enabled:false`; replaces pending setup, conflicts if enabled |
+| POST | `/account/mfa/enable` | `{code}` → `enabled:true`, eight recovery codes shown once |
+| POST | `/account/mfa/verify` | `{code}` (TOTP or recovery) → `verified:true` |
+| POST | `/account/mfa/disable` | `{code}` (TOTP or recovery) → cleared public status |
+| POST | `/account/mfa/recovery-codes` | `{code}` (fresh TOTP only) → eight replacement recovery codes shown once |
+| GET | `/admin/mfa` | Admin only: active users' `userId`, `name`, `enabled` |
+| POST | `/admin/mfa/{userId}/reset` | Admin only, `{}` → cleared status; inactive/foreign/missing member returns 404; absent or disabled MFA succeeds |
+
+TOTP uses HMAC-SHA1, six digits, a 30-second period, and a ±1-step window. A step
+used successfully for any operation cannot be reused. Recovery codes ignore dashes,
+spaces, and letter case and work exactly once; regeneration invalidates old codes.
+Malformed codes return 400 `VALIDATION`; well-formed incorrect or replayed codes
+return 401 `MFA_INVALID`. Five consecutive failures lock code checks for 15 minutes
+(429 `MFA_LOCKED`, including the fifth failure). Successful verification clears
+failure state; repeating setup does not bypass lockout.
+
+Raw TOTP secrets must remain on the tenant record for verification, like webhook
+signing secrets. Only the setup response reveals the pending secret. Recovery codes
+are stored only as normalized SHA-256 hashes; plaintext appears only on enable or
+regeneration. Status, admin listings, logs, and events contain no secret material.
+Every state change, including failed attempts, replay counters, and recovery-code
+consumption, saves `MFA#<userId>` and a metadata-only outbox event in one optimistic
+transaction. `mfa.verified` records verification attempts as well as successes;
+it is not a proof of successful authentication. MFA events are excluded from
+webhook subscriptions and MFA requests do not trigger webhook dispatch. Local
+memory clears on restart; Dynamo persists lockouts and consumed-code state.

@@ -1,3 +1,4 @@
+import type { MfaRecord } from '@freedms/shared';
 import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
@@ -6,6 +7,8 @@ import type { Membership, OutboxEvent, Tenant, User, Vehicle, VehicleStatus } fr
 export interface VehicleQuery { status?: VehicleStatus; search?: string }
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
+  mfa(userId: string): Promise<MfaRecord | undefined>;
+  saveMfa(record: MfaRecord, expectedVersion: number, event: OutboxEvent): Promise<void>;
   webhookEndpoints(): Promise<WebhookEndpoint[]>;
   webhookEndpoint(id: string): Promise<WebhookEndpoint | undefined>;
   saveWebhookEndpoint(record: WebhookEndpoint, expectedVersion: number, event: OutboxEvent): Promise<void>;
@@ -85,4 +88,11 @@ export function assertWebhookEndpoint(tenantId: string, record: WebhookEndpoint,
   assertScope(tenantId, record, event);
   assertEvent(record.id, record.version, event, expectedVersion ? 'webhook.updated' : 'webhook.created');
   if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid webhook endpoint version');
+}
+
+export function assertMfa(tenantId: string, record: MfaRecord, expectedVersion: number, event: OutboxEvent): void {
+  assertScope(tenantId, record, event);
+  if (!['mfa.setup', 'mfa.enabled', 'mfa.disabled', 'mfa.reset', 'mfa.recovery_regenerated', 'mfa.verified'].includes(event.type)) throw new Error('Invalid MFA outbox event');
+  assertEvent(record.userId, record.version, event, event.type);
+  if (record.id !== record.userId || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid MFA version');
 }

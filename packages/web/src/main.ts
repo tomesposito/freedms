@@ -1,3 +1,4 @@
+import { accountRoute } from './mfa';
 import { webhooksRoute } from './webhooks';
 import { feedRoute } from './feed';
 import { importRoute } from './import';
@@ -12,13 +13,13 @@ import { finishSignIn, getToken, localMode, setToken, signIn, signOut } from './
 import './style.css';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const base = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
-let session: {principal: Principal; tenant: Tenant};
+let session: {principal: Principal; tenant: Tenant; mfaEnabled: boolean};
 let search = ''; let status = ''; let routeSequence = 0;
 async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const response = await fetch(`${base}${path}`, {method, headers: {'content-type': 'application/json', ...(getToken() ? {authorization: `Bearer ${getToken()}`} : {})}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
   const result = await response.json() as ApiEnvelope<T>;
   if ('error' in result) {
-    if (response.status === 401) sessionStorage.removeItem('freedms-token');
+    if (response.status === 401 && result.error.code !== 'MFA_INVALID') sessionStorage.removeItem('freedms-token');
     throw new Error(result.error.message);
   }
   if (!response.ok) throw new Error('The request could not be completed.');
@@ -39,7 +40,7 @@ async function download(path: string, filename: string): Promise<void> {
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : 'Something went wrong. Please retry.'; }
 function flash(error: unknown): void { const el = document.querySelector<HTMLElement>('#message')!; el.textContent = errorMessage(error); el.hidden = false; el.focus(); }
 function shell(content: string): void {
-  app.innerHTML = `<header><a class="brand" href="#/">free<span>DMS</span></a><nav aria-label="Main navigation"><a href="#/">Inventory</a><a href="#/leads">Leads</a><a href="#/deals">Deals</a><a href="#/reports">Reports</a><a href="#/feeds">Feeds</a><a href="#/webhooks">Webhooks</a></nav><span class="workspace">${e(session?.tenant?.name || 'Your dealership')}</span><div class="header-right">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet">Sign out</button></div></header><main><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main><footer>freeDMS · Inventory, Leads, Deals & Reports${localMode ? ' · Local changes are cleared when the API restarts.' : ''}</footer>`;
+  app.innerHTML = `<header><a class="brand" href="#/">free<span>DMS</span></a><nav aria-label="Main navigation"><a href="#/">Inventory</a><a href="#/leads">Leads</a><a href="#/deals">Deals</a><a href="#/reports">Reports</a><a href="#/feeds">Feeds</a><a href="#/webhooks">Webhooks</a><a href="#/account">Account</a></nav><span class="workspace">${e(session?.tenant?.name || 'Your dealership')}</span><div class="header-right">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet">Sign out</button></div></header><main><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main><footer>freeDMS · Inventory, Leads, Deals & Reports${localMode ? ' · Local changes are cleared when the API restarts.' : ''}</footer>`;
   document.querySelector('#signout')?.addEventListener('click', () => { clearDrafts(); signOut(); });
 }
 function badge(value: string): string { return `<span class="badge ${value.replace(' ', '-')}">${e(value)}</span>`; }
@@ -135,6 +136,7 @@ async function route(): Promise<void> {
     else if (parts[0] === 'import') await importRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'reports') await reportsRoute({api, download, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'webhooks') await webhooksRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
+    else if (parts[0] === 'account') await accountRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'feeds') await feedRoute({api, download, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'leads') await crmRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'new') await form(undefined, sequence);

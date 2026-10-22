@@ -27,6 +27,8 @@ const server = createServer(async (req, res) => {
     const isIntake = req.method === 'POST' && url.pathname.replace(/\/$/, '') === '/intake/adf';
     if (isIntake && !['application/xml', 'text/xml'].includes((req.headers['content-type'] ?? '').split(';')[0])) throw new ApiError(415, 'CONTENT_TYPE', 'Use application/xml.');
     if (!isIntake && ['POST', 'PUT', 'DELETE'].includes(req.method ?? '') && !req.headers['content-type']?.startsWith('application/json')) throw new ApiError(415, 'CONTENT_TYPE', 'Use application/json.');
+    // New workspace/user only, with MFA off; this is not an existing-user sign-in.
+    // Hosted pre-token MFA enforcement belongs to Cognito.
     if (req.method === 'POST' && url.pathname === '/local/session') {
       const input = parseBody(body); onlyKeys(input, ['dealership', 'name']);
       const name = text(input.name, 'Your name'); const dealership = text(input.dealership, 'Dealership');

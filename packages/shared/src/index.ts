@@ -1,3 +1,4 @@
+export * from './mfa.js';
 import type { DealDocument } from './jacket.js';
 export * from './jacket.js';
 import type { Deal, WorkspaceSettings } from './desking.js';
@@ -22,7 +23,7 @@ export interface Vehicle extends VehicleInput {
 export interface VehicleView extends Vehicle { agingDays: number; reconTotal: number }
 export interface OutboxEvent {
   id: string; tenantId: string; actorId: string; aggregateId: string; aggregateVersion: number;
-  type: 'webhook.created' | 'webhook.updated' | 'feed.configured' | 'feed.generated' | 'vehicle.imported' | 'document.created' | 'document.updated' | 'deal.created' | 'deal.updated' | 'settings.created' | 'settings.updated' | 'vehicle.created' | 'vehicle.updated' | 'vehicle.deleted' | 'tenant.created' | 'customer.created' | 'customer.updated' | 'lead.created' | 'lead.updated' | 'intake.created' | 'intake.updated';
+  type: 'mfa.setup' | 'mfa.enabled' | 'mfa.disabled' | 'mfa.reset' | 'mfa.recovery_regenerated' | 'mfa.verified' | 'webhook.created' | 'webhook.updated' | 'feed.configured' | 'feed.generated' | 'vehicle.imported' | 'document.created' | 'document.updated' | 'deal.created' | 'deal.updated' | 'settings.created' | 'settings.updated' | 'vehicle.created' | 'vehicle.updated' | 'vehicle.deleted' | 'tenant.created' | 'customer.created' | 'customer.updated' | 'lead.created' | 'lead.updated' | 'intake.created' | 'intake.updated';
   occurredAt: string; deliveryStatus: 'pending';
 }
 export interface DecodedVin { vin: string; year: number | null; make: string; model: string; trim: string; warnings: string[] }

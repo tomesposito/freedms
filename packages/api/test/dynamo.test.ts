@@ -96,3 +96,27 @@ test('Dynamo desking/settings use scoped keys and mixed sold writes are one cond
   await assert.rejects(repo.crmWrite(writes, [{...vehicles[0], event: {...vehicles[0].event, id: 'ed'}}]), /Invalid/);
   assert.equal(commands.length, count);
 });
+
+test('Dynamo MFA saves record and event atomically with scoped keys and conditional versions', async () => {
+  const commands: (GetCommand | TransactWriteCommand)[] = [];
+  const client = {send: async (command: typeof commands[number]) => { commands.push(command); return {}; }} as unknown as DynamoDBDocumentClient;
+  const repo = new DynamoRepositories('table', client).forTenant('A');
+  const record: import('@freedms/shared').MfaRecord = {id: 'user', userId: 'user', tenantId: 'A', version: 1, createdAt: vehicle.createdAt, updatedAt: vehicle.createdAt, enabled: false, secret: null, pendingSecret: 'TEST', recoveryHashes: [], failedAttempts: 0, lockedUntil: null, lastTotpStep: null};
+  const change: OutboxEvent = {...event, id: 'mfa-event', aggregateId: 'user', type: 'mfa.setup'};
+  await repo.saveMfa(record, 0, change);
+  await repo.saveMfa({...record, version: 2}, 1, {...change, id: 'next', aggregateVersion: 2});
+  await repo.mfa('user');
+  const items = (commands[0] as TransactWriteCommand).input.TransactItems!;
+  assert.equal(items.length, 2); assert.deepEqual(items.map(i => i.Put?.Item?.SK), ['MFA#user', 'EVENT#mfa-event']);
+  assert.ok(items.every(i => i.Put?.Item?.PK === 'TENANT#A' && i.Put.ConditionExpression === 'attribute_not_exists(PK)'));
+  const update = (commands[1] as TransactWriteCommand).input.TransactItems![0].Put!;
+  assert.equal(update.ConditionExpression, '#d.#v = :v'); assert.deepEqual(update.ExpressionAttributeValues, {':v': 1});
+  assert.deepEqual((commands[2] as GetCommand).input.Key, {PK: 'TENANT#A', SK: 'MFA#user'});
+  assert.equal((commands[2] as GetCommand).input.ConsistentRead, true);
+  await assert.rejects(repo.saveMfa({...record, tenantId: 'B'}, 0, change), /scope/);
+  await assert.rejects(repo.saveMfa(record, 0, {...change, tenantId: 'B'}), /scope/);
+  await assert.rejects(repo.saveMfa(record, 0, {...change, type: 'vehicle.created'}), /outbox/);
+  await assert.rejects(repo.saveMfa(record, 0, {...change, aggregateId: 'other'}), /outbox/);
+  await assert.rejects(repo.saveMfa(record, 1, change), /version/);
+  assert.equal(commands.length, 3);
+});

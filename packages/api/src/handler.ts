@@ -1,3 +1,4 @@
+import { mfa } from './mfa.js';
 import { dispatchWebhooks, fetchWebhookSender, webhooks, type WebhookSender } from './webhooks.js';
 import { feeds } from './feed.js';
 import { inventoryImport } from './import.js';
@@ -49,6 +50,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
       const execute = async (): Promise<ApiResponse> => {
+        if (/^\/(account|admin)\/mfa(\/|$)/.test(path)) return await mfa(request, principal, repository, now());
         if (/^\/webhooks(\/|$)/.test(path)) return await webhooks(request, principal, repository, now(), webhookSender);
         const record = (data: import('@freedms/shared').BehavioralEvent) => track(repository, principal, now(), data, vendor);
         if (/^\/analytics(\/|$)/.test(path)) return await analytics(request, principal, repository, record);
@@ -64,7 +66,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
             : await command();
         }
         if (/^\/(customers|leads|users|intake-token)(\/|$)/.test(path)) return await crm(request, principal, repository, now());
-        if (method === 'GET' && path === '/session') return response(200, {data: {principal, tenant: await repository.tenant()}});
+        if (method === 'GET' && path === '/session') return response(200, {data: {principal, tenant: await repository.tenant(), mfaEnabled: (await repository.mfa(principal.userId))?.enabled ?? false}});
         if (method === 'GET' && path.startsWith('/vin/')) return response(200, {data: await decoder.decode(vin(decodeURIComponent(path.slice(5))))});
         if (/^\/vehicles\/imports?(\/|$)/.test(path)) return await inventoryImport(request, principal, repository, now(), decoder);
         if (path !== '/vehicles' && !/^\/vehicles\/[^/]+$/.test(path)) throw new ApiError(404, 'NOT_FOUND', 'Endpoint not found.');
@@ -102,7 +104,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         return response(200, {data: view(vehicle, date)});
       };
       const result = await execute();
-      if (result.statusCode >= 200 && result.statusCode < 300 && ['POST', 'PUT', 'DELETE'].includes(method) && !/^\/webhooks(\/|$)/.test(path)) {
+      if (result.statusCode >= 200 && result.statusCode < 300 && ['POST', 'PUT', 'DELETE'].includes(method) && !/^\/webhooks(\/|$)/.test(path) && !/^\/(account|admin)\/mfa(\/|$)/.test(path)) {
         try { await dispatchWebhooks(repository, webhookSender, now()); } catch { /* Delivery failures must never fail a committed mutation. */ }
       }
       return result;
