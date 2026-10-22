@@ -1,25 +1,21 @@
+import { IMPORT_BODY_LIMIT } from './import.js';
+export { dollarCents } from './validation.js';
 import { randomUUID } from 'node:crypto';
 import { leadSources, type LeadDraft, type VehicleDraft, type Principal } from '@freedms/shared';
 import { requireWrite } from './auth.js';
 import { ApiError, missing } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
-import { invalid, onlyKeys, text } from './validation.js';
+import { dollarCents, invalid, onlyKeys, text } from './validation.js';
 import type { TenantRepository } from './repository.js';
 import { providerFailure, unavailable, visionUnsupported, type QuickEntryProvider } from './ai-provider.js';
 // At most 5 MiB base64 (about 3.75 MiB decoded); extra room only for JSON metadata.
 export const PHOTO_BASE64_LIMIT = 5 * 1024 * 1024;
 export const PHOTO_BODY_LIMIT = PHOTO_BASE64_LIMIT + 1024;
 export function bodyLimit(method: string, path: string): number {
+  if (/^\/vehicles\/imports?(\/|$)/.test(path)) return IMPORT_BODY_LIMIT;
   return method.toUpperCase() === 'POST' && path.replace(/\/$/, '') === '/quick-entry/vehicle-photo' ? PHOTO_BODY_LIMIT : 65536;
 }
 const clean = (value: unknown, max: number): string | undefined => typeof value === 'string' && value.trim() && value.trim().length <= max ? value.trim() : undefined;
-export function dollarCents(value: unknown): number | undefined {
-  if (typeof value !== 'number' && typeof value !== 'string') return;
-  const s = String(value).trim().replace(/^\$\s*/, '');
-  if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?$/.test(s)) return;
-  const amount = Math.round(Number(s.replace(/,/g, '')) * 100);
-  return Number.isSafeInteger(amount) && amount <= 100_000_000_00 ? amount : undefined;
-}
 export function sanitizeVehicle(raw: Record<string, unknown>, now: Date): VehicleDraft {
   const draft: VehicleDraft = {};
   for (const [key, max] of [['make', 120], ['model', 120], ['trim', 120], ['stockNumber', 50], ['location', 200], ['notes', 10000]] as const) {

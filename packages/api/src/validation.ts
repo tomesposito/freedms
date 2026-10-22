@@ -43,3 +43,11 @@ export function view(vehicle: Vehicle, now: Date): VehicleView {
   return {...vehicle, reconTotal: vehicle.reconCosts.reduce((sum, item) => sum + item.amount, 0),
     agingDays: Math.max(0, Math.floor((Date.parse(now.toISOString().slice(0, 10)) - Date.parse(vehicle.dateStocked)) / 86400000))};
 }
+
+export function dollarCents(value: unknown): number | undefined {
+  if (typeof value !== 'number' && typeof value !== 'string') return;
+  const s = String(value).trim().replace(/^\$\s*/, '');
+  if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?$/.test(s)) return;
+  const amount = Math.round(Number(s.replace(/,/g, '')) * 100);
+  return Number.isSafeInteger(amount) && amount <= 100_000_000_00 ? amount : undefined;
+}

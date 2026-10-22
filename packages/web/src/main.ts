@@ -1,3 +1,4 @@
+import { importRoute } from './import';
 import { bindDraftOutcome, quickEntryCard, bindQuickEntry, takeVehicleDraft, fillDraft, reviewNote, clearDrafts } from './quick-entry';
 import { reportsRoute } from './reports';
 import { jacketRoute } from './jacket';
@@ -50,7 +51,7 @@ async function login(): Promise<void> {
   });
 }
 async function list(sequence: number): Promise<void> {
-  shell(`<div class="heading"><div><p class="eyebrow">YOUR LOT</p><h1>Inventory</h1><p class="muted">Stock, price, and track every vehicle.</p></div><a class="button primary" href="#/new">+ Add vehicle</a></div>${quickEntryCard}<form id="filters" class="filters"><label class="search">Search inventory<input name="search" type="search" maxlength="200" placeholder="Stock number, VIN, make, model, location" value="${e(search)}"></label><label>Status<select name="status"><option value="">All statuses</option>${vehicleStatuses.map(s => `<option ${s === status ? 'selected' : ''}>${s}</option>`).join('')}</select></label><button>Search</button></form><section id="results" aria-live="polite"><p class="muted">Loading inventory…</p></section>`);
+  shell(`<div class="heading"><div><p class="eyebrow">YOUR LOT</p><h1>Inventory</h1><p class="muted">Stock, price, and track every vehicle.</p></div><div class="form-actions"><a class="button" href="#/import">Import CSV</a><a class="button primary" href="#/new">+ Add vehicle</a></div></div>${quickEntryCard}<form id="filters" class="filters"><label class="search">Search inventory<input name="search" type="search" maxlength="200" placeholder="Stock number, VIN, make, model, location" value="${e(search)}"></label><label>Status<select name="status"><option value="">All statuses</option>${vehicleStatuses.map(s => `<option ${s === status ? 'selected' : ''}>${s}</option>`).join('')}</select></label><button>Search</button></form><section id="results" aria-live="polite"><p class="muted">Loading inventory…</p></section>`);
   void bindQuickEntry('vehicle', api, () => sequence === routeSequence);
   document.querySelector<HTMLFormElement>('#filters')!.addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget as HTMLFormElement); search = String(data.get('search') || '').trim(); status = String(data.get('status') || ''); void route(); });
   document.querySelector<HTMLSelectElement>('[name=status]')!.addEventListener('change', () => document.querySelector<HTMLFormElement>('#filters')!.requestSubmit());
@@ -129,6 +130,7 @@ async function route(): Promise<void> {
       if (parts[2] === 'jacket' && parts[1]) await jacketRoute(parts[1], ui);
       else await dealsRoute(parts, ui);
     }
+    else if (parts[0] === 'import') await importRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'reports') await reportsRoute({api, download, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'leads') await crmRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'new') await form(undefined, sequence);

@@ -1,4 +1,4 @@
-import type { AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
+import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
@@ -38,6 +38,8 @@ export class DynamoRepositories implements RepositoryFactory {
       return rows;
     };
     return {
+      appendImport: async (record, event) => { assertScope(tenantId, record); assertEvent(record.id, 1, event, 'vehicle.imported'); await transact([put(`IMPORT#${requireId(record.id)}`, record), eventPut(event)]); },
+      imports: () => listRows<InventoryImport>('IMPORT#'),
       events: () => listRows<OutboxEvent>('EVENT#'),
       appendAnalytics: async record => { assertScope(tenantId, record); await transact([put(`ANALYTICS#${requireId(record.id)}`, record)]); },
       analytics: () => listRows<AnalyticsRecord>('ANALYTICS#'),

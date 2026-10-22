@@ -1,18 +1,20 @@
-import type { AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
+import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import type { CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
 import { assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
-interface State { analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
+interface State { imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
   private states = new Map<string, State>();
   forTenant(tenantId: string): TenantRepository {
     requireId(tenantId);
     let state = this.states.get(tenantId);
-    if (!state) { state = {analytics: new Map(), usage: new Map(), crm: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
+    if (!state) { state = {imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
     const s = state;
     const check = (event: OutboxEvent) => { assertScope(tenantId, event); if (s.events.has(event.id)) throw conflict(); };
     // Synchronous validation followed by synchronous map writes: no interleaved await or partial commits.
     return {
+      appendImport: async (record, event) => { assertScope(tenantId, record); requireId(record.id); check(event); assertEvent(record.id, 1, event, 'vehicle.imported'); if (s.imports.has(record.id)) throw conflict(); s.imports.set(record.id, structuredClone(record)); s.events.set(event.id, structuredClone(event)); },
+      imports: async () => structuredClone([...s.imports.values()]),
       events: async () => structuredClone([...s.events.values()]),
       appendAnalytics: async record => { assertScope(tenantId, record); requireId(record.id); if (s.analytics.has(record.id)) throw conflict(); s.analytics.set(record.id, structuredClone(record)); },
       analytics: async () => structuredClone([...s.analytics.values()]),

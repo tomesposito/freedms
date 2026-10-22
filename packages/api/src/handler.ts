@@ -1,3 +1,4 @@
+import { inventoryImport } from './import.js';
 import { analytics, analyticsFromEnv, track, type AnalyticsVendor } from './analytics.js';
 import { quickEntry } from './quick-entry.js';
 import { UnconfiguredProvider, type QuickEntryProvider } from './ai-provider.js';
@@ -53,6 +54,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       if (/^\/(customers|leads|users|intake-token)(\/|$)/.test(path)) return await crm(request, principal, repository, now());
       if (method === 'GET' && path === '/session') return response(200, {data: {principal, tenant: await repository.tenant()}});
       if (method === 'GET' && path.startsWith('/vin/')) return response(200, {data: await decoder.decode(vin(decodeURIComponent(path.slice(5))))});
+      if (/^\/vehicles\/imports?(\/|$)/.test(path)) return await inventoryImport(request, principal, repository, now(), decoder);
       if (path !== '/vehicles' && !/^\/vehicles\/[^/]+$/.test(path)) throw new ApiError(404, 'NOT_FOUND', 'Endpoint not found.');
       const id = path === '/vehicles' ? undefined : requireId(path.split('/')[2]);
       if (method === 'GET') {

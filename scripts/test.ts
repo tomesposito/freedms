@@ -11,3 +11,5 @@ import '../packages/api/test/reports.test.js';
 import '../packages/api/test/quick-entry.test.js';
 import '../packages/api/test/analytics.test.js';
 import '../packages/web/test/analytics.test.js';
+
+import '../packages/api/test/import.test.js';

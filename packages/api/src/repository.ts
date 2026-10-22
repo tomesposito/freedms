@@ -1,9 +1,11 @@
-import type { AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
+import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import type { CrmEntity } from '@freedms/shared';
 import type { Membership, OutboxEvent, Tenant, User, Vehicle, VehicleStatus } from '@freedms/shared';
 export interface VehicleQuery { status?: VehicleStatus; search?: string }
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
+  appendImport(record: InventoryImport, event: OutboxEvent): Promise<void>;
+  imports(): Promise<InventoryImport[]>;
   events(): Promise<OutboxEvent[]>;
   appendAnalytics(record: AnalyticsRecord): Promise<void>;
   analytics(): Promise<AnalyticsRecord[]>;
