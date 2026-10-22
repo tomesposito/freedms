@@ -15,3 +15,5 @@ import '../packages/web/test/analytics.test.js';
 import '../packages/api/test/import.test.js';
 import '../packages/api/test/feed.test.js';
 import '../packages/web/test/feed.test.js';
+import '../packages/api/test/webhooks.test.js';
+import '../packages/web/test/webhooks.test.js';

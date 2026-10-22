@@ -1,9 +1,10 @@
+import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   constructor(private table: string, private client = DynamoDBDocumentClient.from(new DynamoDBClient({}))) {}
@@ -39,6 +40,17 @@ export class DynamoRepositories implements RepositoryFactory {
       return rows;
     };
     return {
+      webhookEndpoints: () => listRows<WebhookEndpoint>('WEBHOOK#'),
+      webhookEndpoint: id => get<WebhookEndpoint>(`WEBHOOK#${requireId(id)}`),
+      saveWebhookEndpoint: async (record, expectedVersion, event) => {
+        assertWebhookEndpoint(tenantId, record, expectedVersion, event);
+        await transact([put(`WEBHOOK#${requireId(record.id)}`, record, expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined), eventPut(event)]);
+      },
+      webhookDeliveries: () => listRows<WebhookDelivery>('DELIVERY#'),
+      saveWebhookDelivery: async record => {
+        assertScope(tenantId, record);
+        await transact([{Put: {TableName: this.table, Item: {...key(`DELIVERY#${requireId(record.id)}`), data: record}}}]);
+      },
       feedConfig: () => get<FeedConfig>('FEEDCONFIG#feed-config'),
       saveFeedConfig: async (record, expectedVersion, event) => { assertFeedConfig(tenantId, record, expectedVersion, event); await transact([put('FEEDCONFIG#feed-config', record, expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined), eventPut(event)]); },
       appendFeedRun: async (record, event) => { assertScope(tenantId, record); assertEvent(record.id, 1, event, 'feed.generated'); await transact([put(`FEEDRUN#${requireId(record.id)}`, record), eventPut(event)]); },

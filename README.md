@@ -59,11 +59,11 @@ Storage and the signing key are in memory. API restart clears all records and
 invalidates tokens. Signing out or losing the tab session loses access to that
 workspace; creating another session creates a new empty dealership. Use separate
 browser sessions to exercise independent workspaces. `Ctrl+C` stops both servers.
-VIN decoding alone requires internet access; manual entry works offline.
+VIN decoding and configured external integrations require internet access; manual entry works offline.
 
 ```sh
 npm run build      # type-check all packages; bundle Lambda and static web
-npm test           # complete suite; no AWS credentials or network required
+npm test           # offline suite; no AWS credentials; loopback HTTP receiver only
 npm run typecheck
 ```
 
@@ -115,8 +115,8 @@ DynamoDB stores `PK=TENANT#<id>` with `PROFILE`, `USER#<sub>`, `MEMBER#<sub>`,
 sort keys. Every business mutation and its minimal,
 attributable event commit together via `TransactWriteItems`; conditional writes
 prevent stale edits. Events contain IDs, action, version, actor, and timestamp,
-not VINs or notes. Outbox delivery remains pending; no worker pretends to deliver
-integrations. Inventory queries read all tenant vehicle pages, then filter; this
+not VINs or notes. Outbox events retain their pending marker; webhook delivery
+results are recorded separately per endpoint/event pair. No background worker runs. Inventory queries read all tenant vehicle pages, then filter; this
 first slice is intended for small independent lots, with API pagination/indexing
 left for scale. Stock numbers and VINs are not uniqueness-constrained in this build.
 
@@ -497,3 +497,52 @@ Local in-memory configurations and runs are cleared when the API restarts.
 | GET | `/feeds/runs` | Tenant run history, newest first |
 | GET | `/feeds/runs/{id}.csv` | Download CSV snapshot if generated for this run |
 | GET | `/feeds/runs/{id}.json` | Download JSON array snapshot if generated for this run |
+
+### Webhooks (local build)
+
+Open **Webhooks** at `#/webhooks`. Active members can read endpoint subscriptions
+and the tenant delivery log; only administrators can create endpoints, change
+subscriptions/URLs, enable or disable endpoints, rotate secrets, or dispatch.
+Secrets are shown only in create and rotation responses: copy them immediately.
+HMAC needs the raw secret, so this local build stores it on the tenant record;
+list responses and delivery logs omit it. Local memory is cleared on API restart.
+
+| Method | Path | Body / result |
+| --- | --- | --- |
+| GET | `/webhooks/endpoints` | `{endpoints, eventTypes}`; endpoints omit secrets |
+| POST | `/webhooks/endpoints` | `{url, eventTypes}`; 201 returns enabled endpoint and one-time `secret` |
+| PUT | `/webhooks/endpoints/{id}` | Current `version`, plus optional `url`, `eventTypes`, `enabled`; returns public endpoint |
+| POST | `/webhooks/endpoints/{id}/rotate-secret` | `{version}`; returns updated endpoint and one-time new `secret` |
+| GET | `/webhooks/deliveries` | Tenant delivery records, newest first |
+| POST | `/webhooks/dispatch` | `{}`; returns `{created, delivered, failed}` counts for this pass |
+
+Bodies are limited to 4096 bytes. URLs require HTTPS, except HTTP loopback
+receivers (`localhost`, `127.0.0.1`, `[::1]`); credentials in URLs are rejected.
+Subscriptions must be nonempty, distinct values from the returned event list.
+Endpoint writes emit metadata-only `webhook.created` / `webhook.updated` events;
+these configuration events are never subscribable or dispatched.
+
+Successful POST/PUT/DELETE requests outside `/webhooks` attempt pending deliveries
+for that tenant, including authenticated ADF intake. **Send pending** does so
+manually. This scans existing subscribed outbox events, including events before
+endpoint creation or while it was disabled. GETs and endpoint changes do not send.
+Each endpoint/event pair gets at most three immediate attempts per dispatch pass,
+with a three-second fetch timeout and no redirects. HTTP 2xx means delivered;
+otherwise the log shows failed. Both outcomes are terminal: later passes skip
+recorded pairs. Errors are sanitized categories, never response bodies or secrets.
+Webhook failures never fail the original mutation. No scheduler runs while the
+app is closed. This local dispatcher does not provide distributed worker locking
+or crash-safe exactly-once delivery; background workers remain deferred.
+
+Receivers get an HTTP POST with the exact JSON metadata fields `id`, `type`,
+`tenantId`, `aggregateId`, `aggregateVersion`, `occurredAt`, `actorId`.
+Headers are `content-type: application/json`, `x-freedms-event`,
+`x-freedms-delivery`, and `x-freedms-signature: sha256=<hex>`.
+Verify the HMAC-SHA256 over the **raw request body**, keyed with the returned
+secret string, and use the delivery ID for receiver idempotency. No business
+payload, customer content, vehicle details, or document data is sent.
+
+Both adapters isolate endpoints (`WEBHOOK#<id>`) and delivery records
+(`DELIVERY#<id>`) under `TENANT#<id>`. Offline tests use injected senders and a
+real HTTP receiver bound to `127.0.0.1`; they never send to external services.
+No cloud resources or live integrations were deployed for this slice.

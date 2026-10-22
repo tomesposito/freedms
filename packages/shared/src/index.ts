@@ -22,7 +22,7 @@ export interface Vehicle extends VehicleInput {
 export interface VehicleView extends Vehicle { agingDays: number; reconTotal: number }
 export interface OutboxEvent {
   id: string; tenantId: string; actorId: string; aggregateId: string; aggregateVersion: number;
-  type: 'feed.configured' | 'feed.generated' | 'vehicle.imported' | 'document.created' | 'document.updated' | 'deal.created' | 'deal.updated' | 'settings.created' | 'settings.updated' | 'vehicle.created' | 'vehicle.updated' | 'vehicle.deleted' | 'tenant.created' | 'customer.created' | 'customer.updated' | 'lead.created' | 'lead.updated' | 'intake.created' | 'intake.updated';
+  type: 'webhook.created' | 'webhook.updated' | 'feed.configured' | 'feed.generated' | 'vehicle.imported' | 'document.created' | 'document.updated' | 'deal.created' | 'deal.updated' | 'settings.created' | 'settings.updated' | 'vehicle.created' | 'vehicle.updated' | 'vehicle.deleted' | 'tenant.created' | 'customer.created' | 'customer.updated' | 'lead.created' | 'lead.updated' | 'intake.created' | 'intake.updated';
   occurredAt: string; deliveryStatus: 'pending';
 }
 export interface DecodedVin { vin: string; year: number | null; make: string; model: string; trim: string; warnings: string[] }
@@ -56,3 +56,5 @@ export * from './analytics.js';
 export * from './import.js';
 
 export * from './feed.js';
+
+export * from './webhooks.js';

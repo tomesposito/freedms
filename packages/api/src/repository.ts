@@ -1,3 +1,4 @@
+import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import type { CrmEntity } from '@freedms/shared';
@@ -5,6 +6,11 @@ import type { Membership, OutboxEvent, Tenant, User, Vehicle, VehicleStatus } fr
 export interface VehicleQuery { status?: VehicleStatus; search?: string }
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
+  webhookEndpoints(): Promise<WebhookEndpoint[]>;
+  webhookEndpoint(id: string): Promise<WebhookEndpoint | undefined>;
+  saveWebhookEndpoint(record: WebhookEndpoint, expectedVersion: number, event: OutboxEvent): Promise<void>;
+  webhookDeliveries(): Promise<WebhookDelivery[]>;
+  saveWebhookDelivery(record: WebhookDelivery): Promise<void>;
   feedConfig(): Promise<FeedConfig | undefined>;
   saveFeedConfig(record: FeedConfig, expectedVersion: number, event: OutboxEvent): Promise<void>;
   appendFeedRun(record: FeedRun, event: OutboxEvent): Promise<void>;
@@ -73,4 +79,10 @@ export function assertFeedConfig(tenantId: string, record: FeedConfig, expectedV
   assertScope(tenantId, record, event);
   assertEvent(record.id, record.version, event, 'feed.configured');
   if (record.id !== 'feed-config' || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid feed config version');
+}
+
+export function assertWebhookEndpoint(tenantId: string, record: WebhookEndpoint, expectedVersion: number, event: OutboxEvent): void {
+  assertScope(tenantId, record, event);
+  assertEvent(record.id, record.version, event, expectedVersion ? 'webhook.updated' : 'webhook.created');
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid webhook endpoint version');
 }
