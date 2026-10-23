@@ -49,12 +49,19 @@ always starts empty.
 
 ![Leads list](docs/screenshots/leads-list.png)
 
-**The pencil** — cash/finance worksheet with live totals and a 3×3 payment grid.
+**The pencil** — cash/finance worksheet with live totals, a 3×3 payment grid,
+and the F&I menu step: accept or decline each product for the pencil.
 
 ![Deal worksheet](docs/screenshots/deal-worksheet.png)
 
-**Deal jacket** — buyer's order, FTC Buyers Guide, attachments, and the
-completeness checklist.
+**F&I products** — the workspace catalog behind the menu: cost, retail price,
+gross, coverage notes, active/inactive. Native menu tooling only — no lender
+or signature connection exists.
+
+![F&I products](docs/screenshots/fi-products.png)
+
+**Deal jacket** — buyer's order, FTC Buyers Guide, attachments, the
+completeness checklist, and any accepted F&I products.
 
 ![Deal jacket](docs/screenshots/deal-jacket.png)
 
@@ -64,8 +71,9 @@ nothing is ever deleted automatically.
 
 ![Documents search and retention](docs/screenshots/documents.png)
 
-**Reports** — inventory aging, sales and gross, lead pipeline. Each exports to
-CSV, plus a QuickBooks-format accounting export.
+**Reports** — inventory aging, sales with front gross and F&I gross reported
+separately, lead pipeline. Each exports to CSV, plus a QuickBooks-format
+accounting export.
 
 ![Reports](docs/screenshots/reports.png)
 
