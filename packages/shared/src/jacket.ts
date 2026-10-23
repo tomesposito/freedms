@@ -7,6 +7,10 @@ export interface DealDocument extends CrmRecord {
   status?: 'disposal-pending' | 'disposed'; disposedAt?: string; disposedBy?: string;
 }
 export interface DealJacket {
+  credit: {status: import('./credit.js').CreditStatus; decisionOutcome: import('./credit.js').DecisionOutcome | null; lenderName: string | null; applicantSsnLast4: string} | null;
+  adverseAction: {applicantName: string; decidedAt: string; lenderName: string; reasons: import('./credit.js').AdverseActionReason[]} | null;
+  payoffQuotes: import('./credit.js').PayoffQuote[];
+
   deal: DealView; pencil: Pencil; numbers: ReturnType<typeof pencilMath>;
   buyersGuide: {vehicle: Pick<Vehicle, 'year' | 'make' | 'model' | 'vin' | 'stockNumber'>; asIs: true; dealerWarranty: null; manufacturerWarranty: null};
   fiProducts: Pick<import('./desking.js').FiSelection, 'name' | 'category' | 'retailPrice' | 'termNotes'>[];

@@ -1,3 +1,4 @@
+import { credit } from './credit.js';
 import { accounting } from './accounting.js';
 import { fiProducts } from './fi.js';
 import { documentControls } from './documents.js';
@@ -64,7 +65,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repository, now());
         if (/^\/reports(\/|$)/.test(path)) return await reports(request, repository, now(), record);
         if (/^\/(deals|settings)(\/|$)/.test(path)) {
-          const command = () => /^\/deals\/[^/]+\/(jacket|documents)(\/|$)/.test(path)
+          const command = () => /^\/deals\/[^/]+\/(credit-application|payoff-quotes)(\/|$)/.test(path) ? credit(request, principal, repository, now()) : /^\/deals\/[^/]+\/(jacket|documents)(\/|$)/.test(path)
             ? jacket(request, principal, repository, now(), documents)
             : desking(request, principal, repository, now());
           return ['POST', 'PUT'].includes(method) && path.startsWith('/deals/')

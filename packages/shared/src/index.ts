@@ -1,3 +1,5 @@
+import type { CreditApplication, PayoffQuote } from './credit.js';
+export * from './credit.js';
 import type { GlAccount, JournalEntry } from './accounting.js';
 export * from './accounting.js';
 export * from './mfa.js';
@@ -25,7 +27,7 @@ export interface Vehicle extends VehicleInput {
 export interface VehicleView extends Vehicle { agingDays: number; reconTotal: number }
 export interface OutboxEvent {
   id: string; tenantId: string; actorId: string; aggregateId: string; aggregateVersion: number;
-  type: 'gl-account.created' | 'gl-account.updated' | 'journal-entry.created' | 'fi-product.created' | 'fi-product.updated' | 'retention.created' | 'retention.updated' | 'document.disposed' | 'mfa.setup' | 'mfa.enabled' | 'mfa.disabled' | 'mfa.reset' | 'mfa.recovery_regenerated' | 'mfa.verified' | 'webhook.created' | 'webhook.updated' | 'feed.configured' | 'feed.generated' | 'vehicle.imported' | 'document.created' | 'document.updated' | 'deal.created' | 'deal.updated' | 'settings.created' | 'settings.updated' | 'vehicle.created' | 'vehicle.updated' | 'vehicle.deleted' | 'tenant.created' | 'customer.created' | 'customer.updated' | 'lead.created' | 'lead.updated' | 'intake.created' | 'intake.updated';
+  type: 'credit-application.created' | 'credit-application.updated' | 'payoff-quote.created' | 'gl-account.created' | 'gl-account.updated' | 'journal-entry.created' | 'fi-product.created' | 'fi-product.updated' | 'retention.created' | 'retention.updated' | 'document.disposed' | 'mfa.setup' | 'mfa.enabled' | 'mfa.disabled' | 'mfa.reset' | 'mfa.recovery_regenerated' | 'mfa.verified' | 'webhook.created' | 'webhook.updated' | 'feed.configured' | 'feed.generated' | 'vehicle.imported' | 'document.created' | 'document.updated' | 'deal.created' | 'deal.updated' | 'settings.created' | 'settings.updated' | 'vehicle.created' | 'vehicle.updated' | 'vehicle.deleted' | 'tenant.created' | 'customer.created' | 'customer.updated' | 'lead.created' | 'lead.updated' | 'intake.created' | 'intake.updated';
   disposal?: {documentId: string; name: string; type: DealDocument['type']; dealId: string; disposedBy: string; disposedAt: string};
   occurredAt: string; deliveryStatus: 'pending';
 }
@@ -51,7 +53,7 @@ export interface Lead extends CrmRecord {
 export interface IntakeCredential extends CrmRecord { kind: 'intake'; hash: string }
 export * from './fi.js';
 import type { FiProduct } from './fi.js';
-export type CrmEntity = GlAccount | JournalEntry | FiProduct | Customer | Lead | IntakeCredential | Deal | WorkspaceSettings | DealDocument | DocumentRetention;
+export type CrmEntity = CreditApplication | PayoffQuote | GlAccount | JournalEntry | FiProduct | Customer | Lead | IntakeCredential | Deal | WorkspaceSettings | DealDocument | DocumentRetention;
 export interface LeadView extends Lead { customer: Customer; overdue: boolean }
 export function isOverdue(task: FollowUp, now: Date): boolean { return !task.done && Date.parse(task.dueAt) < now.getTime(); }
 export * from './reports.js';

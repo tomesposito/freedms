@@ -1,3 +1,4 @@
+import { creditRoute } from './credit';
 import { accountingRoute } from './accounting';
 import { documentsRoute } from './documents';
 import { accountRoute } from './mfa';
@@ -23,7 +24,7 @@ async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
   const result = await response.json() as ApiEnvelope<T>;
   if ('error' in result) {
     if (response.status === 401 && result.error.code !== 'MFA_INVALID') sessionStorage.removeItem('freedms-token');
-    throw new Error(result.error.message);
+    throw Object.assign(new Error(result.error.message), {status: response.status});
   }
   if (!response.ok) throw new Error('The request could not be completed.');
   return result.data;
@@ -133,7 +134,8 @@ async function route(): Promise<void> {
     const parts = location.hash.replace(/^#\//, '').split('/');
     if (parts[0] === 'deals') {
       const ui = {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'};
-      if (parts[2] === 'jacket' && parts[1]) await jacketRoute(parts[1], ui);
+      if (parts[2] === 'credit' && parts[1]) await creditRoute(parts[1], ui);
+      else if (parts[2] === 'jacket' && parts[1]) await jacketRoute(parts[1], ui);
       else await dealsRoute(parts, ui);
     }
     else if (parts[0] === 'import') await importRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});

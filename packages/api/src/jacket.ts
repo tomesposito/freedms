@@ -19,7 +19,12 @@ export async function jacket(request: ApiRequest, principal: Principal, repo: Te
     if (!vehicle || !customer) throw missing();
     const pencil = deal.pencils.find(p => p.id === deal.workingPencilId); if (!pencil) throw missing();
     const attached = documents.filter(d => d.dealId === deal.id);
-    const data: DealJacket = {deal: {...deal, vehicle, customer}, pencil, numbers: pencilMath(pencil, deal.trade, deal, vehicle, deal.type),
+    const application = (await repo.crmList('credit-application')).find(a => a.dealId === deal.id);
+    const payoffQuotes = (await repo.crmList('payoff-quote')).filter(q => q.dealId === deal.id).sort((a, b) => a.quotedAt.localeCompare(b.quotedAt) || a.id.localeCompare(b.id));
+    const data: DealJacket = {
+      credit: application ? {status: application.status, decisionOutcome: application.decision?.outcome ?? null, lenderName: application.decision?.lenderName ?? null, applicantSsnLast4: application.applicant.ssnLast4} : null,
+      adverseAction: application?.decision?.outcome === 'declined' ? {applicantName: application.applicant.fullName, decidedAt: application.decision.decidedAt, lenderName: application.decision.lenderName, reasons: application.decision.adverseReasons} : null,
+      payoffQuotes,deal: {...deal, vehicle, customer}, pencil, numbers: pencilMath(pencil, deal.trade, deal, vehicle, deal.type),
       fiProducts: pencil.fiSelections.filter(s => s.status === 'accepted').map(({name, category, retailPrice, termNotes}) => ({name, category, retailPrice, termNotes})),
       buyersGuide: {vehicle: {year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vehicle.vin, stockNumber: vehicle.stockNumber}, asIs: true, dealerWarranty: null, manufacturerWarranty: null}, documents: attached,
       checklist: jacketChecklist(attached)};
