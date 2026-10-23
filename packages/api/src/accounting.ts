@@ -1,3 +1,4 @@
+import { accountingLock, treasury } from './treasury.js';
 import { randomUUID } from 'node:crypto';
 import { accountTypes, commissionFor, debitNormal, defaultAccounts, pencilMath, type AccountBalance, type DealView, type GlAccount, type JournalEntry, type JournalLine, type Principal } from '@freedms/shared';
 import { requireWrite } from './auth.js';
@@ -15,7 +16,7 @@ function write(record: GlAccount | JournalEntry, principal: Principal, expectedV
 export async function ensureDefaultAccounts(repo: TenantRepository, principal: Principal, now: Date): Promise<GlAccount[]> {
   const accounts = await repo.crmList('gl-account');
   const writes = defaultAccounts.filter(([code]) => !accounts.some(a => a.code === code)).map(([code, name, type]) => write({...base(principal.tenantId, now, `account-${code}`), kind: 'gl-account', code, name, type, active: true, system: true}, principal));
-  // Twelve defaults exceed one CRM transaction. Stable IDs make concurrent lazy seeds safe.
+  // Default accounts exceed one CRM transaction. Stable IDs make concurrent lazy seeds safe.
   for (let i = 0; i < writes.length; i += 10) {
     const batch = writes.slice(i, i + 10);
     try { await repo.crmWrite(batch); } catch (error) {
@@ -70,6 +71,7 @@ export function accountBalances(accounts: GlAccount[], entries: JournalEntry[]):
 }
 export async function accounting(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date) {
   const path = request.path.replace(/\/$/, ''), method = request.method.toUpperCase(), q = request.query ?? {};
+  if (/^\/accounting\/(ap|ar|cash|reconciliations)(\/|$)/.test(path)) return treasury(request, principal, repo, now);
   const match = /^\/accounting\/(accounts|journal|balances|trial-balance|commissions|deals)(?:\/([^/]+))?(\/reverse)?$/.exec(path);
   if (!match) throw missing();
   const [, section, rawId, reverse] = match, id = rawId ? requireId(rawId) : undefined;
@@ -89,9 +91,10 @@ export async function accounting(request: ApiRequest, principal: Principal, repo
     // Duplicate codes are conflicts, including concurrent creations (stable ID + expectedVersion 0).
     if (!id && accounts.some(a => a.code === code)) throw conflict();
     const active = !id && b.active === undefined ? true : b.active; if (typeof active !== 'boolean') throw invalid('Active must be boolean.');
-    const record: GlAccount = {...base(principal.tenantId, now, id ?? `account-${code}`), kind: 'gl-account', code, name: text(b.name, 'Name', 120), type: old?.type ?? choice(b.type, accountTypes, 'account type'), active, system: old?.system ?? false, version: expected + 1, createdAt: old?.createdAt ?? now.toISOString()};
+    const record: GlAccount = {...base(principal.tenantId, now, id ?? `account-${code}`), kind: 'gl-account', code, name: text(b.name, 'Name', 120), type: old?.type ?? choice(b.type, accountTypes, 'account type'), active, system: old?.system ?? false, ...(old?.cash ? {cash: true} : {}), version: expected + 1, createdAt: old?.createdAt ?? now.toISOString()};
     await repo.crmWrite([write(record, principal, expected)]); return response(id ? 200 : 201, {data: record});
   }
+  const lock = reverse ? await accountingLock(repo, principal, now) : undefined;
   const all = await repo.crmList('journal-entry');
   const reversed = new Set(all.map(e => e.reversesEntryId).filter(Boolean));
   const entries = all.map(e => ({...e, reversed: reversed.has(e.id)})).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
@@ -100,7 +103,7 @@ export async function accounting(request: ApiRequest, principal: Principal, repo
     const original = all.find(e => e.id === id); if (!original) throw missing();
     if (original.source === 'reversal' || reversed.has(id)) throw conflict();
     const record: JournalEntry = {...base(principal.tenantId, now, `reversal-${id}`), kind: 'journal-entry', source: 'reversal', date: now.toISOString(), dealId: original.dealId, memo: `Reversal of ${original.memo}`, lines: original.lines.map(l => ({...l, debit: l.credit, credit: l.debit, explanation: `Reversal: ${l.explanation}`})), reversesEntryId: id, reversedByEntryId: null};
-    assertBalanced(record.lines); await repo.crmWrite([write(record, principal)]); return response(201, {data: record});
+    assertBalanced(record.lines); await repo.crmWrite([lock!, write(record, principal)]); return response(201, {data: record});
   }
   const period = entries.filter(e => (!range.from || e.date.slice(0, 10) >= range.from) && (!range.to || e.date.slice(0, 10) <= range.to));
   if (section === 'journal') return response(200, {data: period.filter(e => (!q.accountId || e.lines.some(l => l.accountId === q.accountId)) && (!q.dealId || e.dealId === q.dealId))});

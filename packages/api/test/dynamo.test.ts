@@ -139,3 +139,28 @@ test('Dynamo F&I generic CRM path uses scoped hyphenated keys and conditional ve
   items = (commands.at(-1) as TransactWriteCommand).input.TransactItems!;
   assert.equal(items[0].Put?.ExpressionAttributeValues?.[':v'], 1);
 });
+
+test('Treasury records and lock use tenant partitions and atomic versioned outbox transactions offline', async () => {
+  const commands: (GetCommand | QueryCommand | TransactWriteCommand)[] = [];
+  const client = {send: async (command: GetCommand | QueryCommand | TransactWriteCommand) => { commands.push(command); return {}; }} as unknown as DynamoDBDocumentClient;
+  const repo = new DynamoRepositories('table', client).forTenant('A');
+  for (const kind of ['accounting-lock', 'bank-reconciliation'] as const) {
+    await repo.crmGet(kind, 'id'); await repo.crmList(kind);
+  }
+  for (const c of commands) {
+    if (c instanceof GetCommand) assert.equal(c.input.Key?.PK, 'TENANT#A');
+    if (c instanceof QueryCommand) assert.equal(c.input.ExpressionAttributeValues?.[':pk'], 'TENANT#A');
+  }
+  const lock = {id: 'ledger', tenantId: 'A', version: 1, createdAt: vehicle.createdAt, updatedAt: vehicle.updatedAt, kind: 'accounting-lock' as const};
+  const period = {...lock, id: 'period', kind: 'bank-reconciliation' as const, accountId: 'account-1000', from: '2026-09-01', to: '2026-09-30', opening: 0, closing: 0, status: 'open' as const, lines: []};
+  const {treasuryWrite} = await import('../src/treasury.js');
+  const principal = {tenantId: 'A', userId: 'user', role: 'admin' as const};
+  await repo.crmWrite([treasuryWrite(lock, principal), treasuryWrite(period, principal)]);
+  const transaction = commands.at(-1) as TransactWriteCommand;
+  assert.equal(transaction.input.TransactItems?.length, 4);
+  assert.ok(transaction.input.TransactItems?.every(i => i.Put?.Item?.PK === 'TENANT#A' && i.Put?.ConditionExpression === 'attribute_not_exists(PK)'));
+  for (const record of [lock, period]) {
+    await assert.rejects(new DynamoRepositories('table', client).forTenant('B').crmWrite([treasuryWrite(record, principal)]), /scope/);
+    await assert.rejects(repo.crmWrite([treasuryWrite({...record, tenantId: 'B'}, principal)]), /scope/);
+  }
+});

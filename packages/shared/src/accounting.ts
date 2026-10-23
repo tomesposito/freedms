@@ -3,16 +3,16 @@ import type { pencilMath } from './desking.js';
 export const accountTypes = ['asset', 'liability', 'equity', 'income', 'expense'] as const;
 export type AccountType = typeof accountTypes[number];
 export const debitNormal = (type: AccountType) => type === 'asset' || type === 'expense';
-export interface GlAccount extends CrmRecord { kind: 'gl-account'; code: string; name: string; type: AccountType; active: boolean; system: boolean }
-export interface JournalLine { accountId: string; accountCode: string; accountName: string; debit: number; credit: number; explanation: string }
+export interface GlAccount extends CrmRecord { kind: 'gl-account'; code: string; name: string; type: AccountType; active: boolean; system: boolean; cash?: boolean }
+export interface JournalLine { accountId: string; accountCode: string; accountName: string; debit: number; credit: number; explanation: string; itemId?: string; dueDate?: string; party?: string; reference?: string; vehicleId?: string | null }
 export interface JournalEntry extends CrmRecord {
-  kind: 'journal-entry'; date: string; dealId: string | null; source: 'deal-posting' | 'reversal' | 'manual'; memo: string;
+  kind: 'journal-entry'; date: string; dealId: string | null; source: 'deal-posting' | 'reversal' | 'manual' | 'ap' | 'ar' | 'payment'; memo: string;
   lines: JournalLine[]; reversesEntryId: string | null; reversedByEntryId: string | null;
 }
 export type JournalView = JournalEntry & {reversed: boolean};
 export const defaultAccounts: readonly (readonly [string, string, AccountType])[] = [
   ['1000', 'Cash', 'asset'], ['1100', 'Contracts in transit', 'asset'], ['1200', 'Vehicle inventory', 'asset'],
-  ['2000', 'Sales tax payable', 'liability'], ['2100', 'Trade payoff payable', 'liability'], ['2200', 'F&I products payable', 'liability'], ['2300', 'Customer credits payable', 'liability'],
+  ['2400', 'Accounts payable', 'liability'], ['2000', 'Sales tax payable', 'liability'], ['2100', 'Trade payoff payable', 'liability'], ['2200', 'F&I products payable', 'liability'], ['2300', 'Customer credits payable', 'liability'],
   ['4000', 'Vehicle sales', 'income'], ['4100', 'F&I income', 'income'], ['4200', 'Fee income', 'income'],
   ['5000', 'Cost of vehicles sold', 'expense'], ['5100', 'F&I product cost', 'expense'],
 ];

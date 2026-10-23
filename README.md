@@ -32,7 +32,8 @@ and a completeness checklist, core reporting/CSV exports, AI quick entry
 (draft-then-confirm), listing feed exports, webhooks, MFA (TOTP) with recovery codes and admin reset,
 and usage tracking. Native F&I product catalogs and saved deal menus are also complete locally.
 [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
-Remaining Phase 2 work — lender/signature connections, full accounting, credit applications — is queued. Nothing is
+Native credit applications, GL/deal posting, AP/AR, cash registers, and bank reconciliation are complete locally.
+Lender/signature connections and later accounting phases remain queued. Nothing is
 deployed yet; everything runs locally.
 
 ## Screenshots
@@ -80,6 +81,22 @@ journal entry automatically; entries are never edited — corrections are
 reversing entries.
 
 ![Accounting](docs/screenshots/accounting.png)
+
+**Accounts payable and receivable** — empty aging lists with bill and receivable entry forms.
+
+![Accounts payable](docs/screenshots/accounts-payable.png)
+
+![Accounts receivable](docs/screenshots/accounts-receivable.png)
+
+**Cash register** — recorded payments from a local verification workspace.
+
+![Cash register](docs/screenshots/cash-register.png)
+
+**Bank reconciliation** — an empty period list and a CSV preview before import.
+
+![Bank reconciliation](docs/screenshots/bank-reconciliation.png)
+
+![Statement CSV preview](docs/screenshots/bank-import-preview.png)
 
 **Deal pack** — exactly what posted for one deal and why: every journal
 line with its explanation, the working pencil numbers, and the commission
@@ -716,3 +733,70 @@ Deal pencil inputs accept `fiSelections: [{productId, status}]` with accepted or
 declined status (maximum 50); the server supplies product snapshots. Omitting the
 menu on a replacement pencil clears it. New copies can supply `sourcePencilId`
 to preserve a saved pencil’s product snapshots. No lender or signature connection exists.
+
+
+## AP/AR, cash and bank reconciliation (local)
+
+Open **Accounting** for links to AP, AR, cash/bank registers and statement periods.
+All amounts in these forms and APIs are integer cents. New workspaces have empty
+journals, aging lists, registers and statements. Cash and the GL control accounts
+are initialized lazily.
+
+- AP bills debit the chosen inventory/expense account and credit `2400 Accounts
+  payable`. Record the supplier, reference, due date and optional tenant-owned
+  vehicle ID. Vehicle cost/recon records are maintained separately.
+- AR entries debit `1100 Contracts in transit` and credit the selected income
+  account. Sold deals already create AR; record payments against those balances
+  instead of entering them again. Legacy deal balances are due on the posting date.
+- Partial payments debit AP / credit cash, or debit cash / credit AR. Overpayments
+  are rejected. Every posting is balanced, immutable and accompanied by an outbox
+  event in the same transaction. Corrections use the journal's reversal action;
+  reversing an already partially settled invoice can leave a visible credit balance.
+- Aging includes current, 1–30, 31–60, 61–90 and 91+ days past due. It is derived
+  from journal lines, including allocations and reversals, and ties to GL control
+  balances. AP includes trade payoff, F&I provider and customer-credit payables
+  (`2100`, `2200`, `2300`) as well as vendor bills (`2400`). Sales tax is separate.
+- Cash registers include every GL entry for Cash or a bank account created from
+  the Cash & bank screen. Each row links internally to its immutable journal line.
+
+Statement periods cover completed UTC days. The first opening balance is zero;
+subsequent periods must immediately follow the last reconciled period and carry
+its closing balance. This local workflow starts from the ledger's inception;
+it does not import a pre-existing bank opening balance. Unpresented checks and
+uncleared deposits carry forward as outstanding register entries.
+
+Enter statement lines manually or upload CSV with the exact headers
+`id,date,description,amountCents`. Use bank transaction IDs, ISO dates and signed
+integer cents: deposits positive, withdrawals negative. Preview shows valid,
+invalid and duplicate rows. Import requires a token tied to that tenant, period,
+version and CSV; all errors and duplicate IDs must be resolved first. Imports
+are atomic and support up to 1,000 lines within the statement storage limit.
+
+Match each statement line to one register entry with the same signed amount.
+An entry can clear only once, including across periods. The UI shows the statement
+arithmetic difference and closing balance minus the adjusted book balance
+(book balance less outstanding entries). Both differences and the count of
+unmatched statement lines must be zero to close. Open periods allow line removal,
+unmatching and closing-balance corrections; closed periods cannot be changed.
+
+All routes below are tenant scoped. Mutations require a writer role; updates to
+statement periods require their current `version`.
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| GET / POST | `/accounting/ap`, `/accounting/ar` | Aging (`?asOf=YYYY-MM-DD`) / post a bill or receivable |
+| POST | `/accounting/ap/:itemId/payments`, `/accounting/ar/:itemId/payments` | Record a partial or full payment |
+| GET / POST | `/accounting/cash` | List cash accounts / create a bank GL account |
+| GET | `/accounting/cash/:accountId` | GL-derived cash register |
+| GET / POST | `/accounting/reconciliations` | List / start statement periods |
+| GET | `/accounting/reconciliations/:id` | Statement, matches and differences |
+| POST | `/accounting/reconciliations/:id/lines` | Add a manual statement line |
+| POST | `/accounting/reconciliations/:id/preview`, `/import` | Preview / confirm CSV import |
+| POST | `/accounting/reconciliations/:id/match` | Match, or unmatch with `registerId: null` |
+| POST | `/accounting/reconciliations/:id/remove`, `/amend` | Remove an open-period line / correct its closing balance |
+| POST | `/accounting/reconciliations/:id/close` | Mark reconciled only at zero difference |
+
+Verification: `npm test` is fully offline, including tenant boundaries, atomic
+outbox writes, competing payments, reversal tie-outs, CSV validation, duplicate
+matches, outstanding carry-forward and historical reconciliation stability.
+No banking connection, lender submission or cloud deployment is involved.

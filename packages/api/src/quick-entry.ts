@@ -12,6 +12,7 @@ import { providerFailure, unavailable, visionUnsupported, type QuickEntryProvide
 export const PHOTO_BASE64_LIMIT = 5 * 1024 * 1024;
 export const PHOTO_BODY_LIMIT = PHOTO_BASE64_LIMIT + 1024;
 export function bodyLimit(method: string, path: string): number {
+  if (/^\/accounting\/reconciliations\/[^/]+\/(preview|import)\/?$/.test(path)) return IMPORT_BODY_LIMIT;
   if (/^\/vehicles\/imports?(\/|$)/.test(path)) return IMPORT_BODY_LIMIT;
   return method.toUpperCase() === 'POST' && path.replace(/\/$/, '') === '/quick-entry/vehicle-photo' ? PHOTO_BODY_LIMIT : 65536;
 }

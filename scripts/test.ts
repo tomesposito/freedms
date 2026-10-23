@@ -26,3 +26,5 @@ import '../packages/api/test/accounting.test.js';
 import '../packages/web/test/accounting.test.js';
 import '../packages/api/test/credit.test.js';
 import '../packages/web/test/credit.test.js';
+import '../packages/api/test/treasury.test.js';
+import '../packages/web/test/treasury.test.js';
