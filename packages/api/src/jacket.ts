@@ -20,6 +20,7 @@ export async function jacket(request: ApiRequest, principal: Principal, repo: Te
     const pencil = deal.pencils.find(p => p.id === deal.workingPencilId); if (!pencil) throw missing();
     const attached = documents.filter(d => d.dealId === deal.id);
     const data: DealJacket = {deal: {...deal, vehicle, customer}, pencil, numbers: pencilMath(pencil, deal.trade, deal, vehicle, deal.type),
+      fiProducts: pencil.fiSelections.filter(s => s.status === 'accepted').map(({name, category, retailPrice, termNotes}) => ({name, category, retailPrice, termNotes})),
       buyersGuide: {vehicle: {year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vehicle.vin, stockNumber: vehicle.stockNumber}, asIs: true, dealerWarranty: null, manufacturerWarranty: null}, documents: attached,
       checklist: jacketChecklist(attached)};
     return response(200, {data});

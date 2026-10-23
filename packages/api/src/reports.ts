@@ -41,12 +41,12 @@ export async function salesReport(repo: TenantRepository, range: ReturnType<type
     const vehicle = vehicleMap.get(deal.vehicleId), customer = customerMap.get(deal.customerId), pencil = deal.pencils.find(p => p.id === deal.workingPencilId);
     if (!vehicle || !customer || !pencil) throw missing();
     const numbers = pencilMath(pencil, deal.trade, deal, vehicle, deal.type);
-    rows.push({soldDate: date, dealId: deal.id, buyer: customer.name, vehicle: `${description(vehicle)} (${vehicle.stockNumber})`, price: pencil.price, frontGross: numbers.frontGross,
+    rows.push({soldDate: date, dealId: deal.id, buyer: customer.name, vehicle: `${description(vehicle)} (${vehicle.stockNumber})`, price: pencil.price, frontGross: numbers.frontGross, fiGross: numbers.fiGross, fiRetail: numbers.fiRetailTotal,
       cost: vehicle.cost, recon: vehicle.reconCosts.reduce((sum, r) => sum + r.amount, 0), tax: numbers.salesTax, fees: deal.docFee});
   }
   rows.sort((a, b) => a.soldDate.localeCompare(b.soldDate) || a.dealId.localeCompare(b.dealId));
   const totalFrontGross = rows.reduce((sum, r) => sum + r.frontGross, 0);
-  return {...range, rows, totals: {dealsSold: rows.length, totalFrontGross, averageGross: rows.length ? Math.round(totalFrontGross / rows.length) : 0}};
+  return {...range, rows, totals: {dealsSold: rows.length, totalFrontGross, totalFiGross: rows.reduce((sum, r) => sum + r.fiGross, 0), averageGross: rows.length ? Math.round(totalFrontGross / rows.length) : 0}};
 }
 export async function leadReport(repo: TenantRepository): Promise<LeadReport> {
   const leads = await repo.crmList('lead');
@@ -56,8 +56,8 @@ export function inventoryCsv(data: InventoryReport): string {
   return toCsv([['stockNumber', 'vehicle', 'status', 'dateStocked', 'agingDays', 'bucket', 'listPrice', 'cost', 'reconTotal', 'totalCost'], ...data.rows.map(r => [r.stockNumber, r.vehicle, r.status, r.dateStocked, String(r.agingDays), r.bucket, ...[r.listPrice, r.cost, r.reconTotal, r.totalCost].map(dollars)])]);
 }
 export function salesCsv(data: SalesReport, accounting = false): string {
-  return toCsv(accounting ? [['date', 'deal', 'buyer', 'vehicle', 'price', 'cost', 'recon', 'tax', 'fees', 'gross'], ...data.rows.map(r => [r.soldDate, r.dealId, r.buyer, r.vehicle, ...[r.price, r.cost, r.recon, r.tax, r.fees, r.frontGross].map(dollars)])]
-    : [['soldDate', 'dealId', 'buyer', 'vehicle', 'price', 'frontGross'], ...data.rows.map(r => [r.soldDate, r.dealId, r.buyer, r.vehicle, dollars(r.price), dollars(r.frontGross)])]);
+  return toCsv(accounting ? [['date', 'deal', 'buyer', 'vehicle', 'price', 'cost', 'recon', 'tax', 'fees', 'gross', 'fiGross'], ...data.rows.map(r => [r.soldDate, r.dealId, r.buyer, r.vehicle, ...[r.price, r.cost, r.recon, r.tax, r.fees, r.frontGross, r.fiGross].map(dollars)])]
+    : [['soldDate', 'dealId', 'buyer', 'vehicle', 'price', 'frontGross', 'fiGross'], ...data.rows.map(r => [r.soldDate, r.dealId, r.buyer, r.vehicle, dollars(r.price), dollars(r.frontGross), dollars(r.fiGross)])]);
 }
 export function leadCsv(data: LeadReport): string {
   return toCsv([['dimension', 'value', 'count'], ...data.byStage.map(r => ['stage', r.stage, String(r.count)]), ...data.bySource.map(r => ['source', r.source, String(r.count)]), ['total', 'all', String(data.total)]]);

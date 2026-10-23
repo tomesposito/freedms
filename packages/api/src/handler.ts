@@ -1,3 +1,4 @@
+import { fiProducts } from './fi.js';
 import { documentControls } from './documents.js';
 import { mfa } from './mfa.js';
 import { dispatchWebhooks, fetchWebhookSender, webhooks, type WebhookSender } from './webhooks.js';
@@ -57,6 +58,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         const record = (data: import('@freedms/shared').BehavioralEvent) => track(repository, principal, now(), data, vendor);
         if (/^\/analytics(\/|$)/.test(path)) return await analytics(request, principal, repository, record);
         if (/^\/quick-entry(\/|$)/.test(path)) return await quickEntry(request, principal, repository, now(), provider);
+        if (/^\/fi-products(\/|$)/.test(path)) return await fiProducts(request, principal, repository, now());
         if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repository, now());
         if (/^\/reports(\/|$)/.test(path)) return await reports(request, repository, now(), record);
         if (/^\/(deals|settings)(\/|$)/.test(path)) {

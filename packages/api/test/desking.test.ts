@@ -4,7 +4,7 @@ import { monthlyPayment, pencilMath, paymentGrid, defaultSettings, type DealView
 import { MemoryRepositories } from '../src/memory.js';
 import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
-const p: Pencil = {id: 'p', name: 'Test', price: 1000000, down: 0, term: 36, aprBps: 600};
+const p: Pencil = {id: 'p', name: 'Test', fiSelections: [], price: 1000000, down: 0, term: 36, aprBps: 600};
 const vehicle = {cost: 700000, reconCosts: [{description: 'Repair', amount: 50000}]};
 const trade: Trade = {year: '2010', make: 'Test', model: 'Trade', vin: '', allowance: 200000, payoff: 250000, actualCashValue: 150000};
 test('exact amortization: known cases, zero APR, half-cent edges, small rates and invalid inputs', () => {

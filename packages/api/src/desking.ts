@@ -18,9 +18,28 @@ function tradeInput(value: unknown): Trade | null {
   const b = object(value); onlyKeys(b, ['year', 'make', 'model', 'vin', 'allowance', 'payoff', 'actualCashValue']);
   return {year: text(b.year, 'Trade year', 20), make: text(b.make, 'Trade make'), model: text(b.model, 'Trade model'), vin: text(b.vin, 'Trade VIN', 100, true), allowance: money(b.allowance, 'Allowance'), payoff: money(b.payoff, 'Payoff'), actualCashValue: money(b.actualCashValue, 'Actual cash value')};
 }
-function pencilInput(value: unknown): Pencil {
-  const b = object(value); onlyKeys(b, ['id', 'name', 'price', 'down', 'term', 'aprBps']);
-  return {id: requireId(b.id), name: text(b.name, 'Pencil name', 80), price: money(b.price, 'Price'), down: money(b.down, 'Down payment'), term: integer(b.term, 120, 'term', 1), aprBps: integer(b.aprBps, 10000, 'APR')};
+async function pencilInput(value: unknown, repo: TenantRepository, old: Deal): Promise<Pencil> {
+  const b = object(value); onlyKeys(b, ['id', 'name', 'price', 'down', 'term', 'aprBps', 'fiSelections', 'sourcePencilId']);
+  // Pencils are full replacements: an omitted menu is empty.
+  const selections = b.fiSelections === undefined ? [] : b.fiSelections;
+  if (!Array.isArray(selections) || selections.length > 50) throw invalid('Choose at most 50 F&I products.');
+  const existing = old.pencils.find(p => p.id === b.id);
+  const sourceId = b.sourcePencilId === undefined ? undefined : requireId(b.sourcePencilId);
+  const source = sourceId ? old.pencils.find(p => p.id === sourceId) : existing;
+  if (sourceId && (!source || existing)) throw invalid('Copy source must be a saved pencil and the copy must have a new ID.');
+  const seen = new Set<string>();
+  const fiSelections = await Promise.all(selections.map(async value => {
+    const s = object(value); onlyKeys(s, ['productId', 'status']);
+    const productId = requireId(s.productId), status = choice(s.status, ['accepted', 'declined'] as const, 'F&I status');
+    if (seen.has(productId)) throw invalid('F&I products must be unique.'); seen.add(productId);
+    const product = await repo.crmGet('fi-product', productId);
+    if (!product) throw invalid('F&I product must belong to this workspace.');
+    // Inactive products remain valid. Preserve this pencil's saved snapshot, including on a copy.
+    const saved = source?.fiSelections.find(s => s.productId === productId);
+    const {name, category, cost, retailPrice, termNotes} = saved ?? product;
+    return {productId, name, category, cost, retailPrice, termNotes, status};
+  }));
+  return {fiSelections, id: requireId(b.id), name: text(b.name, 'Pencil name', 80), price: money(b.price, 'Price'), down: money(b.down, 'Down payment'), term: integer(b.term, 120, 'term', 1), aprBps: integer(b.aprBps, 10000, 'APR')};
 }
 async function view(repo: TenantRepository, d: Deal): Promise<DealView> {
   const [vehicle, customer] = await Promise.all([repo.get(d.vehicleId), repo.crmGet('customer', d.customerId)]);
@@ -61,7 +80,7 @@ export async function desking(request: ApiRequest, principal: Principal, repo: T
     if (vehicle.status === 'sold') throw invalid('This vehicle is already sold.');
     if (leadId) { const lead = await repo.crmGet('lead', leadId); if (!lead || lead.customerId !== customerId || (lead.vehicleId && lead.vehicleId !== vehicleId)) throw invalid('Originating lead must match the buyer and vehicle.'); }
     const settings = await repo.crmGet('settings', 'workspace') ?? defaultSettings;
-    const pencil: Pencil = {id: randomUUID(), name: 'Initial pencil', price: vehicle.listPrice, down: 0, term: 36, aprBps: 0};
+    const pencil: Pencil = {id: randomUUID(), name: 'Initial pencil', fiSelections: [], price: vehicle.listPrice, down: 0, term: 36, aprBps: 0};
     const deal: Deal = {...base(), kind: 'deal', vehicleId, customerId, leadId, type: choice(b.type, ['cash', 'finance'] as const, 'deal type'), trade: null,
       taxRateBps: settings.taxRateBps, taxTradeDifference: settings.taxTradeDifference, docFee: settings.docFee,
       pencils: [pencil], workingPencilId: pencil.id, status: 'working', history: [{status: 'working', actorId: principal.userId, timestamp: date}]};
@@ -77,7 +96,7 @@ export async function desking(request: ApiRequest, principal: Principal, repo: T
   let pencils = old.pencils;
   if (b.pencils !== undefined) {
     if (!Array.isArray(b.pencils) || !b.pencils.length || b.pencils.length > 20) throw invalid('Save between 1 and 20 pencils.');
-    pencils = b.pencils.map(pencilInput); if (new Set(pencils.map(p => p.id)).size !== pencils.length) throw invalid('Pencil IDs must be unique.');
+    pencils = await Promise.all(b.pencils.map(p => pencilInput(p, repo, old))); if (new Set(pencils.map(p => p.id)).size !== pencils.length) throw invalid('Pencil IDs must be unique.');
   }
   const workingPencilId = b.workingPencilId === undefined ? old.workingPencilId : requireId(b.workingPencilId);
   if (!pencils.some(p => p.id === workingPencilId)) throw invalid('Choose a saved working pencil.');

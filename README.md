@@ -30,9 +30,9 @@ Phase 1 is complete locally: tenancy/auth foundations, inventory (with CSV
 import), leads/CRM, cash/finance desking, printable deal jackets with attachments
 and a completeness checklist, core reporting/CSV exports, AI quick entry
 (draft-then-confirm), listing feed exports, webhooks, MFA (TOTP) with recovery codes and admin reset,
-and usage tracking.
+and usage tracking. Native F&I product catalogs and saved deal menus are also complete locally.
 [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
-Phase 2 — F&I, full accounting, credit applications — is queued. Nothing is
+Remaining Phase 2 work — lender/signature connections, full accounting, credit applications — is queued. Nothing is
 deployed yet; everything runs locally.
 
 ## Screenshots
@@ -665,3 +665,24 @@ transaction. `mfa.verified` records verification attempts as well as successes;
 it is not a proof of successful authentication. MFA events are excluded from
 webhook subscriptions and MFA requests do not trigger webhook dispatch. Local
 memory clears on restart; Dynamo persists lockouts and consumed-code state.
+
+## F&I catalog and deal menu
+
+Open **F&I** (`#/fi-products`) to add or edit workspace products, costs, retail
+prices, coverage notes, and active status. New workspaces start empty. On the
+worksheet, accept or decline products for each pencil; choices persist on Save.
+Accepted retail increases the balance after tax; front gross and F&I gross remain
+separate in worksheet totals, jackets, and sales/accounting exports. Declines stay
+on the deal as the menu record. Saved snapshots survive catalog edits, and closed
+deals lock their menus. Jackets print accepted products only.
+
+| Method | Path | Behavior |
+|---|---|---|
+| GET | `/fi-products` | List this workspace's catalog, ordered by name then id |
+| POST | `/fi-products` | Create a product; active defaults to true |
+| PUT | `/fi-products/{id}` | Replace product fields with version checking; includes active flag |
+
+Deal pencil inputs accept `fiSelections: [{productId, status}]` with accepted or
+declined status (maximum 50); the server supplies product snapshots. Omitting the
+menu on a replacement pencil clears it. New copies can supply `sourcePencilId`
+to preserve a saved pencil’s product snapshots. No lender or signature connection exists.

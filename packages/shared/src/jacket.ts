@@ -9,6 +9,7 @@ export interface DealDocument extends CrmRecord {
 export interface DealJacket {
   deal: DealView; pencil: Pencil; numbers: ReturnType<typeof pencilMath>;
   buyersGuide: {vehicle: Pick<Vehicle, 'year' | 'make' | 'model' | 'vin' | 'stockNumber'>; asIs: true; dealerWarranty: null; manufacturerWarranty: null};
+  fiProducts: Pick<import('./desking.js').FiSelection, 'name' | 'category' | 'retailPrice' | 'termNotes'>[];
   documents: DealDocument[];
   checklist: {key: string; label: string; present: boolean; status?: 'present' | 'missing' | 'disposed' | 'disposal-pending'}[];
 }

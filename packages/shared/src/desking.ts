@@ -6,7 +6,8 @@ export interface TaxSettings { taxRateBps: number; taxTradeDifference: boolean; 
 export interface WorkspaceSettings extends CrmRecord, TaxSettings { kind: 'settings' }
 export const defaultSettings: TaxSettings = {taxRateBps: 0, taxTradeDifference: false, docFee: 0};
 export interface Trade { year: string; make: string; model: string; vin: string; allowance: number; payoff: number; actualCashValue: number }
-export interface Pencil { id: string; name: string; price: number; down: number; term: number; aprBps: number }
+export interface FiSelection { productId: string; name: string; category: import('./fi.js').FiCategory; cost: number; retailPrice: number; termNotes: string; status: 'accepted' | 'declined' }
+export interface Pencil { fiSelections: FiSelection[]; id: string; name: string; price: number; down: number; term: number; aprBps: number }
 export interface Deal extends CrmRecord, TaxSettings {
   kind: 'deal'; vehicleId: string; customerId: string; leadId: string | null; type: 'cash' | 'finance';
   trade: Trade | null; pencils: Pencil[]; workingPencilId: string; status: DealStatus;
@@ -29,19 +30,27 @@ export function monthlyPayment(principal: number, aprBps: number, term: number):
 export function pencilMath(p: Pencil, trade: Trade | null, tax: TaxSettings, vehicle: Pick<Vehicle, 'cost' | 'reconCosts'>, type: Deal['type']) {
   for (const value of [p.price, p.down, tax.docFee, ...(trade ? [trade.allowance, trade.payoff, trade.actualCashValue] : [])]) integer(value, 10_000_000_000, 'money');
   integer(tax.taxRateBps, 10000, 'tax rate');
+  if (p.fiSelections.length > 50 || new Set(p.fiSelections.map(s => s.productId)).size !== p.fiSelections.length) throw new Error('Invalid F&I selections.');
+  let fiRetailTotal = 0, fiCostTotal = 0;
+  for (const s of p.fiSelections) {
+    integer(s.cost, 10_000_000_000, 'F&I cost'); integer(s.retailPrice, 10_000_000_000, 'F&I retail');
+    if (!['accepted', 'declined'].includes(s.status)) throw new Error('Invalid F&I status.');
+    if (s.status === 'accepted') { fiRetailTotal += s.retailPrice; fiCostTotal += s.cost; }
+  }
+  const fiGross = fiRetailTotal - fiCostTotal;
   const allowance = trade?.allowance ?? 0, payoff = trade?.payoff ?? 0;
   const taxableBase = Math.max(0, p.price - (tax.taxTradeDifference ? allowance : 0));
   const salesTax = roundRatio(BigInt(taxableBase) * BigInt(tax.taxRateBps), 10000n);
   const netEquity = allowance - payoff;
-  const balance = p.price + tax.docFee + salesTax - netEquity - p.down;
+  const balance = p.price + tax.docFee + salesTax + fiRetailTotal - netEquity - p.down;
   const amountFinanced = type === 'finance' ? Math.max(0, balance) : 0;
   const payment = type === 'finance' ? monthlyPayment(amountFinanced, p.aprBps, p.term) : 0;
   const totalPayments = payment * (type === 'finance' ? p.term : 0);
   const financeCharge = totalPayments - amountFinanced;
   const tradeOverallowance = allowance - (trade?.actualCashValue ?? 0);
   const frontGross = p.price - vehicle.cost - vehicle.reconCosts.reduce((sum, item) => sum + item.amount, 0) - tradeOverallowance;
-  return {taxableBase, salesTax, netEquity, balance, amountFinanced, payment, totalPayments, financeCharge,
-    totalCost: p.price + tax.docFee + salesTax + financeCharge, frontGross, tradeOverallowance,
+  return {fiRetailTotal, fiCostTotal, fiGross, taxableBase, salesTax, netEquity, balance, amountFinanced, payment, totalPayments, financeCharge,
+    totalCost: balance + netEquity + p.down + financeCharge, frontGross, tradeOverallowance,
     cashDue: type === 'cash' ? Math.max(0, balance) : 0, creditDue: Math.max(0, -balance)};
 }
 export function paymentGrid(p: Pencil, trade: Trade | null, tax: TaxSettings, vehicle: Pick<Vehicle, 'cost' | 'reconCosts'>) {

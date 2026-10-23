@@ -82,7 +82,7 @@ test('Dynamo desking/settings use scoped keys and mixed sold writes are one cond
   const settingsWrite = {record: settings, expectedVersion: 0, event: {...event, id: 'settings-event', aggregateId: 'workspace', type: 'settings.created' as const}};
   await repo.crmWrite([settingsWrite]);
   assert.equal((commands.at(-1) as TransactWriteCommand).input.TransactItems?.length, 2);
-  const d = {id: 'd', kind: 'deal' as const, tenantId: 'A', version: 3, createdAt: vehicle.createdAt, updatedAt: vehicle.updatedAt, taxRateBps: 0, taxTradeDifference: false, docFee: 0, vehicleId: 'v', customerId: 'c', leadId: 'l', type: 'cash' as const, trade: null, pencils: [{id: 'p', name: 'Cash', price: 100, down: 0, term: 36, aprBps: 0}], workingPencilId: 'p', status: 'sold' as const, history: []};
+  const d = {id: 'd', kind: 'deal' as const, tenantId: 'A', version: 3, createdAt: vehicle.createdAt, updatedAt: vehicle.updatedAt, taxRateBps: 0, taxTradeDifference: false, docFee: 0, vehicleId: 'v', customerId: 'c', leadId: 'l', type: 'cash' as const, trade: null, pencils: [{id: 'p', name: 'Cash', fiSelections: [], price: 100, down: 0, term: 36, aprBps: 0}], workingPencilId: 'p', status: 'sold' as const, history: []};
   const l = {id: 'l', kind: 'lead' as const, tenantId: 'A', version: 2, createdAt: vehicle.createdAt, updatedAt: vehicle.updatedAt, customerId: 'c', vehicleId: 'v', vehicleDescription: '', source: 'walk-in' as const, sourceDetail: '', stage: 'sold' as const, assigneeId: null, followUps: [], activities: []};
   const writes = [{record: d, expectedVersion: 2, event: {...event, id: 'ed', aggregateId: 'd', aggregateVersion: 3, type: 'deal.updated' as const}}, {record: l, expectedVersion: 1, event: {...event, id: 'el', aggregateId: 'l', aggregateVersion: 2, type: 'lead.updated' as const}}];
   const vehicles = [{record: {...vehicle, version: 2, status: 'sold' as const}, expectedVersion: 1, event: {...event, id: 'ev', aggregateVersion: 2, type: 'vehicle.updated' as const}}];
@@ -119,4 +119,23 @@ test('Dynamo MFA saves record and event atomically with scoped keys and conditio
   await assert.rejects(repo.saveMfa(record, 0, {...change, aggregateId: 'other'}), /outbox/);
   await assert.rejects(repo.saveMfa(record, 1, change), /version/);
   assert.equal(commands.length, 3);
+});
+
+test('Dynamo F&I generic CRM path uses scoped hyphenated keys and conditional versions', async () => {
+  const commands: (GetCommand | QueryCommand | TransactWriteCommand)[] = [];
+  const client = {send: async (command: typeof commands[number]) => { commands.push(command); return {}; }} as unknown as DynamoDBDocumentClient;
+  const repo = new DynamoRepositories('table', client).forTenant('A');
+  await repo.crmGet('fi-product', 'p'); await repo.crmList('fi-product');
+  assert.deepEqual((commands[0] as GetCommand).input.Key, {PK: 'TENANT#A', SK: 'FI-PRODUCT#p'});
+  assert.equal((commands[1] as QueryCommand).input.ExpressionAttributeValues?.[':prefix'], 'FI-PRODUCT#');
+  assert.equal((commands[1] as QueryCommand).input.ExpressionAttributeValues?.[':pk'], 'TENANT#A');
+  const record: import('@freedms/shared').FiProduct = {id: 'p', kind: 'fi-product', tenantId: 'A', version: 1, createdAt: vehicle.createdAt, updatedAt: vehicle.updatedAt, name: 'GAP', category: 'gap', cost: 100, retailPrice: 200, termNotes: '', active: true};
+  const change: OutboxEvent = {...event, aggregateId: 'p', type: 'fi-product.created'};
+  await repo.crmWrite([{record, expectedVersion: 0, event: change}]);
+  let items = (commands.at(-1) as TransactWriteCommand).input.TransactItems!;
+  assert.equal(items[0].Put?.Item?.SK, 'FI-PRODUCT#p'); assert.equal(items[0].Put?.Item?.PK, 'TENANT#A');
+  assert.equal(items[0].Put?.ConditionExpression, 'attribute_not_exists(PK)'); assert.equal(items[1].Put?.Item?.PK, 'TENANT#A');
+  await repo.crmWrite([{record: {...record, version: 2}, expectedVersion: 1, event: {...change, id: 'e2', aggregateVersion: 2, type: 'fi-product.updated'}}]);
+  items = (commands.at(-1) as TransactWriteCommand).input.TransactItems!;
+  assert.equal(items[0].Put?.ExpressionAttributeValues?.[':v'], 1);
 });

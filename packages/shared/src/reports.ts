@@ -8,8 +8,8 @@ export interface InventoryReport {
 }
 export interface SalesReport {
   from: string | null; to: string | null;
-  rows: {soldDate: string; dealId: string; buyer: string; vehicle: string; price: number; frontGross: number; cost: number; recon: number; tax: number; fees: number}[];
-  totals: {dealsSold: number; totalFrontGross: number; averageGross: number};
+  rows: {soldDate: string; dealId: string; buyer: string; vehicle: string; price: number; frontGross: number; fiGross: number; fiRetail: number; cost: number; recon: number; tax: number; fees: number}[];
+  totals: {dealsSold: number; totalFrontGross: number; totalFiGross: number; averageGross: number};
 }
 export interface LeadReport {
   byStage: {stage: Lead['stage']; count: number}[];

@@ -67,13 +67,13 @@ test('sales and accounting reconcile working pencil, trade, snapshot tax, fees a
     const selected = indices.map(i => deals[i]), numbers = selected.map(d => pencilMath(d.pencils.find(p => p.id === d.workingPencilId)!, d.trade, d, d.vehicle, d.type));
     const gross = numbers.reduce((sum, n) => sum + n.frontGross, 0);
     assert.deepEqual(data.rows.map(r => r.dealId), selected.map(d => d.id));
-    assert.deepEqual(data.totals, {dealsSold: selected.length, totalFrontGross: gross, averageGross: selected.length ? Math.round(gross / selected.length) : 0});
+    assert.deepEqual(data.totals, {dealsSold: selected.length, totalFrontGross: gross, totalFiGross: 0, averageGross: selected.length ? Math.round(gross / selected.length) : 0});
     const sales = await s.request('/reports/sales.csv', range), accounting = await s.request('/reports/accounting.csv', range);
-    assert.equal(sales.body, salesCsv(data)); assert.deepEqual(parseCsv(sales.body)[0], ['soldDate', 'dealId', 'buyer', 'vehicle', 'price', 'frontGross']); assert.equal(accounting.body, salesCsv(data, true));
-    const rows = parseCsv(accounting.body); assert.deepEqual(rows[0], ['date', 'deal', 'buyer', 'vehicle', 'price', 'cost', 'recon', 'tax', 'fees', 'gross']);
+    assert.equal(sales.body, salesCsv(data)); assert.deepEqual(parseCsv(sales.body)[0], ['soldDate', 'dealId', 'buyer', 'vehicle', 'price', 'frontGross', 'fiGross']); assert.equal(accounting.body, salesCsv(data, true));
+    const rows = parseCsv(accounting.body); assert.deepEqual(rows[0], ['date', 'deal', 'buyer', 'vehicle', 'price', 'cost', 'recon', 'tax', 'fees', 'gross', 'fiGross']);
     rows.slice(1).forEach((row, i) => {
       assert.equal(row[0], data.rows[i].soldDate); assert.equal(row[1], selected[i].id); assert.equal(row[2], 'Buyer, "Pat"'); assert.equal(row[3], `2019 Honda, "Special" Accord (${selected[i].vehicle.stockNumber})`);
-      assert.deepEqual(row.slice(4), [data.rows[i].price, 700000, 50000, numbers[i].salesTax, 12345, numbers[i].frontGross].map(n => (n / 100).toFixed(2)));
+      assert.deepEqual(row.slice(4), [data.rows[i].price, 700000, 50000, numbers[i].salesTax, 12345, numbers[i].frontGross, 0].map(n => (n / 100).toFixed(2)));
       row.slice(4).forEach(cell => assert.match(cell, /^-?\d+\.\d{2}$/));
     });
   }
@@ -107,7 +107,7 @@ test('all reports and CSVs enforce tenant isolation, authentication, headers and
     }
   }
   const inventory = await s.json<InventoryReport>('/reports/inventory', 'GET', undefined, undefined, 'B'); assert.deepEqual(inventory.rows, []); assert.deepEqual(inventory.totals, {count: 0, totalCost: 0, totalListPrice: 0}); assert.ok(inventory.buckets.every(b => b.count === 0 && b.totalCost === 0));
-  const sales = await s.json<SalesReport>('/reports/sales', 'GET', undefined, undefined, 'B'); assert.deepEqual(sales.rows, []); assert.deepEqual(sales.totals, {dealsSold: 0, totalFrontGross: 0, averageGross: 0});
+  const sales = await s.json<SalesReport>('/reports/sales', 'GET', undefined, undefined, 'B'); assert.deepEqual(sales.rows, []); assert.deepEqual(sales.totals, {dealsSold: 0, totalFrontGross: 0, totalFiGross: 0, averageGross: 0});
   const leads = await s.json<LeadReport>('/reports/leads', 'GET', undefined, undefined, 'B'); assert.equal(leads.total, 0); assert.ok([...leads.byStage, ...leads.bySource].every(r => r.count === 0));
   assert.equal(await snapshot(), before);
 });
