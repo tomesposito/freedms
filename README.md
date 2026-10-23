@@ -60,6 +60,15 @@ or signature connection exists.
 
 ![F&I products](docs/screenshots/fi-products.png)
 
+**Credit application** — the native application on a deal: applicant and
+co-applicant details, consent, and a decision the dealer records by hand.
+Nothing is submitted anywhere — no bureau is pulled and no lender receives
+it. SSNs and account numbers are kept as last 4 only; a declined decision
+adds an adverse-action notice with the dealer's reasons to the jacket, and
+payoff quotes sit on the same page.
+
+![Credit application](docs/screenshots/credit-application.png)
+
 **Deal jacket** — buyer's order, FTC Buyers Guide, attachments, the
 completeness checklist, and any accepted F&I products.
 
