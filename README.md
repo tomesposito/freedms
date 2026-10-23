@@ -50,6 +50,11 @@ always starts empty.
 
 ![Leads list](docs/screenshots/leads-list.png)
 
+**Equity mining** — sold customers flagged as trade opportunities with visible reasons.
+A worklist for humans — nothing is contacted automatically.
+
+![Equity mining](docs/screenshots/equity-mining.png)
+
 **The pencil** — lease worksheet with capitalized costs, payment-based tax,
 drive-off split, and saved pencils. Cash/finance worksheets include live totals
 and a finance payment grid; all deal types support the F&I menu.
@@ -324,6 +329,49 @@ production operational readiness have not been established by the offline tests.
 
 ## Leads and CRM (build 2)
 
+Equity mining lives under Leads (`#/leads/equity`). It returns one entry per sold
+deal if **ownership is at least 35 whole months**, **a finance/lease term has
+ended**, or **vehicle age is at least 8 years AND ownership is at least 24 months**.
+Age uses the current UTC year minus model year (minimum zero). Ownership uses
+completed UTC month anniversaries, clamping month-end days. Sale date is the latest
+sold history timestamp, falling back to `updatedAt` for sold records without one.
+Entries sort by months owned descending, customer name, then deal ID. Each flag
+states its thresholds and visible inputs; no opaque score or market value is used.
+Mileage is not recorded; lease mileage allowances are not odometer readings.
+
+All API money is integer cents. Historical trade equity is allowance minus payoff
+at sale (both zero if no trade was recorded), **not current vehicle equity**.
+Finance estimates start with the working pencil's `pencilMath.amountFinanced`
+(including deal tax settings, fees, accepted F&I, down payment and trade equity).
+For each elapsed month, capped at term, balance becomes
+`max(0, balance + roundHalfUp(balance * aprBps / 120000) - monthlyPayment)`.
+The contractual final payment clears rounding residuals. Payments are assumed on
+time; this is not a lender quote. Cash payoff is null. A lease has no amortizing
+loan principal in this model: its explicitly labeled estimate is remaining
+scheduled monthly payments (including tax) plus the purchase option, excluding
+buyout taxes/fees. A lease ending never implies ownership outright. Missing
+working pencils produce unknown balances. Current equity is unknown without a
+current vehicle valuation.
+
+Generation schedules a visit at sale +11 months and a call at +35 months, even
+when already overdue. UTC month arithmetic clamps to the destination month's
+last day. The linked customer lead is preferred; otherwise the most recent
+customer lead by `createdAt`, then descending ID is used. No lead is fabricated.
+Stable per-deal cycle keys prevent duplicates on the target lead, including done
+and dismissed tasks. Deals without leads or with remaining tasks blocked by the
+200-task / 400-activity / 250KB limits count once in `skippedDeals`. Each changed
+lead gets one versioned write and a privacy-safe outbox event. Concurrent writes
+can return 409; re-running safely fills remaining tasks. Snooze, dismiss, restore,
+and completion log activities; dismissed tasks are excluded from overdue/open
+counts. UI snooze adds 30 days to the existing due date.
+
+`GET /customers/{id}` retains `communications` and adds `timeline`: all customer
+lead activities and deal history milestones, newest first, scoped to the current
+tenant. The lead detail Customer timeline links back to each lead/deal. Visit
+history consists of manually logged communications; no external service history
+is inferred. All these features are human worklists; nothing contacts anyone.
+
+
 Open **Leads** in the top navigation. An empty workspace has no customers or leads.
 Use **Add lead** to create a customer or pick an existing one, select an optional
 inventory vehicle, choose a source, and assign an active workspace user. Local
@@ -354,7 +402,9 @@ send UTC timestamps; list overdue flags refresh when the list is loaded.
 | POST | `/leads` | Atomic customer + lead create, or use `customerId` |
 | GET / PUT | `/leads/{id}` | Detail; update `stage`, `assigneeId`, `vehicleId` + `version` |
 | POST | `/leads/{id}/follow-ups` | `type`, `dueAt` (UTC ISO timestamp), lead `version` |
-| PUT | `/leads/{id}/follow-ups/{taskId}` | `done` boolean + current lead `version` |
+| PUT | `/leads/{id}/follow-ups/{taskId}` | Current lead `version` + exactly one of `done` boolean, `dueAt` (snooze), or `dismissed` boolean |
+| GET | `/equity-mining` | Optional customer-name `search`; explainable sold-deal worklist |
+| POST | `/ownership-cycle/generate` | Empty JSON body; returns `created`, `skippedDeals`, `leadsUpdated` |
 | POST | `/leads/{id}/communications` | `type`, `direction` (inbound/outbound), `summary`, `timestamp`, lead `version` |
 | POST | `/intake-token` | Admin only; empty JSON body generates/rotates the workspace token |
 | POST | `/intake/adf` | ADF 1.0 XML using intake bearer authentication |

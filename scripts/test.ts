@@ -33,3 +33,5 @@ import '../packages/web/test/users.test.js';
 import '../packages/api/test/retail.test.js';
 import '../packages/web/test/retail.test.js';
 import '../packages/api/test/local.test.js';
+
+import '../packages/api/test/equity.test.js';

@@ -82,7 +82,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
             ? await observeJacketCompletion(repository, requireId(path.split('/')[2]), record, command)
             : await command();
         }
-        if (/^\/(customers|leads|users|intake-token)(\/|$)/.test(path)) return await crm(request, principal, repository, now());
+        if (/^\/(customers|leads|users|intake-token|equity-mining|ownership-cycle)(\/|$)/.test(path)) return await crm(request, principal, repository, now());
         if (method === 'GET' && path === '/session') return response(200, {data: {principal, tenant: await repository.tenant(), mfaEnabled: (await repository.mfa(principal.userId))?.enabled ?? false}});
         if (method === 'GET' && path.startsWith('/vin/')) return response(200, {data: await decoder.decode(vin(decodeURIComponent(path.slice(5))))});
         if (/^\/vehicles\/imports?(\/|$)/.test(path)) return await inventoryImport(request, principal, repository, now(), decoder);

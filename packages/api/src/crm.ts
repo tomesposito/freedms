@@ -1,3 +1,4 @@
+import { addOwnershipMonths, ownershipLead, ownershipSignals, saleDate, type EquityMiningEntry, type CustomerTimelineEntry } from '@freedms/shared';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isOverdue, type Activity, type CrmEntity, type Customer, type CustomerInput, type Lead, type LeadView, type OutboxEvent, type Principal } from '@freedms/shared';
 import type { CrmWrite, RepositoryFactory, TenantRepository } from './repository.js';
@@ -63,6 +64,47 @@ export async function intake(request: ApiRequest, repositories: RepositoryFactor
 export async function crm(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date): Promise<ApiResponse> {
   const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, ''); const parts = path.split('/').slice(1);
   const ctx = context(principal, now); const query = request.query ?? {};
+  if (path === '/equity-mining' && method === 'GET') {
+    onlyKeys(query, ['search']); const search = text(query.search ?? '', 'Search', 200, true).toLowerCase();
+    const [deals, customers, leads, vehicles] = await Promise.all([repo.crmList('deal'), repo.crmList('customer'), repo.crmList('lead'), repo.list({})]);
+    const entries: EquityMiningEntry[] = [];
+    for (const deal of deals.filter(d => d.status === 'sold')) {
+      const customer = customers.find(c => c.id === deal.customerId); if (!customer || !customer.name.toLowerCase().includes(search)) continue;
+      const vehicle = vehicles.find(v => v.id === deal.vehicleId), signals = ownershipSignals(deal, vehicle, now);
+      if (!signals.reasons.length) continue;
+      entries.push({...signals, customer: {id: customer.id, name: customer.name}, customerId: customer.id, dealId: deal.id,
+        leadId: ownershipLead(deal, leads)?.id ?? null, vehicle: vehicle ? {id: vehicle.id, year: vehicle.year, make: vehicle.make, model: vehicle.model, stockNumber: vehicle.stockNumber} : null,
+        dealType: deal.type, tradeRecorded: !!deal.trade, tradeAllowance: deal.trade?.allowance ?? 0, tradePayoff: deal.trade?.payoff ?? 0,
+        saleNetEquityCents: (deal.trade?.allowance ?? 0) - (deal.trade?.payoff ?? 0), mileageBand: null});
+    }
+    entries.sort((a, b) => b.monthsOwned - a.monthsOwned || a.customer.name.localeCompare(b.customer.name) || a.dealId.localeCompare(b.dealId));
+    return response(200, {data: entries});
+  }
+  if (path === '/ownership-cycle/generate' && method === 'POST') {
+    onlyKeys(query, []); onlyKeys(parseBody(request.body), []);
+    const [deals, leads] = await Promise.all([repo.crmList('deal'), repo.crmList('lead')]);
+    let created = 0, skippedDeals = 0, leadsUpdated = 0;
+    const changed = new Map<string, Lead>();
+    for (const deal of deals.filter(d => d.status === 'sold').sort((a, b) => a.id.localeCompare(b.id))) {
+      const lead = ownershipLead(deal, leads); if (!lead) { skippedDeals++; continue; }
+      for (const [months, type, suffix] of [[11, 'visit', 'service-11'], [35, 'call', 'trade-35']] as const) {
+        const cycleKey = `ownership:${deal.id}:${suffix}`;
+        if (lead.followUps.some(t => t.cycleKey === cycleKey)) continue;
+        const dueAt = addOwnershipMonths(saleDate(deal), months);
+        const task = {id: randomUUID(), type, dueAt, done: false, origin: 'ownership-cycle' as const, cycleKey};
+        const activity = ctx.activity('follow-up', `Ownership cycle: scheduled ${type}: ${dueAt}`);
+        const candidate = {...lead, version: lead.version + 1, updatedAt: ctx.date, followUps: [...lead.followUps, task], activities: [...lead.activities, activity]};
+        if (candidate.followUps.length > 200 || candidate.activities.length > 400 || Buffer.byteLength(JSON.stringify(candidate)) > 250000) { skippedDeals++; break; }
+        lead.followUps.push(task); lead.activities.push(activity); changed.set(lead.id, lead); created++;
+      }
+    }
+    // One versioned write per changed lead, within the repository's transaction size limit.
+    for (const lead of changed.values()) {
+      const expected = lead.version; lead.version++; lead.updatedAt = ctx.date;
+      await repo.crmWrite([ctx.write(lead, expected)]); leadsUpdated++;
+    }
+    return response(200, {data: {created, skippedDeals, leadsUpdated}});
+  }
   if (path === '/users' && method === 'GET') { onlyKeys(query, []); return response(200, {data: await repo.users()}); }
   if (path === '/intake-token' && method === 'POST') {
     if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can rotate the intake token.');
@@ -80,7 +122,14 @@ export async function crm(request: ApiRequest, principal: Principal, repo: Tenan
       if (collection === 'customers') {
         const customer = await repo.crmGet('customer', id); if (!customer) throw missing();
         const communications = (await repo.crmList('lead')).filter(l => l.customerId === id).flatMap(l => l.activities.filter(a => a.kind === 'communication').map(a => ({...a, leadId: l.id}))).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-        return response(200, {data: {...customer, communications}});
+        const leads = (await repo.crmList('lead')).filter(l => l.customerId === id);
+        const timeline: CustomerTimelineEntry[] = leads.flatMap(l => l.activities.map(a => ({timestamp: a.timestamp, kind: a.kind, summary: a.summary, leadId: l.id, ...(a.type ? {type: a.type} : {}), ...(a.direction ? {direction: a.direction} : {})})));
+        for (const deal of (await repo.crmList('deal')).filter(d => d.customerId === id)) {
+          const vehicle = await repo.get(deal.vehicleId); const label = vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : 'vehicle';
+          timeline.push(...deal.history.map(h => ({timestamp: h.timestamp, kind: 'deal' as const, summary: `Deal ${h.status}: ${label}`, dealId: deal.id})));
+        }
+        timeline.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+        return response(200, {data: {...customer, communications, timeline}});
       }
       const lead = await repo.crmGet('lead', id); if (!lead) throw missing(); return response(200, {data: await leadView(repo, lead, now)});
     }
@@ -118,9 +167,19 @@ export async function crm(request: ApiRequest, principal: Principal, repo: Tenan
     onlyKeys(b, ['version', 'type', 'dueAt']); const task = {id: randomUUID(), type: communicationType(b.type), dueAt: timestamp(b.dueAt, 'Due date'), done: false};
     lead.followUps.push(task); lead.activities.push(ctx.activity('follow-up', `Scheduled ${task.type}: ${task.dueAt}`));
   } else if (action === 'follow-ups' && method === 'PUT' && taskId) {
-    onlyKeys(b, ['version', 'done']); if (typeof b.done !== 'boolean') throw invalid('Done must be a boolean.');
+    onlyKeys(b, ['version', 'done', 'dueAt', 'dismissed']);
+    if (['done', 'dueAt', 'dismissed'].filter(key => key in b).length !== 1) throw invalid('Supply exactly one follow-up action.');
     const task = lead.followUps.find(t => t.id === requireId(taskId)); if (!task) throw missing();
-    if (task.done !== b.done) lead.activities.push(ctx.activity('follow-up', `${b.done ? 'Completed' : 'Reopened'} ${task.type}: ${task.dueAt}`)); task.done = b.done;
+    if ('done' in b) {
+      if (typeof b.done !== 'boolean') throw invalid('Done must be a boolean.');
+      if (task.done !== b.done) lead.activities.push(ctx.activity('follow-up', `${b.done ? 'Completed' : 'Reopened'} ${task.type}: ${task.dueAt}`)); task.done = b.done;
+    } else if ('dueAt' in b) {
+      const dueAt = timestamp(b.dueAt, 'Due date');
+      lead.activities.push(ctx.activity('follow-up', `Snoozed ${task.type}: ${task.dueAt} → ${dueAt}`)); task.dueAt = dueAt;
+    } else {
+      if (typeof b.dismissed !== 'boolean') throw invalid('Dismissed must be a boolean.');
+      if (!!task.dismissed !== b.dismissed) lead.activities.push(ctx.activity('follow-up', `${b.dismissed ? 'Dismissed' : 'Restored'} ${task.type}: ${task.dueAt}`)); task.dismissed = b.dismissed;
+    }
   } else if (action === 'communications' && method === 'POST' && !taskId) {
     onlyKeys(b, ['version', 'type', 'direction', 'summary', 'timestamp']);
     lead.activities.push({...ctx.activity('communication', text(b.summary, 'Summary', 2000)), type: communicationType(b.type), direction: choice(b.direction, ['inbound', 'outbound'] as const, 'direction'), timestamp: timestamp(b.timestamp, 'Communication timestamp')});

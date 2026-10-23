@@ -47,7 +47,7 @@ export interface Consent { status: 'unknown' | 'granted' | 'revoked'; timestamp:
 export interface CustomerInput { name: string; phone: string; email: string; address: string; consent: Consent; notes: string }
 export interface CrmRecord { id: string; tenantId: string; version: number; createdAt: string; updatedAt: string }
 export interface Customer extends CrmRecord, CustomerInput { kind: 'customer' }
-export interface FollowUp { id: string; type: typeof communicationTypes[number]; dueAt: string; done: boolean }
+export interface FollowUp { id: string; type: typeof communicationTypes[number]; dueAt: string; done: boolean; origin?: 'manual' | 'ownership-cycle'; cycleKey?: string; dismissed?: boolean }
 export interface Activity { id: string; kind: 'stage' | 'communication' | 'follow-up' | 'assignment'; actorId: string; timestamp: string; summary: string; type?: typeof communicationTypes[number]; direction?: 'inbound' | 'outbound' }
 export interface Lead extends CrmRecord {
   kind: 'lead'; customerId: string; vehicleId: string | null; vehicleDescription: string;
@@ -59,7 +59,7 @@ export * from './fi.js';
 import type { FiProduct } from './fi.js';
 export type CrmEntity = DealShare | ShareResponse | AccountingLock | BankReconciliation | CreditApplication | PayoffQuote | GlAccount | JournalEntry | FiProduct | Customer | Lead | IntakeCredential | Deal | WorkspaceSettings | DealDocument | DocumentRetention;
 export interface LeadView extends Lead { customer: Customer; overdue: boolean }
-export function isOverdue(task: FollowUp, now: Date): boolean { return !task.done && Date.parse(task.dueAt) < now.getTime(); }
+export function isOverdue(task: FollowUp, now: Date): boolean { return !task.done && !task.dismissed && Date.parse(task.dueAt) < now.getTime(); }
 export * from './reports.js';
 
 export * from './quick-entry.js';
@@ -72,3 +72,5 @@ export * from './feed.js';
 export * from './webhooks.js';
 
 export * from './users.js';
+
+export * from './ownership.js';
