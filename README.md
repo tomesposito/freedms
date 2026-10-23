@@ -27,7 +27,7 @@ and consumption-based AI and agentic-AI features.
 ## Status
 
 Phase 1 is complete locally: tenancy/auth foundations, inventory (with CSV
-import), leads/CRM, cash/finance desking, printable deal jackets with attachments
+import), leads/CRM, cash/finance desking and lease structuring, printable deal jackets with attachments
 and a completeness checklist, core reporting/CSV exports, AI quick entry
 (draft-then-confirm), listing feed exports, webhooks, MFA (TOTP) with recovery codes and admin reset,
 and usage tracking. Native F&I product catalogs and saved deal menus are also complete locally.
@@ -50,8 +50,9 @@ always starts empty.
 
 ![Leads list](docs/screenshots/leads-list.png)
 
-**The pencil** — cash/finance worksheet with live totals, a 3×3 payment grid,
-and the F&I menu step: accept or decline each product for the pencil.
+**The pencil** — lease worksheet with capitalized costs, payment-based tax,
+drive-off split, and saved pencils. Cash/finance worksheets include live totals
+and a finance payment grid; all deal types support the F&I menu.
 
 ![Deal worksheet](docs/screenshots/deal-worksheet.png)
 
@@ -297,7 +298,7 @@ resolved license metadata. No heavy frontend framework is included.
 
 ## Deliberately outside this build
 
-Lease desking, F&I menus, lender submission, live integrations,
+F&I menus, lender submission, live integrations,
 outbox delivery workers, price history UI, and seeded/demo
 inventory. These are working local slices, not the complete Phase 1 product.
 Cloud deployment, live Cognito/DynamoDB integration, backup/restore exercises, and
@@ -408,7 +409,7 @@ New deals copy these settings; later settings changes never reprice existing dea
 The initial defaults are zero tax and zero doc fee, with trade-difference off.
 
 Add a vehicle and a customer through **Leads → Add lead**, then **Start deal**
-from the vehicle, lead, or Deals page. Choose cash or finance. A lead-based start
+from the vehicle, lead, or Deals page. Choose cash, finance, or lease. A lead-based start
 links the buyer and originating lead; a vehicle-based start lets you choose a buyer.
 Vehicle list price defaults the first pencil's selling price. Enter an optional
 trade (free-text year/make/model/VIN, allowance, payoff, actual cash value), cash
@@ -800,3 +801,5 @@ Verification: `npm test` is fully offline, including tenant boundaries, atomic
 outbox writes, competing payments, reversal tie-outs, CSV validation, duplicate
 matches, outstanding carry-forward and historical reconciliation stability.
 No banking connection, lender submission or cloud deployment is involved.
+
+Lease pencils use payment-based tax on each monthly payment, regardless of the trade-difference setting. Acquisition and doc fees are capitalized; signing cash is down + first payment + refundable security deposit. Lease terms and step-by-step amounts print on the buyer packet.

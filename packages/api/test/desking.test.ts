@@ -4,7 +4,7 @@ import { monthlyPayment, pencilMath, paymentGrid, defaultSettings, type DealView
 import { MemoryRepositories } from '../src/memory.js';
 import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
-const p: Pencil = {id: 'p', name: 'Test', fiSelections: [], price: 1000000, down: 0, term: 36, aprBps: 600};
+const p: Pencil = {id: 'p', name: 'Test', fiSelections: [], lease: null, price: 1000000, down: 0, term: 36, aprBps: 600};
 const vehicle = {cost: 700000, reconCosts: [{description: 'Repair', amount: 50000}]};
 const trade: Trade = {year: '2010', make: 'Test', model: 'Trade', vin: '', allowance: 200000, payoff: 250000, actualCashValue: 150000};
 test('exact amortization: known cases, zero APR, half-cent edges, small rates and invalid inputs', () => {
@@ -113,7 +113,7 @@ test('invalid references and pencil/settings values leave deal and outbox unchan
   const {call, create, repositories, v, lead} = await setup(); const d = await create();
   const other = (await call('B', 'POST', '/leads', {customer: {name: 'Other', phone: '', email: '', address: '', notes: '', consent: {status: 'unknown', timestamp: null, source: ''}}, source: 'phone'})).data.lead;
   const count = repositories.eventsForTest('A').length;
-  for (const fields of [{vehicleId: 'missing'}, {customerId: other.customerId}, {leadId: other.id}, {type: 'lease'}]) {
+  for (const fields of [{vehicleId: 'missing'}, {customerId: other.customerId}, {leadId: other.id}, {type: 'unknown'}]) {
     assert.equal((await call('A', 'POST', '/deals', {vehicleId: v.id, customerId: lead.customerId, type: 'finance', ...fields})).status, 400);
   }
   for (const fields of [{docFee: -1}, {docFee: 1.1}, {pencils: []}, {pencils: [p, p]}, {pencils: [{...p, term: 0}]}, {pencils: [{...p, aprBps: 10001}]}, {trade: {...trade, allowance: -1}}, {vehicleId: 'missing'}, {taxRateBps: 0}]) {
@@ -132,4 +132,75 @@ test('stale lead in mixed sold transaction rolls back the vehicle and deal too',
     {record: {...lead, version: 3, stage: 'sold'}, expectedVersion: 2, event: {...event, id: 'el', aggregateId: lead.id, aggregateVersion: 3, type: 'lead.updated'}}
   ], [{record: {...v, version: 2, status: 'sold'}, expectedVersion: 1, event: {...event, id: 'ev', aggregateId: v.id, type: 'vehicle.updated'}}]), {code: 'CONFLICT'});
   assert.equal((await repo.get(v.id))?.version, 1); assert.equal((await repo.crmGet('deal', d.id))?.version, 1); assert.deepEqual(repositories.eventsForTest('A'), before);
+});
+
+const leasePencil: Pencil = {...p, price: 3800000, down: 200000, aprBps: 300, term: 36,
+  lease: {msrp: 4000000, residualPercentBps: 5500, residualAmount: 2200000, moneyFactorMicro: 1250, acquisitionFee: 65000, securityDeposit: 50000, milesPerYear: 12000}};
+const leaseTax = {...defaultSettings, docFee: 20000, taxRateBps: 625};
+test('lease hand calculation reconciles every step to the cent with payment-based tax', () => {
+  const m = pencilMath(leasePencil, null, leaseTax, vehicle, 'lease'), l = m.lease!;
+  for (const [key, value] of Object.entries({grossCapCost: 3885000, adjustedCapCost: 3685000, depreciationFee: 41250, rentCharge: 7356, basePayment: 48606, monthlyTax: 3038, monthlyPayment: 51644, totalPayments: 1859184, totalTax: 109368, driveOff: 301644, purchaseOption: 2200000})) assert.equal(l[key as keyof typeof l], value, key);
+  assert.equal(l.depreciationFee + l.rentCharge, l.basePayment);
+  assert.equal(m.balance, 3794368); assert.equal(m.totalCost, 2059184); assert.equal(m.amountFinanced, 0);
+  assert.equal(m.salesTax, 109368); assert.equal(m.taxableBase, 48606); assert.equal(m.financeCharge, 7356 * 36);
+  assert.deepEqual(pencilMath(leasePencil, null, {...leaseTax, taxTradeDifference: true}, vehicle, 'lease'), m);
+});
+test('lease conversions, rounding, zero money factor, residual floor and invalid inputs', async () => {
+  const {leaseMath, moneyFactorToAprBps, residualFromPercent, residualPercentFromAmount} = await import('@freedms/shared');
+  assert.equal(moneyFactorToAprBps(1250), 300); assert.equal(moneyFactorToAprBps(0), 0);
+  assert.equal(residualFromPercent(4000000, 5500), 2200000); assert.equal(residualFromPercent(1, 5000), 1);
+  assert.equal(residualPercentFromAmount(4000000, 2200000), 5500); assert.equal(residualPercentFromAmount(0, 0), 0);
+  assert.throws(() => residualPercentFromAmount(0, 1));
+  const zero = leaseMath({...leasePencil, lease: {...leasePencil.lease!, moneyFactorMicro: 0}}, null, leaseTax, vehicle);
+  assert.equal(zero.rentCharge, 0); assert.equal(zero.basePayment, zero.depreciationFee);
+  for (const price of [2200000, 2100000]) assert.equal(leaseMath({...leasePencil, price, down: 85000}, null, leaseTax, vehicle).depreciationFee, 0);
+  for (const fields of [{down: 4000000}, {term: 0}, {lease: {...leasePencil.lease!, moneyFactorMicro: 10001}}, {lease: null}]) assert.throws(() => leaseMath({...leasePencil, ...fields}, null, leaseTax, vehicle));
+  const withTrade = leaseMath(leasePencil, trade, leaseTax, vehicle);
+  assert.equal(withTrade.adjustedCapCost, 3735000);
+});
+test('lease API drivers, validation, isolation, sale, journal and reports', async () => {
+  const {call, create, repositories, v, lead} = await setup();
+  await call('A', 'PUT', '/settings', {...leaseTax, version: 0});
+  let d = await create({type: 'lease'});
+  assert.deepEqual(d.pencils[0].lease, {msrp: v.listPrice, residualPercentBps: 0, residualAmount: 0, moneyFactorMicro: 0, acquisitionFee: 0, securityDeposit: 0, milesPerYear: 12000});
+  assert.equal((await call('B', 'GET', `/deals/${d.id}`)).status, 404);
+  assert.equal((await call('B', 'PUT', `/deals/${d.id}`, {version: 1, status: 'dead'})).status, 404);
+  const input = {...leasePencil, id: d.workingPencilId, aprBps: 9999, lease: {...leasePencil.lease!, residualAmount: null}};
+  let r = await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, pencils: [input]}); assert.equal(r.status, 200); d = r.data;
+  assert.deepEqual(d.pencils[0].lease, leasePencil.lease); assert.equal(d.pencils[0].aprBps, 300);
+  r = await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, pencils: [{...input, lease: {...leasePencil.lease!, residualPercentBps: null}}]}); assert.equal(r.status, 200); d = r.data;
+  assert.deepEqual(d.pencils[0].lease, leasePencil.lease);
+  const count = repositories.eventsForTest('A').length;
+  for (const lease of [leasePencil.lease, {...input.lease, moneyFactorMicro: 10001}, {...input.lease, residualPercentBps: 10001}, {...input.lease, milesPerYear: 100001}, {...input.lease, acquisitionFee: -1}, {...input.lease, extra: 0}, {...input.lease, residualPercentBps: null}, {...input.lease, msrp: 0, residualPercentBps: null, residualAmount: 1}]) {
+    assert.equal((await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, pencils: [{...input, lease}]})).status, 400);
+  }
+  for (const fields of [{down: 4000000}, {term: 0}]) assert.equal((await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, pencils: [{...input, ...fields}]})).status, 400);
+  assert.equal(repositories.eventsForTest('A').length, count);
+  r = await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, status: 'approved'}); assert.equal(r.status, 200); d = r.data;
+  const jacket = (await call('A', 'GET', `/deals/${d.id}/jacket`)).data;
+  assert.deepEqual(jacket.numbers, pencilMath(d.pencils[0], d.trade, d, d.vehicle, 'lease'));
+  const {renderPacket} = await import('../../web/src/jacket.js');
+  const html = renderPacket(jacket);
+  for (const label of ['Lease terms', 'End-of-lease purchase option', 'payment-based', '$516.44', '$22,000.00', 'Rent charge', 'Security deposit (refundable)']) assert.ok(html.includes(label), label);
+  assert.doesNotMatch(html, /front gross|dealer cost|Vehicle cost|Amount financed|Finance charge|price minus trade/i);
+  r = await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, status: 'sold'}); assert.equal(r.status, 200); d = r.data;
+  assert.equal((await call('A', 'GET', `/vehicles/${v.id}`)).data.status, 'sold');
+  assert.equal((await call('A', 'GET', `/leads/${lead.id}`)).data.stage, 'sold');
+  const repo = repositories.forTenant('A'), entries = await repo.crmList('journal-entry');
+  assert.equal(entries.length, 1); const entry = entries[0];
+  assert.match(entry.memo, /Lease inception posting/);
+  assert.equal(entry.lines.reduce((n, l) => n + l.debit - l.credit, 0), 0);
+  assert.equal(entry.lines.find(l => l.accountCode === '4200')?.credit, 85000);
+  assert.match(entry.lines.find(l => l.accountCode === '4200')!.explanation, /document fee and acquisition fee/);
+  assert.equal((await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, docFee: 0})).status, 400);
+  const {salesReport} = await import('../src/reports.js');
+  assert.equal((await salesReport(repo, {from: null, to: null})).rows[0].tax, 109368);
+});
+test('effective type is resolved before pencil validation and nonlease pencils clear lease terms', async () => {
+  const {call, create} = await setup(); let d = await create();
+  const input = {...leasePencil, id: d.workingPencilId, lease: {...leasePencil.lease!, residualAmount: null}};
+  let r = await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, type: 'lease', pencils: [input]});
+  assert.equal(r.status, 200); d = r.data; assert.equal(d.pencils[0].lease!.residualAmount, 2200000);
+  r = await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, type: 'finance'});
+  assert.equal(r.status, 200); assert.equal(r.data.pencils[0].lease, null);
 });

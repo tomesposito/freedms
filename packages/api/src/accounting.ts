@@ -53,14 +53,14 @@ export function dealPosting(deal: DealView, accounts: GlAccount[], now: Date): J
   line('1200', 'debit', deal.trade?.actualCashValue ?? 0, 'Trade-in at actual cash value');
   line('4000', 'credit', p.price, 'Vehicle sale price');
   line('2000', 'credit', m.salesTax, 'Sales tax collected — owed to the state');
-  line('4200', 'credit', deal.docFee, 'Dealer document fee');
+  line('4200', 'credit', deal.docFee + (m.lease?.acquisitionFee ?? 0), m.lease ? 'Dealer document fee and acquisition fee' : 'Dealer document fee');
   line('4100', 'credit', m.fiRetailTotal, 'Accepted F&I products');
   line('1200', 'credit', vc, 'Vehicle out of inventory');
   line('2100', 'credit', deal.trade?.payoff ?? 0, 'Payoff owed on trade-in lien');
   line('2200', 'credit', m.fiCostTotal, 'Owed to F&I product provider');
   if (m.balance < 0) line('2300', 'credit', -m.balance, 'Credit owed to buyer');
   assertBalanced(lines);
-  return {...base(deal.tenantId, now, `posting-${deal.id}`), kind: 'journal-entry', date: now.toISOString(), dealId: deal.id, source: 'deal-posting', memo: `Deal posting — ${deal.customer.name} / ${deal.vehicle.year} ${deal.vehicle.make} ${deal.vehicle.model}`, lines, reversesEntryId: null, reversedByEntryId: null};
+  return {...base(deal.tenantId, now, `posting-${deal.id}`), kind: 'journal-entry', date: now.toISOString(), dealId: deal.id, source: 'deal-posting', memo: `${deal.type === 'lease' ? 'Lease inception posting' : 'Deal posting'} — ${deal.customer.name} / ${deal.vehicle.year} ${deal.vehicle.make} ${deal.vehicle.model}`, lines, reversesEntryId: null, reversedByEntryId: null};
 }
 export function accountBalances(accounts: GlAccount[], entries: JournalEntry[]): AccountBalance[] {
   return accounts.map(a => {

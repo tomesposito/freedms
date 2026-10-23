@@ -1,6 +1,6 @@
 import { ensureDefaultAccounts, dealPosting } from './accounting.js';
 import { randomUUID } from 'node:crypto';
-import { defaultSettings, dealStatuses, pencilMath, type CrmEntity, type Deal, type DealView, type Pencil, type Principal, type TaxSettings, type Trade, type WorkspaceSettings } from '@freedms/shared';
+import { defaultLeaseTerms, residualFromPercent, residualPercentFromAmount, moneyFactorToAprBps, defaultSettings, dealStatuses, pencilMath, type CrmEntity, type Deal, type DealView, type Pencil, type Principal, type TaxSettings, type Trade, type WorkspaceSettings } from '@freedms/shared';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
 import { invalid, money, object, onlyKeys, text, version } from './validation.js';
@@ -19,8 +19,8 @@ function tradeInput(value: unknown): Trade | null {
   const b = object(value); onlyKeys(b, ['year', 'make', 'model', 'vin', 'allowance', 'payoff', 'actualCashValue']);
   return {year: text(b.year, 'Trade year', 20), make: text(b.make, 'Trade make'), model: text(b.model, 'Trade model'), vin: text(b.vin, 'Trade VIN', 100, true), allowance: money(b.allowance, 'Allowance'), payoff: money(b.payoff, 'Payoff'), actualCashValue: money(b.actualCashValue, 'Actual cash value')};
 }
-async function pencilInput(value: unknown, repo: TenantRepository, old: Deal): Promise<Pencil> {
-  const b = object(value); onlyKeys(b, ['id', 'name', 'price', 'down', 'term', 'aprBps', 'fiSelections', 'sourcePencilId']);
+async function pencilInput(value: unknown, repo: TenantRepository, old: Deal, type: Deal['type']): Promise<Pencil> {
+  const b = object(value); onlyKeys(b, ['id', 'name', 'price', 'down', 'term', 'aprBps', 'fiSelections', 'sourcePencilId', 'lease']);
   // Pencils are full replacements: an omitted menu is empty.
   const selections = b.fiSelections === undefined ? [] : b.fiSelections;
   if (!Array.isArray(selections) || selections.length > 50) throw invalid('Choose at most 50 F&I products.');
@@ -40,7 +40,18 @@ async function pencilInput(value: unknown, repo: TenantRepository, old: Deal): P
     const {name, category, cost, retailPrice, termNotes} = saved ?? product;
     return {productId, name, category, cost, retailPrice, termNotes, status};
   }));
-  return {fiSelections, id: requireId(b.id), name: text(b.name, 'Pencil name', 80), price: money(b.price, 'Price'), down: money(b.down, 'Down payment'), term: integer(b.term, 120, 'term', 1), aprBps: integer(b.aprBps, 10000, 'APR')};
+  let lease = null;
+  if (type === 'lease') {
+    const l = object(b.lease); onlyKeys(l, ['msrp', 'residualPercentBps', 'residualAmount', 'moneyFactorMicro', 'acquisitionFee', 'securityDeposit', 'milesPerYear']);
+    const msrp = money(l.msrp, 'MSRP');
+    const percent = l.residualPercentBps != null, amount = l.residualAmount != null;
+    if (percent === amount) throw invalid('Choose exactly one residual driver.');
+    const residualAmount = percent ? residualFromPercent(msrp, integer(l.residualPercentBps, 10000, 'residual percent')) : money(l.residualAmount, 'Residual');
+    if (residualAmount > msrp) throw invalid('Residual cannot exceed MSRP.');
+    const residualPercentBps = percent ? Number(l.residualPercentBps) : residualPercentFromAmount(msrp, residualAmount);
+    lease = {msrp, residualAmount, residualPercentBps, moneyFactorMicro: integer(l.moneyFactorMicro, 10000, 'money factor'), acquisitionFee: money(l.acquisitionFee, 'Acquisition fee'), securityDeposit: money(l.securityDeposit, 'Security deposit'), milesPerYear: integer(l.milesPerYear, 100000, 'miles per year')};
+  }
+  return {lease, fiSelections, id: requireId(b.id), name: text(b.name, 'Pencil name', 80), price: money(b.price, 'Price'), down: money(b.down, 'Down payment'), term: integer(b.term, 120, 'term', 1), aprBps: lease ? moneyFactorToAprBps(lease.moneyFactorMicro) : integer(b.aprBps, 10000, 'APR')};
 }
 async function view(repo: TenantRepository, d: Deal): Promise<DealView> {
   const [vehicle, customer] = await Promise.all([repo.get(d.vehicleId), repo.crmGet('customer', d.customerId)]);
@@ -81,8 +92,9 @@ export async function desking(request: ApiRequest, principal: Principal, repo: T
     if (vehicle.status === 'sold') throw invalid('This vehicle is already sold.');
     if (leadId) { const lead = await repo.crmGet('lead', leadId); if (!lead || lead.customerId !== customerId || (lead.vehicleId && lead.vehicleId !== vehicleId)) throw invalid('Originating lead must match the buyer and vehicle.'); }
     const settings = await repo.crmGet('settings', 'workspace') ?? defaultSettings;
-    const pencil: Pencil = {id: randomUUID(), name: 'Initial pencil', fiSelections: [], price: vehicle.listPrice, down: 0, term: 36, aprBps: 0};
-    const deal: Deal = {...base(), kind: 'deal', vehicleId, customerId, leadId, type: choice(b.type, ['cash', 'finance'] as const, 'deal type'), trade: null,
+    const type = choice(b.type, ['cash', 'finance', 'lease'] as const, 'deal type');
+    const pencil: Pencil = {lease: type === 'lease' ? defaultLeaseTerms(vehicle.listPrice) : null, id: randomUUID(), name: 'Initial pencil', fiSelections: [], price: vehicle.listPrice, down: 0, term: 36, aprBps: 0};
+    const deal: Deal = {...base(), kind: 'deal', vehicleId, customerId, leadId, type, trade: null,
       taxRateBps: settings.taxRateBps, taxTradeDifference: settings.taxTradeDifference, docFee: settings.docFee,
       pencils: [pencil], workingPencilId: pencil.id, status: 'working', history: [{status: 'working', actorId: principal.userId, timestamp: date}]};
     await repo.crmWrite([write(deal)]); return response(201, {data: await view(repo, deal)});
@@ -94,19 +106,21 @@ export async function desking(request: ApiRequest, principal: Principal, repo: T
   if (old.status === 'sold' || old.status === 'dead') throw invalid('Closed deals cannot be changed.');
   const status = b.status === undefined ? old.status : choice(b.status, dealStatuses, 'status');
   if (status !== old.status && !(old.status === 'working' ? ['approved', 'dead'] : ['sold', 'dead']).includes(status)) throw invalid('Invalid deal status transition.');
-  let pencils = old.pencils;
+  const type = b.type === undefined ? old.type : choice(b.type, ['cash', 'finance', 'lease'] as const, 'deal type');
+  let pencils = old.pencils.map(p => ({...p, lease: type === 'lease' ? p.lease : null}));
   if (b.pencils !== undefined) {
     if (!Array.isArray(b.pencils) || !b.pencils.length || b.pencils.length > 20) throw invalid('Save between 1 and 20 pencils.');
-    pencils = await Promise.all(b.pencils.map(p => pencilInput(p, repo, old))); if (new Set(pencils.map(p => p.id)).size !== pencils.length) throw invalid('Pencil IDs must be unique.');
+    pencils = await Promise.all(b.pencils.map(p => pencilInput(p, repo, old, type))); if (new Set(pencils.map(p => p.id)).size !== pencils.length) throw invalid('Pencil IDs must be unique.');
   }
   const workingPencilId = b.workingPencilId === undefined ? old.workingPencilId : requireId(b.workingPencilId);
   if (!pencils.some(p => p.id === workingPencilId)) throw invalid('Choose a saved working pencil.');
   const deal: Deal = {...old, version: expected + 1, updatedAt: date, pencils, workingPencilId, status,
-    type: b.type === undefined ? old.type : choice(b.type, ['cash', 'finance'] as const, 'deal type'),
+    type,
     trade: b.trade === undefined ? old.trade : tradeInput(b.trade), docFee: b.docFee === undefined ? old.docFee : money(b.docFee, 'Doc fee'),
     history: status === old.status ? old.history : [...old.history, {status, actorId: principal.userId, timestamp: date}]};
   const result = await view(repo, deal);
-  for (const p of pencils) pencilMath(p, deal.trade, deal, result.vehicle, deal.type);
+  try { for (const p of pencils) pencilMath(p, deal.trade, deal, result.vehicle, deal.type); }
+  catch (error) { throw invalid(error instanceof Error ? error.message : 'Invalid pencil.'); }
   const writes = [write(deal, expected)]; const vehicles: VehicleWrite[] = [];
   if (status === 'sold') {
     const vehicle = result.vehicle; if (vehicle.status === 'sold') throw conflict();
