@@ -146,6 +146,12 @@ has MFA on and can reset it.
 
 ![Account MFA](docs/screenshots/account-mfa.png)
 
+**Workspace users** — admin-only membership management with role, active status,
+and MFA status. Fresh workspaces contain only their admin. Local sign-in only;
+hosted invite emails are out of scope and no invite is sent.
+
+![Workspace user management](docs/screenshots/user-management.png)
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
@@ -203,7 +209,7 @@ and pagination, decoder failures, safe HTML rendering, and exact money conversio
 User routes require a bearer ID token. The local-only `POST /local/session` creates
 a session; `POST /intake/adf` instead requires a separate intake bearer token.
 Success: `{ "data": ... }`; failure: `{ "error": { "code": "...", "message": "..." } }`.
-No route accepts tenant identity in the URL, body, or query. The authenticated
+No authenticated route accepts tenant identity in the URL, body, or query. The authenticated
 principal's immutable tenant claim selects a repository; an active membership
 record must match its subject and tenant. Roles come from that membership, not
 client fields. Admin and staff can create/update; only admin can delete.
@@ -673,8 +679,10 @@ than one tenant. Staff can manage their own MFA; only admins can list workspace
 MFA status or reset another active member.
 
 **Sign-in boundary:** there is no password authentication in this repository.
-`POST /local/session` creates a brand-new tenant and admin with MFA off. It does
-not sign back into an existing account or prompt for a second factor. Hosted
+`POST /local/session` creates a brand-new tenant and admin with MFA off, or signs
+an added user into an existing local workspace using its ID and their email.
+Existing users with MFA enabled must supply a TOTP or recovery code before a
+token is issued. This loopback-only development flow has no password. Hosted
 pre-token enforcement is Cognito's responsibility. `/account/mfa/verify` is a real,
 authenticated second-factor check that a sign-in flow can call before treating a
 session as fully verified; it neither issues nor upgrades a session token and does
@@ -803,3 +811,45 @@ matches, outstanding carry-forward and historical reconciliation stability.
 No banking connection, lender submission or cloud deployment is involved.
 
 Lease pencils use payment-based tax on each monthly payment, regardless of the trade-difference setting. Acquisition and doc fees are capitalized; signing cash is down + first payment + refundable security deposit. Lease terms and step-by-step amounts print on the buyer packet.
+
+
+## Workspace user management
+
+Admins can open **Users** to add staff or admins, change roles, and deactivate or
+reactivate members. The assignment picker (`GET /users`) still lists active users
+only. Management includes inactive users and exposes only MFA enabled status.
+Legacy/bootstrap users without an email show “No email recorded.”
+
+| Method | Path | Body / behavior |
+| --- | --- | --- |
+| GET | `/admin/users` | Workspace users: userId, name, email (nullable), role, active, version, mfaEnabled |
+| POST | `/admin/users` | `{name, email, role}`; creates user and active membership; 201 |
+| POST | `/admin/users/{userId}/role` | `{version, role}` |
+| POST | `/admin/users/{userId}/deactivate` | `{version}` |
+| POST | `/admin/users/{userId}/reactivate` | `{version}` |
+
+Every route requires an active admin; staff receive 403. Foreign or missing user
+IDs return 404. Use the version returned by the list (legacy memberships start at
+0). Stale/no-op changes return 409. Email uniqueness is case-insensitive within a
+tenant, including inactive members; duplicates return 409 `DUPLICATE_EMAIL`.
+Removing the last active admin, including self-demotion, returns 409 `LAST_ADMIN`.
+Inactive admins do not satisfy this rule. Existing tokens are checked against the
+membership on every request: deactivation revokes access immediately, reactivation
+restores it, and role changes apply to existing sessions.
+
+Memory writes validate and commit synchronously. Dynamo writes read a tenant
+`MEMBERSHIP_GUARD` revision before reading users/memberships, then conditionally
+advance it in the same transaction as the user, membership and outbox event. This
+serializes duplicate-email and last-admin decisions, including legacy records;
+concurrent changes fail closed with 409 and can be retried after reloading.
+`user.added`, `user.role_changed`, `user.deactivated`, and `user.reactivated` events
+contain only IDs, version, type, actor, timestamp and delivery status, matching
+webhook configuration event hygiene. No names, emails, or MFA material are emitted.
+
+For local sign-in, the admin shares the workspace ID shown on the Users page.
+After signing out, an added user enters that ID and their email in **Join an
+existing local workspace** (and a TOTP/recovery code when MFA is enabled). This
+uses `POST /local/session` with `{tenantId, email, code?}`. New workspace creation
+still accepts `{dealership, name}`. Both flows remain loopback-only development
+tools; data is ephemeral and tokens last one hour. Hosted Cognito provisioning and
+invite email delivery are out of scope; no invite is sent.

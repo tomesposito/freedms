@@ -1,3 +1,4 @@
+import { manageUsers } from './users.js';
 import { credit } from './credit.js';
 import { accounting } from './accounting.js';
 import { fiProducts } from './fi.js';
@@ -55,6 +56,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
       const execute = async (): Promise<ApiResponse> => {
         if (/^\/documents(\/|$)/.test(path)) return await documentControls(request, principal, repository, now(), documents);
+        if (/^\/admin\/users(\/|$)/.test(path)) return await manageUsers(request, principal, repository, now());
         if (/^\/(account|admin)\/mfa(\/|$)/.test(path)) return await mfa(request, principal, repository, now());
         if (/^\/webhooks(\/|$)/.test(path)) return await webhooks(request, principal, repository, now(), webhookSender);
         const record = (data: import('@freedms/shared').BehavioralEvent) => track(repository, principal, now(), data, vendor);

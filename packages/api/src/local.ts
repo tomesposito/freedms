@@ -1,14 +1,14 @@
+import { localSession } from './local-session.js';
 import { analyticsFromEnv } from './analytics.js';
 import { bodyLimit } from './quick-entry.js';
 import { providerFromEnv } from './ai-provider.js';
 import { MemoryDocumentStore } from './document-store.js';
 import { createServer } from 'node:http';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { LocalTokens } from './auth.js';
 import { MemoryRepositories } from './memory.js';
-import { createHandler, errorResponse, parseBody, response } from './handler.js';
+import { createHandler, errorResponse } from './handler.js';
 import { ApiError } from './errors.js';
-import { onlyKeys, text } from './validation.js';
 import { NhtsaVinDecoder } from './vin.js';
 if (process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NODE_ENV === 'production') throw new Error('Local auth must never run in production');
 const repositories = new MemoryRepositories();
@@ -27,15 +27,8 @@ const server = createServer(async (req, res) => {
     const isIntake = req.method === 'POST' && url.pathname.replace(/\/$/, '') === '/intake/adf';
     if (isIntake && !['application/xml', 'text/xml'].includes((req.headers['content-type'] ?? '').split(';')[0])) throw new ApiError(415, 'CONTENT_TYPE', 'Use application/xml.');
     if (!isIntake && ['POST', 'PUT', 'DELETE'].includes(req.method ?? '') && !req.headers['content-type']?.startsWith('application/json')) throw new ApiError(415, 'CONTENT_TYPE', 'Use application/json.');
-    // New workspace/user only, with MFA off; this is not an existing-user sign-in.
-    // Hosted pre-token MFA enforcement belongs to Cognito.
     if (req.method === 'POST' && url.pathname === '/local/session') {
-      const input = parseBody(body); onlyKeys(input, ['dealership', 'name']);
-      const name = text(input.name, 'Your name'); const dealership = text(input.dealership, 'Dealership');
-      const tenantId = randomUUID(); const userId = randomUUID(); const createdAt = new Date().toISOString();
-      await repositories.forTenant(tenantId).provision({id: tenantId, name: dealership, createdAt}, {id: userId, name},
-        {tenantId, userId, role: 'admin', active: true}, {id: randomUUID(), tenantId, actorId: userId, aggregateId: tenantId, aggregateVersion: 1, type: 'tenant.created', occurredAt: createdAt, deliveryStatus: 'pending'});
-      result = response(201, {data: {token: tokens.issue(userId, tenantId)}});
+      result = await localSession(body, repositories, tokens);
     } else {
       const token = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
       result = await handle({method: req.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body, ...(isIntake ? {intakeToken: token} : {claims: tokens.verify(token)})});

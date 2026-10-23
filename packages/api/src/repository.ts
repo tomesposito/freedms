@@ -7,6 +7,8 @@ import type { Membership, OutboxEvent, Tenant, User, Vehicle, VehicleStatus } fr
 export interface VehicleQuery { status?: VehicleStatus; search?: string }
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
+  workspaceUsers(): Promise<import('@freedms/shared').WorkspaceUser[]>;
+  saveMember(user: User, membership: Membership, expectedVersion: number, event: OutboxEvent): Promise<void>;
   mfa(userId: string): Promise<MfaRecord | undefined>;
   saveMfa(record: MfaRecord, expectedVersion: number, event: OutboxEvent): Promise<void>;
   webhookEndpoints(): Promise<WebhookEndpoint[]>;

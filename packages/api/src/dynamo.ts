@@ -1,3 +1,4 @@
+import { validateMemberWrite } from './users.js';
 import type { MfaRecord } from '@freedms/shared';
 import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
@@ -40,7 +41,24 @@ export class DynamoRepositories implements RepositoryFactory {
       } while (cursor);
       return rows;
     };
+    const workspaceUsers = async () => {
+      const [users, members] = await Promise.all([listRows<User>('USER#'), listRows<Membership>('MEMBER#')]);
+      return members.map(membership => ({membership, user: users.find(u => u.id === membership.userId)!}));
+    };
     return {
+      workspaceUsers,
+      saveMember: async (user, member, expected, event) => {
+        assertScope(tenantId, member, event);
+        // Read the guard BEFORE the snapshot. Every membership writer advances it,
+        // making last-admin and duplicate-email checks serializable, including legacy rows.
+        const guard = await get<{version: number}>('MEMBERSHIP_GUARD');
+        validateMemberWrite(user, member, expected, event, await workspaceUsers());
+        await transact([
+          put('MEMBERSHIP_GUARD', {version: (guard?.version ?? 0) + 1}, guard ? '#d.#v = :v' : 'attribute_not_exists(PK)', guard?.version),
+          {Put: {TableName: this.table, Item: {...key(`USER#${requireId(user.id)}`), data: user}}},
+          {Put: {TableName: this.table, Item: {...key(`MEMBER#${requireId(member.userId)}`), data: member}}}, eventPut(event)
+        ]);
+      },
       mfa: userId => get<MfaRecord>(`MFA#${requireId(userId)}`),
       saveMfa: async (record, expectedVersion, event) => {
         assertMfa(tenantId, record, expectedVersion, event);

@@ -11,8 +11,8 @@ import type { Deal, WorkspaceSettings } from './desking.js';
 export * from './desking.js';
 export type Role = 'admin' | 'staff';
 export interface Tenant { id: string; name: string; createdAt: string }
-export interface User { id: string; name: string }
-export interface Membership { tenantId: string; userId: string; role: Role; active: boolean }
+export interface User { id: string; name: string; email?: string }
+export interface Membership { tenantId: string; userId: string; role: Role; active: boolean; version?: number }
 export interface Principal { tenantId: string; userId: string; role: Role }
 export const vehicleStatuses = ['available', 'reserved', 'sold', 'in recon'] as const;
 export type VehicleStatus = typeof vehicleStatuses[number];
@@ -29,7 +29,7 @@ export interface Vehicle extends VehicleInput {
 export interface VehicleView extends Vehicle { agingDays: number; reconTotal: number }
 export interface OutboxEvent {
   id: string; tenantId: string; actorId: string; aggregateId: string; aggregateVersion: number;
-  type: 'accounting-lock.created' | 'accounting-lock.updated' | 'bank-reconciliation.created' | 'bank-reconciliation.updated' | 'credit-application.created' | 'credit-application.updated' | 'payoff-quote.created' | 'gl-account.created' | 'gl-account.updated' | 'journal-entry.created' | 'fi-product.created' | 'fi-product.updated' | 'retention.created' | 'retention.updated' | 'document.disposed' | 'mfa.setup' | 'mfa.enabled' | 'mfa.disabled' | 'mfa.reset' | 'mfa.recovery_regenerated' | 'mfa.verified' | 'webhook.created' | 'webhook.updated' | 'feed.configured' | 'feed.generated' | 'vehicle.imported' | 'document.created' | 'document.updated' | 'deal.created' | 'deal.updated' | 'settings.created' | 'settings.updated' | 'vehicle.created' | 'vehicle.updated' | 'vehicle.deleted' | 'tenant.created' | 'customer.created' | 'customer.updated' | 'lead.created' | 'lead.updated' | 'intake.created' | 'intake.updated';
+  type: 'user.added' | 'user.role_changed' | 'user.deactivated' | 'user.reactivated' | 'accounting-lock.created' | 'accounting-lock.updated' | 'bank-reconciliation.created' | 'bank-reconciliation.updated' | 'credit-application.created' | 'credit-application.updated' | 'payoff-quote.created' | 'gl-account.created' | 'gl-account.updated' | 'journal-entry.created' | 'fi-product.created' | 'fi-product.updated' | 'retention.created' | 'retention.updated' | 'document.disposed' | 'mfa.setup' | 'mfa.enabled' | 'mfa.disabled' | 'mfa.reset' | 'mfa.recovery_regenerated' | 'mfa.verified' | 'webhook.created' | 'webhook.updated' | 'feed.configured' | 'feed.generated' | 'vehicle.imported' | 'document.created' | 'document.updated' | 'deal.created' | 'deal.updated' | 'settings.created' | 'settings.updated' | 'vehicle.created' | 'vehicle.updated' | 'vehicle.deleted' | 'tenant.created' | 'customer.created' | 'customer.updated' | 'lead.created' | 'lead.updated' | 'intake.created' | 'intake.updated';
   disposal?: {documentId: string; name: string; type: DealDocument['type']; dealId: string; disposedBy: string; disposedAt: string};
   occurredAt: string; deliveryStatus: 'pending';
 }
@@ -68,3 +68,5 @@ export * from './import.js';
 export * from './feed.js';
 
 export * from './webhooks.js';
+
+export * from './users.js';
