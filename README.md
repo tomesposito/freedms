@@ -65,6 +65,19 @@ completeness checklist, and any accepted F&I products.
 
 ![Deal jacket](docs/screenshots/deal-jacket.png)
 
+**Accounting** — chart of accounts, account balances, and a trial balance
+for the period that ties to the sales report. Selling a deal posts its
+journal entry automatically; entries are never edited — corrections are
+reversing entries.
+
+![Accounting](docs/screenshots/accounting.png)
+
+**Deal pack** — exactly what posted for one deal and why: every journal
+line with its explanation, the working pencil numbers, and the commission
+at the workspace's flat rate on front gross.
+
+![Deal pack](docs/screenshots/deal-pack.png)
+
 **Documents** — search every deal attachment by name, type, buyer, or date;
 admins set a retention period and dispose of expired files explicitly —
 nothing is ever deleted automatically.
