@@ -27,6 +27,7 @@ export async function jacket(request: ApiRequest, principal: Principal, repo: Te
   if (method === 'GET' && !match[3]) return response(200, {data: (await repo.crmList('document')).filter(d => d.dealId === deal.id)});
   if (method === 'GET' && match[3]) {
     const record = await repo.crmGet('document', requireId(match[3])); if (!record || record.dealId !== deal.id) throw missing();
+    if (record.status) throw new ApiError(410, 'DOCUMENT_DISPOSED', 'This document was disposed or is awaiting disposal.');
     if (!store) throw new ApiError(503, 'STORAGE_UNAVAILABLE', 'Document storage is not configured.');
     const bytes = await store.forTenant(principal.tenantId).get(record.id); if (!bytes) throw missing();
     return response(200, {data: {content: Buffer.from(bytes).toString('base64')}});

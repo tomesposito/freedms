@@ -4,14 +4,22 @@ export const documentTypes = ['id', 'insurance', 'title', 'registration', 'signe
 export const maxDocumentBytes = 40 * 1024;
 export interface DealDocument extends CrmRecord {
   kind: 'document'; dealId: string; name: string; type: typeof documentTypes[number]; size: number; uploadedBy: string; uploadedAt: string;
+  status?: 'disposal-pending' | 'disposed'; disposedAt?: string; disposedBy?: string;
 }
 export interface DealJacket {
   deal: DealView; pencil: Pencil; numbers: ReturnType<typeof pencilMath>;
   buyersGuide: {vehicle: Pick<Vehicle, 'year' | 'make' | 'model' | 'vin' | 'stockNumber'>; asIs: true; dealerWarranty: null; manufacturerWarranty: null};
   documents: DealDocument[];
-  checklist: {key: string; label: string; present: boolean}[];
+  checklist: {key: string; label: string; present: boolean; status?: 'present' | 'missing' | 'disposed' | 'disposal-pending'}[];
 }
 
-export function jacketChecklist(attached: Pick<DealDocument, 'type'>[]): DealJacket['checklist'] {
-  return [{key: 'buyers-order', label: "Buyer’s order", present: true}, {key: 'buyers-guide', label: 'Buyers Guide', present: true}, {key: 'id', label: 'Driver’s license / ID', present: attached.some(d => d.type === 'id')}, {key: 'insurance', label: 'Proof of insurance', present: attached.some(d => d.type === 'insurance')}];
+export interface DocumentRetention extends CrmRecord { kind: 'retention'; retentionDays: number | null }
+export interface DocumentSearchResult extends DealDocument { buyerName: string; dealStatus: DealView['status'] }
+export function jacketChecklist(attached: Pick<DealDocument, 'type' | 'status'>[]): DealJacket['checklist'] {
+  const item = (type: 'id' | 'insurance', label: string): DealJacket['checklist'][number] => {
+    const docs = attached.filter(d => d.type === type);
+    const status = docs.some(d => !d.status) ? 'present' : docs.some(d => d.status === 'disposal-pending') ? 'disposal-pending' : docs.length ? 'disposed' : 'missing';
+    return {key: type, label, present: docs.length > 0, status};
+  };
+  return [{key: 'buyers-order', label: 'Buyer’s order', present: true}, {key: 'buyers-guide', label: 'Buyers Guide', present: true}, item('id', 'Driver’s license / ID'), item('insurance', 'Proof of insurance')];
 }

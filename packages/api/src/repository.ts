@@ -58,7 +58,7 @@ export function assertCrmWrites(tenantId: string, writes: CrmWrite[]): void {
   if (!writes.length || writes.length > 10) throw new Error('Invalid CRM transaction');
   for (const {record, expectedVersion, event} of writes) {
     assertScope(tenantId, record, event);
-    assertEvent(record.id, expectedVersion + 1, event, `${record.kind}.${expectedVersion ? 'updated' : 'created'}`);
+    assertEvent(record.id, expectedVersion + 1, event, record.kind === 'document' && record.status === 'disposed' ? 'document.disposed' : `${record.kind}.${expectedVersion ? 'updated' : 'created'}`);
     if (record.version !== expectedVersion + 1 || expectedVersion < 0 || !Number.isInteger(expectedVersion)) throw new Error('Invalid CRM version');
     const key = `${record.kind}#${record.id}`;
     if (keys.has(key) || events.has(event.id)) throw new Error('Duplicate CRM transaction item');
