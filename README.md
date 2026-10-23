@@ -28,7 +28,7 @@ and consumption-based AI and agentic-AI features.
 
 Phase 1 is complete locally: tenancy/auth foundations, inventory (with CSV
 import), leads/CRM, cash/finance desking and lease structuring, printable deal jackets with attachments
-and a completeness checklist, core reporting/CSV exports, AI quick entry
+and a completeness checklist, core reporting/CSV exports, inventory turn, F&I metrics, saved custom reports, AI quick entry
 (draft-then-confirm), listing feed exports, webhooks, MFA (TOTP) with recovery codes and admin reset,
 and usage tracking. Native F&I product catalogs, saved deal menus, and per-deal digital retailing with private share links and customer uploads are also complete locally.
 [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
@@ -116,9 +116,8 @@ nothing is ever deleted automatically.
 
 ![Documents search and retention](docs/screenshots/documents.png)
 
-**Reports** — inventory aging, sales with front gross and F&I gross reported
-separately, lead pipeline. Each exports to CSV, plus a QuickBooks-format
-accounting export.
+**Reports** — inventory aging and turn, sales, F&I metrics, lead pipeline,
+and saved custom reports with CSV exports. Screenshot refresh pending verification tour.
 
 ![Reports](docs/screenshots/reports.png)
 
@@ -595,6 +594,26 @@ outside this local slice.
 
 ### Reporting and exports (local build)
 
+Reporting P2 is implemented locally. `GET /reports/turn?from&to` and
+`GET /reports/fi?from&to` each have a `.csv` equivalent. Annualized turn is
+`round(soldInPeriod * 365 / (periodDays * (currentUnsold + soldInPeriod)), 2)`.
+Bounded periods count inclusive UTC days; open periods span qualifying sold dates.
+Average days to sale rounds to one decimal; negative stock-to-sale durations are
+excluded from all turn metrics. F&I uses accepted working-pencil selections,
+including per-product retail, cost, gross, distinct deals and units; its CSV is the
+per-product table. Penetration is deals with accepted products divided by sold deals.
+
+`GET /reports/custom` and `/reports/custom.csv` accept `dataset`, comma-separated
+`columns`, optional `from`, `to`, and `groupBy`. Datasets are inventory, sales,
+leads, and fi. Inventory filters date stocked; leads filter date created; sales
+and F&I filter sold date. Grouping retains the group key, sums numeric fields,
+blanks other text, and offers a source-row `count`. Custom JSON cells, on-screen
+cells and parsed CSV cells are identical, including plain two-decimal USD values.
+`POST /reports/saved` creates a named definition; `GET /reports/saved` lists the
+workspace's definitions; `GET` and version-checked `PUT /reports/saved/:id` read
+and replace one. Writes emit outbox events. There is no delete endpoint.
+
+
 Open **Reports** at `#/reports` from the main navigation. A new workspace shows
 empty inventory and sales, with an honest zero-count lead snapshot. Inventory
 includes every vehicle except sold stock, with UTC aging buckets `0-30`, `31-60`,
@@ -617,10 +636,10 @@ are included, sorted by sold date then deal ID. Optional `from` and `to` are rea
 `YYYY-MM-DD` dates, inclusive at both ends; an omitted bound is open-ended, both
 omitted means all time (JSON returns null bounds). Invalid dates, reversed ranges,
 and unknown query keys return 400. Inventory and leads accept no query keys.
-The Reports date controls apply only to sales and accounting, with Clear restoring
+The Reports date controls apply to sales, accounting, inventory turn and F&I metrics, with Clear restoring
 all time. Lead counts are explicitly a current snapshot.
 
-Money in JSON remains integer USD cents. Sales rows include the working pencil
+Money in built-in report JSON remains integer USD cents; custom reports return display strings. Sales rows include the working pencil
 price and `pencilMath` front gross using that deal's trade, tax/doc-fee snapshot,
 and vehicle. Average gross rounds total front gross divided by count to the nearest
 cent, or zero for no sales. Accounting uses those same computed sales rows,

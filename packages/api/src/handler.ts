@@ -1,3 +1,4 @@
+import { reportsP2 } from './reports-p2.js';
 import { dealerShare, publicShare } from './retail.js';
 import { manageUsers } from './users.js';
 import { credit } from './credit.js';
@@ -73,6 +74,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (/^\/accounting(\/|$)/.test(path)) return await accounting(request, principal, repository, now());
         if (/^\/fi-products(\/|$)/.test(path)) return await fiProducts(request, principal, repository, now());
         if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repository, now());
+        if (/^\/reports\/(turn|fi|custom|saved)([/.]|$)/.test(path)) return await reportsP2(request, principal, repository, now());
         if (/^\/reports(\/|$)/.test(path)) return await reports(request, repository, now(), record);
         if (/^\/(deals|settings)(\/|$)/.test(path)) {
           const command = () => /^\/deals\/[^/]+\/share(\/|$)/.test(path) ? dealerShare(request, principal, repository, now()) : /^\/deals\/[^/]+\/(credit-application|payoff-quotes)(\/|$)/.test(path) ? credit(request, principal, repository, now()) : /^\/deals\/[^/]+\/(jacket|documents)(\/|$)/.test(path)

@@ -1,4 +1,4 @@
-import type { Lead, VehicleStatus } from './index.js';
+import type { CrmRecord, Lead, VehicleStatus } from './index.js';
 export const agingBuckets = ['0-30', '31-60', '61-90', '91+'] as const;
 export type AgingBucket = typeof agingBuckets[number];
 export interface InventoryReport {
@@ -16,3 +16,36 @@ export interface LeadReport {
   bySource: {source: Lead['source']; count: number}[];
   total: number;
 }
+
+export interface TurnReport {
+  from: string | null; to: string | null; soldInPeriod: number; averageDaysToSale: number; periodDays: number; turnRate: number;
+}
+/** UTC calendar days; invalid negative durations are excluded from every metric. */
+export function inventoryTurn(sales: {soldDate: string; dateStocked: string}[], unsold: number, range: {from: string | null; to: string | null}): TurnReport {
+  const days = (end: string, start: string) => (Date.parse(end) - Date.parse(start)) / 86400000;
+  const valid = sales.filter(s => days(s.soldDate, s.dateStocked) >= 0);
+  const dates = valid.map(s => s.soldDate).sort(), soldInPeriod = valid.length;
+  const periodDays = range.from && range.to ? days(range.to, range.from) + 1 : dates.length ? days(dates[dates.length - 1], dates[0]) + 1 : 0;
+  const stockBase = unsold + soldInPeriod;
+  // Annualized estimate: round(soldInPeriod * 365 / (periodDays * stockBase), 2).
+  return {...range, soldInPeriod, periodDays, averageDaysToSale: soldInPeriod ? Math.round(valid.reduce((sum, s) => sum + days(s.soldDate, s.dateStocked), 0) / soldInPeriod * 10) / 10 : 0,
+    turnRate: soldInPeriod && periodDays && stockBase ? Math.round(soldInPeriod * 365 / (periodDays * stockBase) * 100) / 100 : 0};
+}
+export interface FiReport {
+  from: string | null; to: string | null; dealsSold: number; dealsWithFi: number; penetrationBps: number;
+  totalFiGross: number; totalFiRetail: number; totalFiCost: number; fiGrossPerDeal: number;
+  perProduct: {productId: string; name: string; category: string; deals: number; units: number; retail: number; cost: number; gross: number}[];
+}
+type ColumnType = 'text' | 'number' | 'money';
+const columns = (text: string[], money: string[] = [], numeric: string[] = []): {key: string; label: string; type: ColumnType}[] =>
+  [...text.map(key => ({key, label: key, type: 'text' as const})), ...money.map(key => ({key, label: key, type: 'money' as const})), ...numeric.map(key => ({key, label: key, type: 'number' as const}))];
+export const reportDatasets = {
+  inventory: {columns: columns(['stockNumber', 'vehicle', 'status', 'dateStocked', 'bucket'], ['listPrice', 'cost', 'reconTotal', 'totalCost'], ['agingDays']), groupings: ['status', 'bucket']},
+  sales: {columns: columns(['soldDate', 'dealId', 'buyer', 'vehicle'], ['price', 'frontGross', 'fiGross']), groupings: ['buyer', 'vehicle']},
+  leads: {columns: columns(['leadId', 'customer', 'source', 'stage', 'vehicleDescription', 'createdAt']), groupings: ['source', 'stage']},
+  fi: {columns: columns(['soldDate', 'dealId', 'buyer', 'productId', 'product', 'category'], ['retail', 'cost', 'gross']), groupings: ['product', 'category', 'buyer']},
+} as const;
+export type ReportDataset = keyof typeof reportDatasets;
+export interface ReportDefinition {dataset: ReportDataset; columns: string[]; from?: string; to?: string; groupBy?: string}
+export interface SavedReport extends CrmRecord {kind: 'saved-report'; name: string; definition: ReportDefinition}
+export interface CustomReport {dataset: ReportDataset; columns: {key: string; label: string}[]; rows: string[][]}
