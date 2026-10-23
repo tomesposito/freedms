@@ -1,3 +1,4 @@
+import { localAuth } from './local-auth.js';
 import { localSession } from './local-session.js';
 import { analyticsFromEnv } from './analytics.js';
 import { bodyLimit } from './quick-entry.js';
@@ -31,7 +32,7 @@ const server = createServer(async (req, res) => {
       result = await localSession(body, repositories, tokens);
     } else {
       const token = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
-      result = await handle({method: req.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body, ...(isIntake ? {intakeToken: token} : {claims: tokens.verify(token)})});
+      result = await handle({method: req.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body, ...localAuth(url.pathname, isIntake, token, tokens)});
     }
   } catch (error) { result = errorResponse(error); }
   res.writeHead(result.statusCode, result.headers); res.end(result.body);

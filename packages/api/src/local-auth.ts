@@ -1,0 +1,8 @@
+import type { LocalTokens } from './auth.js';
+
+/** Select request credentials before the local adapter calls the handler. */
+export function localAuth(path: string, isIntake: boolean, token: string, tokens: Pick<LocalTokens, 'verify'>) {
+  return isIntake ? {intakeToken: token}
+    : path.replace(/\/$/, '').startsWith('/share/') ? {}
+    : {claims: tokens.verify(token)};
+}
