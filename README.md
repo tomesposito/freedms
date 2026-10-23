@@ -58,6 +58,12 @@ completeness checklist.
 
 ![Deal jacket](docs/screenshots/deal-jacket.png)
 
+**Documents** — search every deal attachment by name, type, buyer, or date;
+admins set a retention period and dispose of expired files explicitly —
+nothing is ever deleted automatically.
+
+![Documents search and retention](docs/screenshots/documents.png)
+
 **Reports** — inventory aging, sales and gross, lead pipeline. Each exports to
 CSV, plus a QuickBooks-format accounting export.
 
