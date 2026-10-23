@@ -152,6 +152,18 @@ hosted invite emails are out of scope and no invite is sent.
 
 ![Workspace user management](docs/screenshots/user-management.png)
 
+**Digital retailing — the buyer's view** — a private, expiring link shows one
+buyer their vehicle and numbers (never cost or gross), payment options to
+choose from, a change request, and document upload. Local links only in this
+build.
+
+![Buyer view from a share link](docs/screenshots/digital-retailing.png)
+
+**Digital retailing — dealer side** — the worksheet's share panel with the
+buyer's responses on the deal; the link was revoked after they replied.
+
+![Share panel with buyer responses](docs/screenshots/deal-share.png)
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
