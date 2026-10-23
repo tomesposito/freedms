@@ -22,3 +22,5 @@ import '../packages/web/test/mfa.test.js';
 import '../packages/web/test/documents.test.js';
 import '../packages/api/test/fi.test.js';
 import '../packages/web/test/fi.test.js';
+import '../packages/api/test/accounting.test.js';
+import '../packages/web/test/accounting.test.js';

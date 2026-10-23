@@ -3,8 +3,8 @@ export const dealStatuses = ['working', 'approved', 'sold', 'dead'] as const;
 export type DealStatus = typeof dealStatuses[number];
 /** Rates are integer basis points (6% = 600); money is integer USD cents. */
 export interface TaxSettings { taxRateBps: number; taxTradeDifference: boolean; docFee: number }
-export interface WorkspaceSettings extends CrmRecord, TaxSettings { kind: 'settings' }
-export const defaultSettings: TaxSettings = {taxRateBps: 0, taxTradeDifference: false, docFee: 0};
+export interface WorkspaceSettings extends CrmRecord, TaxSettings { kind: 'settings'; commissionRateBps?: number }
+export const defaultSettings: TaxSettings & {commissionRateBps: number} = {commissionRateBps: 0, taxRateBps: 0, taxTradeDifference: false, docFee: 0};
 export interface Trade { year: string; make: string; model: string; vin: string; allowance: number; payoff: number; actualCashValue: number }
 export interface FiSelection { productId: string; name: string; category: import('./fi.js').FiCategory; cost: number; retailPrice: number; termNotes: string; status: 'accepted' | 'declined' }
 export interface Pencil { fiSelections: FiSelection[]; id: string; name: string; price: number; down: number; term: number; aprBps: number }

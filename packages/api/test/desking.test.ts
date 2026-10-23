@@ -64,7 +64,7 @@ test('empty deals, settings defaults/snapshot, named pencils and optimistic edit
   assert.equal((await call('A', 'PUT', `/deals/${d.id}`, {version: 1, docFee: 0})).status, 409);
   assert.equal((await call('A', 'PUT', `/deals/${d.id}`, {version: 2, workingPencilId: 'missing'})).status, 400);
 });
-test('approved to sold commits vehicle, lead, deal and three attributable events; closed deals are immutable', async () => {
+test('approved to sold commits vehicle, lead, deal, ledger and attributable events; closed deals are immutable', async () => {
   const {call, create, v, lead, repositories} = await setup(); const d = await create();
   assert.equal((await call('A', 'PUT', `/deals/${d.id}`, {version: 1, status: 'sold'})).status, 400);
   assert.equal((await call('A', 'PUT', `/deals/${d.id}`, {version: 1, status: 'approved'})).status, 200);
@@ -73,7 +73,7 @@ test('approved to sold commits vehicle, lead, deal and three attributable events
   assert.deepEqual(sold.data.history.map((h: {status: string}) => h.status), ['working', 'approved', 'sold']);
   assert.equal((await call('A', 'GET', `/vehicles/${v.id}`)).data.status, 'sold');
   const l = (await call('A', 'GET', `/leads/${lead.id}`)).data; assert.equal(l.stage, 'sold'); assert.match(l.activities.at(-1).summary, /→ sold/);
-  const events = repositories.eventsForTest('A').slice(count); assert.equal(events.length, 3); assert.deepEqual(events.map(e => e.type).sort(), ['deal.updated', 'lead.updated', 'vehicle.updated']); assert.ok(events.every(e => e.actorId === 'userA'));
+  const events = repositories.eventsForTest('A').slice(count); assert.equal(events.length, 16); assert.equal(events.filter(e => e.type === 'gl-account.created').length, 12); assert.deepEqual(events.filter(e => e.type !== 'gl-account.created').map(e => e.type).sort(), ['deal.updated', 'journal-entry.created', 'lead.updated', 'vehicle.updated']); assert.ok(events.every(e => e.actorId === 'userA'));
   assert.equal((await call('A', 'PUT', `/deals/${d.id}`, {version: 3, status: 'dead'})).status, 400);
   assert.equal((await call('A', 'DELETE', `/vehicles/${v.id}`, {version: 2})).status, 409);
 });

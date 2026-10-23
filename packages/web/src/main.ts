@@ -1,3 +1,4 @@
+import { accountingRoute } from './accounting';
 import { documentsRoute } from './documents';
 import { accountRoute } from './mfa';
 import { webhooksRoute } from './webhooks';
@@ -42,7 +43,7 @@ async function download(path: string, filename: string): Promise<void> {
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : 'Something went wrong. Please retry.'; }
 function flash(error: unknown): void { const el = document.querySelector<HTMLElement>('#message')!; el.textContent = errorMessage(error); el.hidden = false; el.focus(); }
 function shell(content: string): void {
-  app.innerHTML = `<header><a class="brand" href="#/">free<span>DMS</span></a><nav aria-label="Main navigation"><a href="#/">Inventory</a><a href="#/leads">Leads</a><a href="#/deals">Deals</a><a href="#/fi-products">F&I</a><a href="#/documents">Documents</a><a href="#/reports">Reports</a><a href="#/feeds">Feeds</a><a href="#/webhooks">Webhooks</a><a href="#/account">Account</a></nav><span class="workspace">${e(session?.tenant?.name || 'Your dealership')}</span><div class="header-right">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet">Sign out</button></div></header><main><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main><footer>freeDMS · Inventory, Leads, Deals & Reports${localMode ? ' · Local changes are cleared when the API restarts.' : ''}</footer>`;
+  app.innerHTML = `<header><a class="brand" href="#/">free<span>DMS</span></a><nav aria-label="Main navigation"><a href="#/">Inventory</a><a href="#/leads">Leads</a><a href="#/deals">Deals</a><a href="#/accounting">Accounting</a><a href="#/fi-products">F&I</a><a href="#/documents">Documents</a><a href="#/reports">Reports</a><a href="#/feeds">Feeds</a><a href="#/webhooks">Webhooks</a><a href="#/account">Account</a></nav><span class="workspace">${e(session?.tenant?.name || 'Your dealership')}</span><div class="header-right">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet">Sign out</button></div></header><main><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main><footer>freeDMS · Inventory, Leads, Deals & Reports${localMode ? ' · Local changes are cleared when the API restarts.' : ''}</footer>`;
   document.querySelector('#signout')?.addEventListener('click', () => { clearDrafts(); signOut(); });
 }
 function badge(value: string): string { return `<span class="badge ${value.replace(' ', '-')}">${e(value)}</span>`; }
@@ -141,6 +142,7 @@ async function route(): Promise<void> {
     else if (parts[0] === 'webhooks') await webhooksRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'account') await accountRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'feeds') await feedRoute({api, download, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
+    else if (parts[0] === 'accounting') await accountingRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'fi-products') await fiRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'leads') await crmRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'new') await form(undefined, sequence);

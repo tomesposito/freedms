@@ -1,3 +1,4 @@
+import { accounting } from './accounting.js';
 import { fiProducts } from './fi.js';
 import { documentControls } from './documents.js';
 import { mfa } from './mfa.js';
@@ -58,6 +59,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         const record = (data: import('@freedms/shared').BehavioralEvent) => track(repository, principal, now(), data, vendor);
         if (/^\/analytics(\/|$)/.test(path)) return await analytics(request, principal, repository, record);
         if (/^\/quick-entry(\/|$)/.test(path)) return await quickEntry(request, principal, repository, now(), provider);
+        if (/^\/accounting(\/|$)/.test(path)) return await accounting(request, principal, repository, now());
         if (/^\/fi-products(\/|$)/.test(path)) return await fiProducts(request, principal, repository, now());
         if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repository, now());
         if (/^\/reports(\/|$)/.test(path)) return await reports(request, repository, now(), record);
