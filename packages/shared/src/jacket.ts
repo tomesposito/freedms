@@ -3,6 +3,7 @@ import type { pencilMath } from './desking.js';
 export const documentTypes = ['id', 'insurance', 'title', 'registration', 'signed-form', 'other'] as const;
 export const maxDocumentBytes = 40 * 1024;
 export interface DealDocument extends CrmRecord {
+  customerUploaded?: boolean;
   kind: 'document'; dealId: string; name: string; type: typeof documentTypes[number]; size: number; uploadedBy: string; uploadedAt: string;
   status?: 'disposal-pending' | 'disposed'; disposedAt?: string; disposedBy?: string;
 }

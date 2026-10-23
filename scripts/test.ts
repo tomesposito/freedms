@@ -30,3 +30,5 @@ import '../packages/api/test/treasury.test.js';
 import '../packages/web/test/treasury.test.js';
 import '../packages/api/test/users.test.js';
 import '../packages/web/test/users.test.js';
+import '../packages/api/test/retail.test.js';
+import '../packages/web/test/retail.test.js';

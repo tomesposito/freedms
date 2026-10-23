@@ -1,3 +1,4 @@
+import { buyerRoute } from './retail';
 import { usersRoute } from './users';
 import { creditRoute } from './credit';
 import { accountingRoute } from './accounting';
@@ -130,6 +131,7 @@ async function form(id: string | undefined, sequence: number): Promise<void> {
   });
 }
 async function route(): Promise<void> {
+  if (location.hash.startsWith('#/share/')) { ++routeSequence; await buyerRoute(location.hash.slice(8)); return; }
   if (!session) return; const sequence = ++routeSequence;
   try {
     const parts = location.hash.replace(/^#\//, '').split('/');
@@ -155,6 +157,7 @@ async function route(): Promise<void> {
   } catch (error) { if (sequence === routeSequence) { if (!getToken()) await login(); flash(error); } }
 }
 async function start(): Promise<void> {
+  if (location.hash.startsWith('#/share/')) { await route(); return; }
   try { await finishSignIn(); if (!getToken()) { await login(); return; } session = await api('/session'); await route(); }
   catch (error) { await login(); flash(error); }
 }

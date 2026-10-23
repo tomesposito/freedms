@@ -1,6 +1,6 @@
 import { ensureDefaultAccounts, dealPosting } from './accounting.js';
 import { randomUUID } from 'node:crypto';
-import { defaultLeaseTerms, residualFromPercent, residualPercentFromAmount, moneyFactorToAprBps, defaultSettings, dealStatuses, pencilMath, type CrmEntity, type Deal, type DealView, type Pencil, type Principal, type TaxSettings, type Trade, type WorkspaceSettings } from '@freedms/shared';
+import { defaultShareExpiryDays, defaultLeaseTerms, residualFromPercent, residualPercentFromAmount, moneyFactorToAprBps, defaultSettings, dealStatuses, pencilMath, type CrmEntity, type Deal, type DealView, type Pencil, type Principal, type TaxSettings, type Trade, type WorkspaceSettings } from '@freedms/shared';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
 import { invalid, money, object, onlyKeys, text, version } from './validation.js';
@@ -62,16 +62,16 @@ export async function desking(request: ApiRequest, principal: Principal, repo: T
   const method = request.method.toUpperCase(), path = request.path.replace(/\/$/, ''), query = request.query ?? {};
   const date = now.toISOString();
   const base = () => ({id: randomUUID(), tenantId: principal.tenantId, version: 1, createdAt: date, updatedAt: date});
-  const write = (record: CrmEntity, expectedVersion = 0): CrmWrite => ({record, expectedVersion, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: record.kind === 'payoff-quote' ? 'payoff-quote.created' : record.kind === 'journal-entry' ? 'journal-entry.created' : `${record.kind}.${expectedVersion ? 'updated' : 'created'}`, occurredAt: date, deliveryStatus: 'pending'}});
+  const write = (record: CrmEntity, expectedVersion = 0): CrmWrite => ({record, expectedVersion, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: record.kind === 'share-response' ? 'share-response.created' : record.kind === 'payoff-quote' ? 'payoff-quote.created' : record.kind === 'journal-entry' ? 'journal-entry.created' : `${record.kind}.${expectedVersion ? 'updated' : 'created'}`, occurredAt: date, deliveryStatus: 'pending'}});
   if (path === '/settings') {
     onlyKeys(query, []);
     const old = await repo.crmGet('settings', 'workspace');
-    if (method === 'GET') return response(200, {data: {...(old ?? {...defaultSettings, version: 0}), commissionRateBps: old?.commissionRateBps ?? 0}});
+    if (method === 'GET') return response(200, {data: {...(old ?? {...defaultSettings, version: 0}), commissionRateBps: old?.commissionRateBps ?? 0, shareExpiryDays: old?.shareExpiryDays ?? defaultShareExpiryDays}});
     if (method !== 'PUT') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
     if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can change workspace settings.');
-    const b = parseBody(request.body); onlyKeys(b, ['version', 'taxRateBps', 'taxTradeDifference', 'docFee', 'commissionRateBps']);
+    const b = parseBody(request.body); onlyKeys(b, ['version', 'taxRateBps', 'taxTradeDifference', 'docFee', 'commissionRateBps', 'shareExpiryDays']);
     const expected = integer(b.version, Number.MAX_SAFE_INTEGER, 'version'); if ((old?.version ?? 0) !== expected) throw conflict();
-    const record: WorkspaceSettings = {...base(), ...taxInput(b), commissionRateBps: b.commissionRateBps === undefined ? old?.commissionRateBps ?? 0 : integer(b.commissionRateBps, 10000, 'commission rate'), id: 'workspace', kind: 'settings', version: expected + 1, createdAt: old?.createdAt ?? date};
+    const record: WorkspaceSettings = {...base(), ...taxInput(b), shareExpiryDays: b.shareExpiryDays === undefined ? old?.shareExpiryDays ?? defaultShareExpiryDays : integer(b.shareExpiryDays, 90, 'share link expiry days', 1), commissionRateBps: b.commissionRateBps === undefined ? old?.commissionRateBps ?? 0 : integer(b.commissionRateBps, 10000, 'commission rate'), id: 'workspace', kind: 'settings', version: expected + 1, createdAt: old?.createdAt ?? date};
     await repo.crmWrite([write(record, expected)]); return response(200, {data: record});
   }
   if (path !== '/deals' && !/^\/deals\/[^/]+$/.test(path)) throw missing();

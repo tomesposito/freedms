@@ -1,3 +1,4 @@
+import { dealerShare, publicShare } from './retail.js';
 import { manageUsers } from './users.js';
 import { credit } from './credit.js';
 import { accounting } from './accounting.js';
@@ -51,6 +52,13 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         }
         return result;
       }
+      if (request.path.replace(/\/$/, '').startsWith('/share/')) {
+        const {result, tenantId} = await publicShare(request, repositories, now(), documents);
+        if (request.method.toUpperCase() === 'POST' && result.statusCode >= 200 && result.statusCode < 300) {
+          try { await dispatchWebhooks(repositories.forTenant(tenantId), webhookSender, now()); } catch { /* Preserve the committed buyer mutation. */ }
+        }
+        return result;
+      }
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
@@ -67,7 +75,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repository, now());
         if (/^\/reports(\/|$)/.test(path)) return await reports(request, repository, now(), record);
         if (/^\/(deals|settings)(\/|$)/.test(path)) {
-          const command = () => /^\/deals\/[^/]+\/(credit-application|payoff-quotes)(\/|$)/.test(path) ? credit(request, principal, repository, now()) : /^\/deals\/[^/]+\/(jacket|documents)(\/|$)/.test(path)
+          const command = () => /^\/deals\/[^/]+\/share(\/|$)/.test(path) ? dealerShare(request, principal, repository, now()) : /^\/deals\/[^/]+\/(credit-application|payoff-quotes)(\/|$)/.test(path) ? credit(request, principal, repository, now()) : /^\/deals\/[^/]+\/(jacket|documents)(\/|$)/.test(path)
             ? jacket(request, principal, repository, now(), documents)
             : desking(request, principal, repository, now());
           return ['POST', 'PUT'].includes(method) && path.startsWith('/deals/')

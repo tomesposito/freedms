@@ -30,7 +30,7 @@ Phase 1 is complete locally: tenancy/auth foundations, inventory (with CSV
 import), leads/CRM, cash/finance desking and lease structuring, printable deal jackets with attachments
 and a completeness checklist, core reporting/CSV exports, AI quick entry
 (draft-then-confirm), listing feed exports, webhooks, MFA (TOTP) with recovery codes and admin reset,
-and usage tracking. Native F&I product catalogs and saved deal menus are also complete locally.
+and usage tracking. Native F&I product catalogs, saved deal menus, and per-deal digital retailing with private share links and customer uploads are also complete locally.
 [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
 Native credit applications, GL/deal posting, AP/AR, cash registers, and bank reconciliation are complete locally.
 Lender/signature connections and later accounting phases remain queued. Nothing is
@@ -407,6 +407,24 @@ Cognito only to perform its separate intake-token authentication in the handler.
 No AWS resources were changed or deployed by this build.
 
 
+## Digital retailing (local)
+
+Create a private link from the worksheet's **Share with buyer** panel. Tokens are
+stored only as SHA-256 hashes and shown once at creation. Rotation replaces the
+previous link; dealers can revoke at any time. Workspace administrators set link
+expiry to 1–90 days (default 7). Expired, revoked, rotated, and closed-deal links
+all return the same unavailable response.
+
+The standalone buyer page needs no session and exposes only buyer-safe numbers,
+accepted F&I retail prices, and payment options—never internal cost, gross, or
+notes. Buyers can choose an option, request a change, or upload documents; dealer
+responses appear on the worksheet and customer uploads appear in the jacket and
+its checklist. Each mutation records a metadata-only outbox event.
+
+The public buyer route is **LOCAL-ONLY** in this build, served by the same local
+API for development/testing; there is no hosted deployment. Uploads use the
+existing document types and 40 KiB limit (choose Other for pay stubs).
+
 ## Desking / the pencil (build 3)
 
 Open **Deals**. As an admin, use **Workspace settings** to set sales tax (up to
@@ -457,6 +475,11 @@ be deleted. No lease, F&I menu, lender submission, documents, or reporting is in
 | GET | `/deals?status=working` | Tenant-scoped deals with vehicle/buyer; optional status |
 | POST | `/deals` | Required `vehicleId`, `customerId`, `type`; optional `leadId` |
 | GET | `/deals/{id}` | Worksheet data and saved pencils |
+| POST / GET | `/deals/{id}/share` | Create/rotate a private buyer link with `{}` / view share status and buyer responses |
+| POST | `/deals/{id}/share/revoke` | Revoke the active link with `{}` |
+| GET | `/share/{token}` | Public buyer-safe vehicle, numbers and payment options for one deal |
+| POST | `/share/{token}/respond` | Exactly one of `optionId` (server-computed snapshot) or `message` (up to 1,000 characters) |
+| POST | `/share/{token}/documents` | `{name, type, content}`; canonical base64, at most 40 KiB decoded; marked customer-uploaded in the jacket |
 | PUT | `/deals/{id}` | Required `version`; optional `type`, `trade`, `docFee`, `pencils`, `workingPencilId`, `status` |
 | GET | `/settings` | Tenant defaults; version 0 before first settings save |
 | PUT | `/settings` | Admin only: `version`, `taxRateBps`, `taxTradeDifference`, `docFee` |

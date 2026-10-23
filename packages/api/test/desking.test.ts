@@ -53,7 +53,7 @@ async function setup(role: 'admin' | 'staff' = 'admin') {
 }
 test('empty deals, settings defaults/snapshot, named pencils and optimistic edits', async () => {
   const {call, create} = await setup(); assert.deepEqual((await call('A')).data, []);
-  assert.deepEqual((await call('A', 'GET', '/settings')).data, {...defaultSettings, version: 0});
+  assert.deepEqual((await call('A', 'GET', '/settings')).data, {...defaultSettings, shareExpiryDays: 7, version: 0});
   assert.equal((await call('A', 'PUT', '/settings', {...defaultSettings, taxRateBps: 625, docFee: 25000, version: 0})).status, 200);
   let d = await create(); assert.equal(d.pencils[0].price, 1000000); assert.equal(d.docFee, 25000);
   await call('A', 'PUT', '/settings', {...defaultSettings, version: 1});
@@ -100,7 +100,7 @@ test('deals/settings enforce tenant isolation, admin settings, input allowlists 
   for (const extra of [{tenantId: 'B'}, {taxRateBps: 625}, {status: 'sold'}]) assert.equal((await call('A', 'POST', '/deals', {vehicleId: v.id, customerId: lead.customerId, type: 'cash', ...extra})).status, 400);
   assert.equal((await call('A', 'GET', '/deals', undefined, {tenantId: 'B'})).status, 400);
   assert.equal((await handler({method: 'GET', path: '/deals'})).statusCode, 401);
-  const staff = await setup('staff'); assert.equal((await staff.call('A', 'PUT', '/settings', {...defaultSettings, version: 0})).status, 403); await staff.create();
+  const staff = await setup('staff'); assert.equal((await staff.call('A', 'PUT', '/settings', {...defaultSettings, shareExpiryDays: 7, version: 0})).status, 403); await staff.create();
 });
 test('mixed transaction conflict rolls back all rows and events', async () => {
   const {repositories, create, v} = await setup(); const d = await create(); const repo = repositories.forTenant('A'); const before = repositories.eventsForTest('A');
