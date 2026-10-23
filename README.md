@@ -117,7 +117,7 @@ nothing is ever deleted automatically.
 ![Documents search and retention](docs/screenshots/documents.png)
 
 **Reports** — inventory aging and turn, sales, F&I metrics, lead pipeline,
-and saved custom reports with CSV exports. Screenshot refresh pending verification tour.
+and saved custom reports with CSV exports.
 
 ![Reports](docs/screenshots/reports.png)
 
