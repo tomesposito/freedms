@@ -185,6 +185,12 @@ button, .button { transition: background-color .15s, border-color .15s; }
 .sidebar-footer button { display: inline-flex; align-items: center; gap: 8px; }
 #sidebar-toggle { display: none; }
 @media (min-width: 761px) {
+  .sidebar:not(.is-slim) .sidebar-heading { padding-top: 20px; }
+  .sidebar:not(.is-slim) .workspace { padding-bottom: 12px; }
+  .sidebar:not(.is-slim) .nav-group + .nav-group { margin-top: 12px; }
+  .sidebar:not(.is-slim) .nav-label { margin-bottom: 4px; }
+  .sidebar:not(.is-slim) nav a { padding-top: 6px; padding-bottom: 6px; }
+  .sidebar:not(.is-slim) .sidebar-footer { padding-top: 10px; padding-bottom: 10px; gap: 6px; }
   #sidebar-toggle { display: inline-flex; }
   .sidebar-footer .local-label { flex-basis: 100%; }
   #app:has(.sidebar.is-slim) { --sidebar-width: var(--sidebar-slim-width); }
