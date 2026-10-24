@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { sidebarNavigation, readSidebarPreference, writeSidebarPreference } from '../src/sidebar.js';
+import { sidebarToggleIcon, sidebarNavigation, readSidebarPreference, writeSidebarPreference } from '../src/sidebar.js';
 
 const main = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
@@ -45,9 +45,9 @@ test('Sidebar preference defaults expanded, persists both choices and tolerates 
 test('Shell reads preference on render and toggle flips the layout and stores it without navigation', () => {
   assert.match(main, /const slim = readSidebarPreference\(\)/);
   assert.match(main, /class="sidebar\$\{slim \? ' is-slim' : ''\}"/);
-  assert.match(main, /id="sidebar-toggle".*aria-pressed="\$\{slim\}"/);
+  assert.match(main, /id="sidebar-toggle".*aria-expanded="\$\{!slim\}"/);
   assert.match(main, /slimToggle.addEventListener\('click', \(\) => \{\s*const slim = sidebar.classList.toggle\('is-slim'\);\s*writeSidebarPreference\(slim\)/);
-  assert.match(main, /slimToggle.setAttribute\('aria-pressed', String\(slim\)\)/);
+  assert.match(main, /slimToggle.setAttribute\('aria-expanded', String\(!slim\)\)/);
   assert.match(main, /id="signout".*title="Sign out" aria-label="Sign out"/);
 });
 test('Slim layout is desktop-only and content uses the reclaimed sidebar width', () => {
@@ -58,4 +58,26 @@ test('Slim layout is desktop-only and content uses the reclaimed sidebar width',
   assert.match(css, /--sidebar-slim-width: 60px/);
   assert.match(css, /\.app-main \{ max-width: none; margin-left: var\(--sidebar-width\)/);
   assert.match(css, /\.sidebar.is-open \.nav-panel \{ display: flex/);
+});
+
+test('Sidebar toggle is icon-only with the current action and direction in both states', () => {
+  const toggle = main.match(/<button type="button" id="sidebar-toggle"[^>]*>(.*?)<\/button>/)![0];
+  assert.doesNotMatch(toggle, /Slim mode|nav-text|aria-pressed/);
+  assert.match(toggle, />\$\{sidebarToggleIcon\(slim\)\}<\/button>/);
+  for (const attribute of ['title', 'aria-label']) {
+    assert.ok(toggle.includes(`${attribute}="\${slim ? 'Expand sidebar' : 'Collapse sidebar'}"`));
+  }
+  assert.match(main, /const label = slim \? 'Expand sidebar' : 'Collapse sidebar'/);
+  assert.match(main, /slimToggle.setAttribute\('aria-label', label\)/);
+  assert.match(main, /slimToggle.title = label/);
+  assert.match(main, /slimToggle.innerHTML = sidebarToggleIcon\(slim\)/);
+  assert.notEqual(sidebarToggleIcon(false), sidebarToggleIcon(true));
+  assert.match(sidebarToggleIcon(false), /M9 3v18m7-13-4 4 4 4/);
+  assert.match(sidebarToggleIcon(true), /M9 3v18m4-13 4 4-4 4/);
+  for (const slim of [false, true]) {
+    const markup = sidebarToggleIcon(slim);
+    assert.equal(markup.replace(/<[^>]*>/g, '').trim(), '');
+    assert.match(markup, /stroke-width="1.8"/);
+    assert.match(markup, /aria-hidden="true"/);
+  }
 });

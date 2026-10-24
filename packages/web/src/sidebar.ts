@@ -1,6 +1,9 @@
 import { escapeHtml as e } from './format';
 
 export const icon = (paths: string): string => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="20" height="20" aria-hidden="true">${paths}</svg>`;
+export function sidebarToggleIcon(slim: boolean): string {
+  return icon(`<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18${slim ? 'm4-13 4 4-4 4' : 'm7-13-4 4 4 4'}"/>`);
+}
 type Destination = { label: string; href: string; icon: string };
 const destination = (label: string, href: string, paths: string): Destination => ({ label, href, icon: icon(paths) });
 export function sidebarNavigation(admin: boolean): string {

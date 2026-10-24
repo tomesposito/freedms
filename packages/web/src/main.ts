@@ -1,4 +1,4 @@
-import { icon, sidebarNavigation, readSidebarPreference, writeSidebarPreference } from './sidebar';
+import { icon, sidebarToggleIcon, sidebarNavigation, readSidebarPreference, writeSidebarPreference } from './sidebar';
 import { partsRoute } from './parts';
 import { serviceRoute, serviceHistoryHtml } from './service';
 import type { RepairOrderView } from '@freedms/shared';
@@ -61,7 +61,7 @@ function shell(content: string): void {
       <nav aria-label="Main navigation">
         ${sidebarNavigation(session?.principal.role === 'admin')}
       </nav>
-      <div class="sidebar-footer">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button type="button" id="sidebar-toggle" class="quiet" aria-pressed="${slim}" aria-label="${slim ? 'Expand sidebar' : 'Collapse sidebar'}" title="${slim ? 'Expand sidebar' : 'Collapse sidebar'}">${icon('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18m7-13-4 4 4 4"/>')}<span class="nav-text">Slim mode</span></button><button id="signout" class="quiet" title="Sign out" aria-label="Sign out">${icon('<path d="M9 3H3v18h6m6-14 5 5-5 5m-7-5h12"/>')}<span class="nav-text">Sign out</span></button></div>
+      <div class="sidebar-footer">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button type="button" id="sidebar-toggle" class="quiet" aria-expanded="${!slim}" aria-label="${slim ? 'Expand sidebar' : 'Collapse sidebar'}" title="${slim ? 'Expand sidebar' : 'Collapse sidebar'}">${sidebarToggleIcon(slim)}</button><button id="signout" class="quiet" title="Sign out" aria-label="Sign out">${icon('<path d="M9 3H3v18h6m6-14 5 5-5 5m-7-5h12"/>')}<span class="nav-text">Sign out</span></button></div>
     </div>
   </aside><main class="app-main"><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main>`;
   app.querySelectorAll<HTMLAnchorElement>('.sidebar nav a').forEach(anchor => {
@@ -72,7 +72,8 @@ function shell(content: string): void {
   slimToggle.addEventListener('click', () => {
     const slim = sidebar.classList.toggle('is-slim');
     writeSidebarPreference(slim);
-    slimToggle.setAttribute('aria-pressed', String(slim));
+    slimToggle.setAttribute('aria-expanded', String(!slim));
+    slimToggle.innerHTML = sidebarToggleIcon(slim);
     const label = slim ? 'Expand sidebar' : 'Collapse sidebar';
     slimToggle.setAttribute('aria-label', label);
     slimToggle.title = label;
