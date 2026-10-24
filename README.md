@@ -52,7 +52,8 @@ always starts empty.
 ![Leads list](docs/screenshots/leads-list.png)
 
 **Equity mining** — sold customers flagged as trade opportunities with visible reasons.
-A worklist for humans — nothing is contacted automatically.
+A worklist for humans — nothing is contacted automatically. This capture shows a new
+workspace before any customer has owned long enough to qualify.
 
 ![Equity mining](docs/screenshots/equity-mining.png)
 
@@ -124,7 +125,7 @@ reversing entries.
 
 ![Accounting](docs/screenshots/accounting.png)
 
-**Accounts payable and receivable** — empty aging lists with bill and receivable entry forms.
+**Accounts payable and receivable** — aging lists with bill and receivable entry forms.
 
 ![Accounts payable](docs/screenshots/accounts-payable.png)
 
@@ -134,7 +135,7 @@ reversing entries.
 
 ![Cash register](docs/screenshots/cash-register.png)
 
-**Bank reconciliation** — an empty period list and a CSV preview before import.
+**Bank reconciliation** — the period list, and a statement CSV preview before import.
 
 ![Bank reconciliation](docs/screenshots/bank-reconciliation.png)
 
