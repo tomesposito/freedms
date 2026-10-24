@@ -26,3 +26,12 @@ nav{display:flex;gap:20px}nav a{font-weight:600;text-decoration:none}fieldset{bo
   @page { margin: 15mm; }
 }
 .report-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}@media(max-width:760px){.report-metrics{grid-template-columns:1fr}header{height:auto;min-height:78px;padding-top:12px;padding-bottom:12px}nav{gap:14px}}
+
+.service-board { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:16px; margin:24px 0; }
+.service-board .card { margin:0; min-width:0; }
+.service-board article { border-top:1px solid #dce4df; padding:16px 0; overflow-wrap:anywhere; }
+#service-date { display:flex; align-items:end; gap:12px; margin:20px 0; }
+#service-lines fieldset { display:grid; grid-template-columns:2fr 1fr 1fr auto; align-items:end; gap:12px; border-bottom:1px solid #dce4df; padding-bottom:16px; }
+#service-lines legend { font-weight:600; padding:8px 0; }
+#service-totals { overflow:auto; margin-top:20px; }
+@media(max-width:760px) { #service-lines fieldset { grid-template-columns:1fr; } }

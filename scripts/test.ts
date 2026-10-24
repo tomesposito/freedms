@@ -39,3 +39,5 @@ import '../packages/api/test/reports-p2.test.js';
 import '../packages/web/test/reports.test.js';
 import '../packages/api/test/compliance.test.js';
 import '../packages/web/test/compliance.test.js';
+import '../packages/api/test/service.test.js';
+import '../packages/web/test/service.test.js';

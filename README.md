@@ -82,6 +82,16 @@ completeness checklist, and any accepted F&I products.
 
 ![Deal jacket](docs/screenshots/deal-jacket.png)
 
+**Service board** — the day's appointments grouped by status, with the day's
+repair orders and totals.
+
+![Service board](docs/screenshots/service-board.png)
+
+**Repair order** — line items for labor and parts with totals in cents. Parts are
+simple line items in this slice; inventory depletion arrives with the parts module.
+
+![Repair order](docs/screenshots/repair-order.png)
+
 **Compliance** — the per-deal Red Flags checklist: dealer attestations for
 document inspection, address discrepancy, and privacy notice, a dealer-recorded
 OFAC/identity check, and consent derived from the customer record. Incomplete
