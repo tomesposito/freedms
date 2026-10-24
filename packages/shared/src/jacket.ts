@@ -8,6 +8,7 @@ export interface DealDocument extends CrmRecord {
   status?: 'disposal-pending' | 'disposed'; disposedAt?: string; disposedBy?: string;
 }
 export interface DealJacket {
+  compliance: Pick<import('./compliance.js').DealCompliance, 'checklist' | 'complete' | 'checks'>;
   credit: {status: import('./credit.js').CreditStatus; decisionOutcome: import('./credit.js').DecisionOutcome | null; lenderName: string | null; applicantSsnLast4: string} | null;
   adverseAction: {applicantName: string; decidedAt: string; lenderName: string; reasons: import('./credit.js').AdverseActionReason[]} | null;
   payoffQuotes: import('./credit.js').PayoffQuote[];

@@ -32,6 +32,7 @@ and a completeness checklist, core reporting/CSV exports, inventory turn, F&I me
 (draft-then-confirm), listing feed exports, webhooks, MFA (TOTP) with recovery codes and admin reset,
 and usage tracking. Native F&I product catalogs, saved deal menus, and per-deal digital retailing with private share links and customer uploads are also complete locally.
 [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
+Dealer-recorded Red Flags / OFAC compliance checklists and searchable check logs are complete locally. freeDMS does not run or verify external screening.
 Native credit applications, GL/deal posting, AP/AR, cash registers, and bank reconciliation are complete locally.
 Lender/signature connections and later accounting phases remain queued. Nothing is
 deployed yet; everything runs locally.
@@ -41,6 +42,10 @@ deployed yet; everything runs locally.
 Real captures from the local app on the current build — the same screens the
 verification tours use. The sample dealership data is local-only; the app itself
 always starts empty.
+
+**Compliance** — dealer-recorded checks and jacket warnings (capture pending).
+
+![Compliance log — capture pending](docs/screenshots/compliance.png)
 
 **Inventory** — every vehicle with aging, cost, and status.
 

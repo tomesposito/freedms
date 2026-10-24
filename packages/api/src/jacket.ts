@@ -1,3 +1,4 @@
+import { dealCompliance } from './compliance.js';
 import { randomUUID } from 'node:crypto';
 import { jacketChecklist, documentTypes, maxDocumentBytes, pencilMath, type DealDocument, type DealJacket, type Principal } from '@freedms/shared';
 import { ApiError, missing, requireId } from './errors.js';
@@ -21,7 +22,9 @@ export async function jacket(request: ApiRequest, principal: Principal, repo: Te
     const attached = documents.filter(d => d.dealId === deal.id);
     const application = (await repo.crmList('credit-application')).find(a => a.dealId === deal.id);
     const payoffQuotes = (await repo.crmList('payoff-quote')).filter(q => q.dealId === deal.id).sort((a, b) => a.quotedAt.localeCompare(b.quotedAt) || a.id.localeCompare(b.id));
+    const compliance = await dealCompliance(repo, deal);
     const data: DealJacket = {
+      compliance: {checklist: compliance.checklist, complete: compliance.complete, checks: compliance.checks.filter(c => c.dealId === deal.id)},
       credit: application ? {status: application.status, decisionOutcome: application.decision?.outcome ?? null, lenderName: application.decision?.lenderName ?? null, applicantSsnLast4: application.applicant.ssnLast4} : null,
       adverseAction: application?.decision?.outcome === 'declined' ? {applicantName: application.applicant.fullName, decidedAt: application.decision.decidedAt, lenderName: application.decision.lenderName, reasons: application.decision.adverseReasons} : null,
       payoffQuotes,deal: {...deal, vehicle, customer}, pencil, numbers: pencilMath(pencil, deal.trade, deal, vehicle, deal.type),

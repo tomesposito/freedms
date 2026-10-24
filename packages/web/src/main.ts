@@ -1,3 +1,4 @@
+import { complianceRoute, dealComplianceRoute } from './compliance';
 import { buyerRoute } from './retail';
 import { usersRoute } from './users';
 import { creditRoute } from './credit';
@@ -46,7 +47,7 @@ async function download(path: string, filename: string): Promise<void> {
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : 'Something went wrong. Please retry.'; }
 function flash(error: unknown): void { const el = document.querySelector<HTMLElement>('#message')!; el.textContent = errorMessage(error); el.hidden = false; el.focus(); }
 function shell(content: string): void {
-  app.innerHTML = `<header><a class="brand" href="#/">free<span>DMS</span></a><nav aria-label="Main navigation"><a href="#/">Inventory</a><a href="#/leads">Leads</a><a href="#/deals">Deals</a><a href="#/accounting">Accounting</a><a href="#/fi-products">F&I</a><a href="#/documents">Documents</a><a href="#/reports">Reports</a><a href="#/feeds">Feeds</a><a href="#/webhooks">Webhooks</a><a href="#/account">Account</a>${session?.principal.role === 'admin' ? '<a href="#/users">Users</a>' : ''}</nav><span class="workspace">${e(session?.tenant?.name || 'Your dealership')}</span><div class="header-right">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet">Sign out</button></div></header><main><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main><footer>freeDMS · Inventory, Leads, Deals & Reports${localMode ? ' · Local changes are cleared when the API restarts.' : ''}</footer>`;
+  app.innerHTML = `<header><a class="brand" href="#/">free<span>DMS</span></a><nav aria-label="Main navigation"><a href="#/">Inventory</a><a href="#/leads">Leads</a><a href="#/deals">Deals</a><a href="#/accounting">Accounting</a><a href="#/fi-products">F&I</a><a href="#/documents">Documents</a><a href="#/compliance">Compliance</a><a href="#/reports">Reports</a><a href="#/feeds">Feeds</a><a href="#/webhooks">Webhooks</a><a href="#/account">Account</a>${session?.principal.role === 'admin' ? '<a href="#/users">Users</a>' : ''}</nav><span class="workspace">${e(session?.tenant?.name || 'Your dealership')}</span><div class="header-right">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet">Sign out</button></div></header><main><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main><footer>freeDMS · Inventory, Leads, Deals & Reports${localMode ? ' · Local changes are cleared when the API restarts.' : ''}</footer>`;
   document.querySelector('#signout')?.addEventListener('click', () => { clearDrafts(); signOut(); });
 }
 function badge(value: string): string { return `<span class="badge ${value.replace(' ', '-')}">${e(value)}</span>`; }
@@ -137,12 +138,14 @@ async function route(): Promise<void> {
     const parts = location.hash.replace(/^#\//, '').split('/');
     if (parts[0] === 'deals') {
       const ui = {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'};
-      if (parts[2] === 'credit' && parts[1]) await creditRoute(parts[1], ui);
+      if (parts[2] === 'compliance' && parts[1]) await dealComplianceRoute(parts[1], ui);
+      else if (parts[2] === 'credit' && parts[1]) await creditRoute(parts[1], ui);
       else if (parts[2] === 'jacket' && parts[1]) await jacketRoute(parts[1], ui);
       else await dealsRoute(parts, ui);
     }
     else if (parts[0] === 'import') await importRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'reports') await reportsRoute({api, download, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
+    else if (parts[0] === 'compliance') await complianceRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'documents') await documentsRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'users') await usersRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void start(); }, admin: session.principal.role === 'admin'}, session.principal.tenantId);
     else if (parts[0] === 'webhooks') await webhooksRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});

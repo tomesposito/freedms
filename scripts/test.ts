@@ -37,3 +37,5 @@ import '../packages/api/test/local.test.js';
 import '../packages/api/test/equity.test.js';
 import '../packages/api/test/reports-p2.test.js';
 import '../packages/web/test/reports.test.js';
+import '../packages/api/test/compliance.test.js';
+import '../packages/web/test/compliance.test.js';

@@ -62,7 +62,7 @@ export async function desking(request: ApiRequest, principal: Principal, repo: T
   const method = request.method.toUpperCase(), path = request.path.replace(/\/$/, ''), query = request.query ?? {};
   const date = now.toISOString();
   const base = () => ({id: randomUUID(), tenantId: principal.tenantId, version: 1, createdAt: date, updatedAt: date});
-  const write = (record: CrmEntity, expectedVersion = 0): CrmWrite => ({record, expectedVersion, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: record.kind === 'share-response' ? 'share-response.created' : record.kind === 'payoff-quote' ? 'payoff-quote.created' : record.kind === 'journal-entry' ? 'journal-entry.created' : `${record.kind}.${expectedVersion ? 'updated' : 'created'}`, occurredAt: date, deliveryStatus: 'pending'}});
+  const write = (record: CrmEntity, expectedVersion = 0): CrmWrite => ({record, expectedVersion, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: record.kind === 'compliance-check' ? 'compliance-check.created' : record.kind === 'share-response' ? 'share-response.created' : record.kind === 'payoff-quote' ? 'payoff-quote.created' : record.kind === 'journal-entry' ? 'journal-entry.created' : `${record.kind}.${expectedVersion ? 'updated' : 'created'}`, occurredAt: date, deliveryStatus: 'pending'}});
   if (path === '/settings') {
     onlyKeys(query, []);
     const old = await repo.crmGet('settings', 'workspace');
