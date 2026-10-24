@@ -50,7 +50,37 @@ async function download(path: string, filename: string): Promise<void> {
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : 'Something went wrong. Please retry.'; }
 function flash(error: unknown): void { const el = document.querySelector<HTMLElement>('#message')!; el.textContent = errorMessage(error); el.hidden = false; el.focus(); }
 function shell(content: string): void {
-  app.innerHTML = `<header><a class="brand" href="#/">free<span>DMS</span></a><nav aria-label="Main navigation"><a href="#/">Inventory</a><a href="#/leads">Leads</a><a href="#/deals">Deals</a><a href="#/service">Service</a><a href="#/accounting">Accounting</a><a href="#/parts">Parts</a><a href="#/fi-products">F&I</a><a href="#/documents">Documents</a><a href="#/compliance">Compliance</a><a href="#/reports">Reports</a><a href="#/feeds">Feeds</a><a href="#/webhooks">Webhooks</a><a href="#/account">Account</a>${session?.principal.role === 'admin' ? '<a href="#/users">Users</a>' : ''}</nav><span class="workspace">${e(session?.tenant?.name || 'Your dealership')}</span><div class="header-right">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet">Sign out</button></div></header><main><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main><footer>freeDMS · Inventory, Leads, Deals & Reports${localMode ? ' · Local changes are cleared when the API restarts.' : ''}</footer>`;
+  const section = location.hash.replace(/^#\//, '').split('/')[0];
+  const active = ['', 'new', 'import', 'vehicles'].includes(section) ? '' : section;
+  const group = (label: string, links: string) => `<div class="nav-group"><p class="nav-label">${label}</p>${links}</div>`;
+  app.innerHTML = `<aside class="sidebar">
+    <div class="sidebar-heading"><a class="brand" href="#/">free<span>DMS</span></a><button type="button" class="menu-toggle" aria-expanded="false" aria-controls="nav-panel">Menu</button></div>
+    <div id="nav-panel" class="nav-panel">
+      <div class="workspace">${e(session?.tenant?.name || 'Your dealership')}</div>
+      <nav aria-label="Main navigation">
+        ${group('Sales', '<a href="#/">Inventory</a><a href="#/leads">Leads</a><a href="#/deals">Deals</a>')}
+        ${group('Operations', '<a href="#/service">Service</a><a href="#/parts">Parts</a>')}
+        ${group('Back office', '<a href="#/accounting">Accounting</a><a href="#/fi-products">F&I</a><a href="#/documents">Documents</a><a href="#/compliance">Compliance</a><a href="#/reports">Reports</a>')}
+        ${group('Connect', '<a href="#/feeds">Feeds</a><a href="#/webhooks">Webhooks</a>')}
+        ${group('Workspace', '<a href="#/account">Account</a>' + (session?.principal.role === 'admin' ? '<a href="#/users">Users</a>' : ''))}
+      </nav>
+      <div class="sidebar-footer">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet">Sign out</button></div>
+    </div>
+  </aside><main class="app-main"><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main>`;
+  app.querySelectorAll<HTMLAnchorElement>('.sidebar nav a').forEach(anchor => {
+    if (anchor.getAttribute('href') === `#/${active}`) anchor.setAttribute('aria-current', 'page');
+  });
+  const sidebar = app.querySelector<HTMLElement>('.sidebar')!;
+  const toggle = app.querySelector<HTMLButtonElement>('.menu-toggle')!;
+  const setMenu = (open: boolean) => {
+    sidebar.classList.toggle('is-open', open);
+    toggle.setAttribute('aria-expanded', String(open));
+  };
+  toggle.addEventListener('click', () => setMenu(toggle.getAttribute('aria-expanded') !== 'true'));
+  sidebar.querySelectorAll('a').forEach(anchor => anchor.addEventListener('click', () => setMenu(false)));
+  sidebar.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { setMenu(false); toggle.focus(); }
+  });
   document.querySelector('#signout')?.addEventListener('click', () => { clearDrafts(); signOut(); });
 }
 function badge(value: string): string { return `<span class="badge ${value.replace(' ', '-')}">${e(value)}</span>`; }

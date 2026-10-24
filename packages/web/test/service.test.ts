@@ -24,7 +24,10 @@ test('Repair-order HTML reconciles line amounts and totals and history has hones
 test('Service navigation, history sections and form route are wired into vehicle/customer surfaces', () => {
   const read = (name:string) => readFileSync(new URL(`../src/${name}.ts`,import.meta.url),'utf8');
   const main=read('main'),crm=read('crm'),service=read('service');
-  assert.match(main,/<a href="#\/deals">Deals<\/a><a href="#\/service">Service<\/a><a href="#\/accounting">/);
+  // These destinations now live in separate sidebar groups.
+  assert.match(main,/<a href="#\/deals">Deals<\/a>/);
+  assert.match(main,/<a href="#\/service">Service<\/a>/);
+  assert.match(main,/<a href="#\/accounting">Accounting<\/a>/);
   for (const [source,scope] of [[main,'vehicleId'],[crm,'customerId']]) { assert.ok(source.includes(`/service/repair-orders?${scope}=`)); assert.match(source,/<h2>Service history<\/h2>\$\{serviceHistoryHtml\(serviceHistory\)\}/); }
   assert.match(main,/serviceRoute\(parts/); assert.match(service,/repair-orders\/new\/\$\{encodeURIComponent\(a.id\)\}/); assert.doesNotMatch(service,/disabled/);
 });
