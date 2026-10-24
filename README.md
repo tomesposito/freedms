@@ -93,7 +93,8 @@ repair orders and totals.
 ![Service board](docs/screenshots/service-board.png)
 
 **Repair order** — labor, free-text parts, and stocked parts with on-hand hints.
-Completion applies stock once; reopening restores it. Negative stock requires an
+Completion applies stock once and posts the journal entry shown at the bottom;
+reopening restores the stock and reverses the entry. Negative stock requires an
 explicit override and leaves a visible warning.
 
 ![Repair order](docs/screenshots/repair-order.png)
@@ -104,8 +105,8 @@ flags and a list that includes parts exactly at their reorder point.
 ![Parts catalog and reorder list](docs/screenshots/parts-catalog.png)
 
 **Counter sales** — walk-in or customer sales with totals and atomic stock
-updates. This local example includes an explicitly overridden shortage and its
-visible warning; no vendor ordering or parts import is included.
+updates. Each sale posts its own journal entry, and the Journal column shows
+whether it posted; no vendor ordering or parts import is included.
 
 ![Parts counter sales](docs/screenshots/parts-counter-sale.png)
 
@@ -124,8 +125,10 @@ by customer, source, initials, or result.
 
 **Accounting** — chart of accounts, account balances, and a trial balance
 for the period that ties to the sales report. Selling a deal posts its
-journal entry automatically; entries are never edited — corrections are
-reversing entries.
+journal entry automatically; finalizing a repair order and recording a
+counter sale post the same way. Departmental statements split the period
+P&L into Sales, Service, and Parts. Entries are never edited — corrections
+are reversing entries.
 
 ![Accounting](docs/screenshots/accounting.png)
 
@@ -157,8 +160,9 @@ nothing is ever deleted automatically.
 
 ![Documents search and retention](docs/screenshots/documents.png)
 
-**Reports** — inventory aging and turn, sales, F&I metrics, lead pipeline,
-and saved custom reports with CSV exports.
+**Reports** — inventory aging and turn, sales, F&I metrics, fixed operations
+(finalized repair orders and counter sales, with labor and parts gross),
+lead pipeline, and saved custom reports with CSV exports.
 
 ![Reports](docs/screenshots/reports.png)
 
