@@ -33,7 +33,7 @@ and a completeness checklist, core reporting/CSV exports, inventory turn, F&I me
 and usage tracking. Native F&I product catalogs, saved deal menus, and per-deal digital retailing with private share links and customer uploads are also complete locally.
 [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
 Dealer-recorded Red Flags / OFAC compliance checklists and searchable check logs are complete locally. freeDMS does not run or verify external screening.
-Native credit applications, GL/deal posting, AP/AR, cash registers, and bank reconciliation are complete locally.
+Native credit applications, GL/deal posting, service/parts GL posting and departmental statements, AP/AR, cash registers, and bank reconciliation are complete locally.
 Lender/signature connections and later accounting phases remain queued. Nothing is
 deployed yet; everything runs locally.
 

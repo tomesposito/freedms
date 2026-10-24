@@ -28,6 +28,7 @@ export function repairOrderTotals(items: RepairOrderLineItem[]): RepairOrderTota
   return {laborCents, partsCents, totalCents: laborCents + partsCents};
 }
 export interface RepairOrder extends CrmRecord {
+  glPosted?: boolean; glPostingEntryId?: string | null;
   stockApplied?: boolean; stockWarning?: string | null;
   kind: 'repair-order'; appointmentId: string | null; customerId: string; customerName: string;
   vehicleId: string | null; vehicleDescription: string; payType: RepairOrderPayType;

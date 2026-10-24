@@ -73,7 +73,7 @@ test('approved to sold commits vehicle, lead, deal, ledger and attributable even
   assert.deepEqual(sold.data.history.map((h: {status: string}) => h.status), ['working', 'approved', 'sold']);
   assert.equal((await call('A', 'GET', `/vehicles/${v.id}`)).data.status, 'sold');
   const l = (await call('A', 'GET', `/leads/${lead.id}`)).data; assert.equal(l.stage, 'sold'); assert.match(l.activities.at(-1).summary, /→ sold/);
-  const events = repositories.eventsForTest('A').slice(count); assert.equal(events.length, 17); assert.equal(events.filter(e => e.type === 'gl-account.created').length, 13); assert.deepEqual(events.filter(e => e.type !== 'gl-account.created').map(e => e.type).sort(), ['deal.updated', 'journal-entry.created', 'lead.updated', 'vehicle.updated']); assert.ok(events.every(e => e.actorId === 'userA'));
+  const events = repositories.eventsForTest('A').slice(count); assert.equal(events.length, 24); assert.equal(events.filter(e => e.type === 'gl-account.created').length, 20); assert.deepEqual(events.filter(e => e.type !== 'gl-account.created').map(e => e.type).sort(), ['deal.updated', 'journal-entry.created', 'lead.updated', 'vehicle.updated']); assert.ok(events.every(e => e.actorId === 'userA'));
   assert.equal((await call('A', 'PUT', `/deals/${d.id}`, {version: 3, status: 'dead'})).status, 400);
   assert.equal((await call('A', 'DELETE', `/vehicles/${v.id}`, {version: 2})).status, 409);
 });

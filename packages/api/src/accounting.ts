@@ -1,6 +1,6 @@
 import { accountingLock, treasury } from './treasury.js';
 import { randomUUID } from 'node:crypto';
-import { accountTypes, commissionFor, debitNormal, defaultAccounts, pencilMath, type AccountBalance, type DealView, type GlAccount, type JournalEntry, type JournalLine, type Principal } from '@freedms/shared';
+import { accountDepartment, departments, accountTypes, commissionFor, debitNormal, defaultAccounts, pencilMath, type AccountBalance, type DealView, type GlAccount, type JournalEntry, type JournalLine, type Principal } from '@freedms/shared';
 import { requireWrite } from './auth.js';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
@@ -9,7 +9,7 @@ import { invalid, onlyKeys, text, version } from './validation.js';
 import { dateRange, salesReport } from './reports.js';
 import type { CrmWrite, TenantRepository } from './repository.js';
 const base = (tenantId: string, now: Date, id: string = randomUUID()) => ({id, tenantId, version: 1, createdAt: now.toISOString(), updatedAt: now.toISOString()});
-function write(record: GlAccount | JournalEntry, principal: Principal, expectedVersion = 0): CrmWrite {
+export function write(record: GlAccount | JournalEntry, principal: Principal, expectedVersion = 0): CrmWrite {
   return {record, expectedVersion, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version,
     type: record.kind === 'journal-entry' ? 'journal-entry.created' : expectedVersion ? 'gl-account.updated' : 'gl-account.created', occurredAt: record.updatedAt, deliveryStatus: 'pending'}};
 }
@@ -72,13 +72,13 @@ export function accountBalances(accounts: GlAccount[], entries: JournalEntry[]):
 export async function accounting(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date) {
   const path = request.path.replace(/\/$/, ''), method = request.method.toUpperCase(), q = request.query ?? {};
   if (/^\/accounting\/(ap|ar|cash|reconciliations)(\/|$)/.test(path)) return treasury(request, principal, repo, now);
-  const match = /^\/accounting\/(accounts|journal|balances|trial-balance|commissions|deals)(?:\/([^/]+))?(\/reverse)?$/.exec(path);
+  const match = /^\/accounting\/(accounts|journal|balances|trial-balance|departmental|commissions|deals)(?:\/([^/]+))?(\/reverse)?$/.exec(path);
   if (!match) throw missing();
   const [, section, rawId, reverse] = match, id = rawId ? requireId(rawId) : undefined;
   const methods = section === 'accounts' && !reverse ? (id ? ['PUT'] : ['GET', 'POST']) : section === 'journal' ? (id ? reverse ? ['POST'] : [] : reverse ? [] : ['GET']) : !reverse && (section === 'deals' ? !!id : !id) ? ['GET'] : [];
   if (!methods.includes(method)) throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
   if (method !== 'GET') requireWrite(principal, method);
-  onlyKeys(q, method === 'GET' && ['journal', 'trial-balance', 'commissions'].includes(section) ? section === 'journal' ? ['from', 'to', 'accountId', 'dealId'] : ['from', 'to'] : []);
+  onlyKeys(q, method === 'GET' && ['journal', 'trial-balance', 'departmental', 'commissions'].includes(section) ? section === 'journal' ? ['from', 'to', 'accountId', 'dealId', 'repairOrderId', 'partsSaleId'] : ['from', 'to'] : []);
   const range = dateRange({from: q.from, to: q.to});
   const accounts = await ensureDefaultAccounts(repo, principal, now);
   if (section === 'accounts') {
@@ -102,11 +102,22 @@ export async function accounting(request: ApiRequest, principal: Principal, repo
     onlyKeys(parseBody(request.body ?? '{}'), []);
     const original = all.find(e => e.id === id); if (!original) throw missing();
     if (original.source === 'reversal' || reversed.has(id)) throw conflict();
-    const record: JournalEntry = {...base(principal.tenantId, now, `reversal-${id}`), kind: 'journal-entry', source: 'reversal', date: now.toISOString(), dealId: original.dealId, memo: `Reversal of ${original.memo}`, lines: original.lines.map(l => ({...l, debit: l.credit, credit: l.debit, explanation: `Reversal: ${l.explanation}`})), reversesEntryId: id, reversedByEntryId: null};
+    const record: JournalEntry = {...base(principal.tenantId, now, `reversal-${id}`), kind: 'journal-entry', source: 'reversal', date: now.toISOString(), dealId: original.dealId, repairOrderId: original.repairOrderId, partsSaleId: original.partsSaleId, memo: `Reversal of ${original.memo}`, lines: original.lines.map(l => ({...l, debit: l.credit, credit: l.debit, explanation: `Reversal: ${l.explanation}`})), reversesEntryId: id, reversedByEntryId: null};
     assertBalanced(record.lines); await repo.crmWrite([lock!, write(record, principal)]); return response(201, {data: record});
   }
   const period = entries.filter(e => (!range.from || e.date.slice(0, 10) >= range.from) && (!range.to || e.date.slice(0, 10) <= range.to));
-  if (section === 'journal') return response(200, {data: period.filter(e => (!q.accountId || e.lines.some(l => l.accountId === q.accountId)) && (!q.dealId || e.dealId === q.dealId))});
+  if (section === 'journal') return response(200, {data: period.filter(e => (!q.accountId || e.lines.some(l => l.accountId === q.accountId)) && (!q.dealId || e.dealId === q.dealId) && (!q.repairOrderId || e.repairOrderId === q.repairOrderId) && (!q.partsSaleId || e.partsSaleId === q.partsSaleId))});
+  if (section === 'departmental') {
+    const balances = accountBalances(accounts, period).filter(r => ['income', 'expense'].includes(r.type) && (r.debit || r.credit));
+    const groups = departments.map(department => {
+      const rows = balances.filter(r => accountDepartment(r.code) === department);
+      const income = rows.filter(r => r.type === 'income').reduce((s,r) => s+r.balance,0);
+      const expenses = rows.filter(r => r.type === 'expense').reduce((s,r) => s+r.balance,0);
+      return {department, rows, income, expenses, grossProfit: income-expenses};
+    });
+    const totals = groups.reduce((s,g) => ({income:s.income+g.income, expenses:s.expenses+g.expenses, grossProfit:s.grossProfit+g.grossProfit}), {income:0, expenses:0, grossProfit:0});
+    return response(200, {data:{...range, departments:groups, totals}});
+  }
   if (section === 'balances' || section === 'trial-balance') {
     const rows = accountBalances(accounts, section === 'balances' ? entries : period).filter(r => section === 'balances' || r.debit || r.credit);
     const debit = rows.reduce((s, r) => s + r.debit, 0), credit = rows.reduce((s, r) => s + r.credit, 0), totals = {debit, credit, balanced: debit === credit};

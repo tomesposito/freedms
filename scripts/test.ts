@@ -45,3 +45,5 @@ import '../packages/api/test/parts.test.js';
 import '../packages/web/test/parts.test.js';
 
 import '../packages/web/test/sidebar.test.js';
+
+import '../packages/api/test/fixed-ops.test.js';

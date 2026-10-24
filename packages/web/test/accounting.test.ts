@@ -19,3 +19,12 @@ test('Accounting renderers escape names, memos, explanations and show balances, 
   const html = commissionsHtml({...commissions, rows: [{dealId: 'd', soldDate: '', buyer: '<script>x</script>', vehicle: '<img>', frontGross: 100, commission: 25}]});
   assert.doesNotMatch(html, /<script|<img/); assert.match(html, /\$0\.25/);
 });
+
+test('Departmental statements render totals and escaped account names; fixed ops journal links identify sources', async () => {
+  const { departmentalHtml } = await import('../src/accounting.js');
+  const data = {from:null,to:null,departments:[{department:'service' as const,income:35682,expenses:1350,grossProfit:34332,rows:[{...balance,type:'income' as const}]}],totals:{income:35682,expenses:1350,grossProfit:34332}};
+  const html=departmentalHtml(data); assert.match(html,/Service/);assert.match(html,/Total gross profit \$343\.32/);assert.match(html,/&lt;img/);assert.doesNotMatch(html,/<img/);
+  assert.match(departmentalHtml({...data,departments:[]}),/No income or expense entries/);
+  const journal=journalHtml([{...entry,dealId:null,repairOrderId:'ro/1',source:'service-posting'},{...entry,dealId:null,partsSaleId:'<sale>',source:'parts-posting',reversed:true}]);
+  assert.match(journal,/#\/service\/repair-orders\/ro%2F1/);assert.match(journal,/#\/parts/);assert.match(journal,/Counter sale &lt;sale&gt;/);assert.match(journal,/Reversed/);
+});

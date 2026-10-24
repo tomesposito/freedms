@@ -1,3 +1,4 @@
+import { reconcilePosting } from './fixed-ops.js';
 import { reconcileStock, negativeOverride } from './parts.js';
 import { randomUUID } from 'node:crypto';
 import { appointmentStatuses, repairOrderPayTypes, repairOrderStatuses, repairOrderTotals, type ServiceAppointment, type RepairOrder, type RepairOrderLineItem, type Principal, type ServiceBoardDay } from '@freedms/shared';
@@ -97,6 +98,9 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
       payType: choice(merged.payType, repairOrderPayTypes, 'pay type'), status: old ? choice(merged.status, repairOrderStatuses, 'status') : 'open', lineItems: lineItems(merged.lineItems === undefined ? [] : merged.lineItems)};
   }
   const stockWrites = record.kind === 'repair-order' ? await reconcileStock(repo, principal, time, old?.kind === 'repair-order' ? old : undefined, record, negativeOverride(b.allowNegativeStock)) : [];
+  const journalWrites = record.kind === 'repair-order' ? await reconcilePosting(repo, principal, now, old?.kind === 'repair-order' ? old : undefined, record) : [];
   await repo.crmWrite([...stockWrites, {record, expectedVersion: expected, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: `${record.kind}.${old ? 'updated' : 'created'}`, occurredAt: time, deliveryStatus: 'pending'}}]);
+  // RO + stock can consume all ten writes; validated journal entries follow immediately.
+  if (journalWrites.length) await repo.crmWrite(journalWrites);
   return response(old ? 200 : 201, {data: record.kind === 'repair-order' ? view(record) : record});
 }

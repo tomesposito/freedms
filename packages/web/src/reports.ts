@@ -1,5 +1,5 @@
 import { bindCustomReports, customReportsHtml } from './custom-reports';
-import type { InventoryReport, LeadReport, SalesReport, TurnReport, FiReport, SavedReport } from '@freedms/shared';
+import type { FixedOpsReport, InventoryReport, LeadReport, SalesReport, TurnReport, FiReport, SavedReport } from '@freedms/shared';
 import { currency, escapeHtml as e } from './format';
 import type { UI } from './desking';
 const table = (headers: string[], rows: (string | number)[][]) => `<div class="table-wrap"><table><thead><tr>${headers.map(h => `<th>${e(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${e(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
@@ -16,7 +16,7 @@ export async function reportsRoute(ui: UI & {download: (path: string, filename: 
     document.querySelector('#clear-range')!.addEventListener('click', () => { from = ''; to = ''; ui.refresh(); });
   };
   try {
-    const [inventory, sales, leads, turn, fi, saved] = await Promise.all([ui.api<InventoryReport>('/reports/inventory'), ui.api<SalesReport>(`/reports/sales${query}`), ui.api<LeadReport>('/reports/leads'), ui.api<TurnReport>(`/reports/turn${query}`), ui.api<FiReport>(`/reports/fi${query}`), ui.api<SavedReport[]>('/reports/saved')]);
+    const [inventory, sales, leads, turn, fi, saved, fixed] = await Promise.all([ui.api<InventoryReport>('/reports/inventory'), ui.api<SalesReport>(`/reports/sales${query}`), ui.api<LeadReport>('/reports/leads'), ui.api<TurnReport>(`/reports/turn${query}`), ui.api<FiReport>(`/reports/fi${query}`), ui.api<SavedReport[]>('/reports/saved'), ui.api<FixedOpsReport>(`/reports/fixed-ops${query}`)]);
     if (!ui.current()) return;
     ui.shell(`${controls}<p class="muted">Sales, accounting, turn and F&I range (inclusive, UTC): ${e(sales.from ?? 'Beginning')} to ${e(sales.to ?? 'present')} ${!sales.from && !sales.to ? '· All time' : ''}</p>
       <section class="card"><div class="heading"><h2>Inventory</h2>${exportButton('inventory')}</div>
@@ -27,7 +27,7 @@ export async function reportsRoute(ui: UI & {download: (path: string, filename: 
       <section class="card"><div class="heading"><h2>F&I metrics</h2>${exportButton('fi')}</div><p>Sold deals in the selected range · Accepted products on the working pencil only</p>${table(['Deals sold', 'Deals with F&I', 'Penetration', 'F&I gross per deal', 'Total retail', 'Total cost', 'Total gross'], [[fi.dealsSold, fi.dealsWithFi, (fi.penetrationBps / 100).toFixed(1) + '%', ...[fi.fiGrossPerDeal, fi.totalFiRetail, fi.totalFiCost, fi.totalFiGross].map(currency)]])}${fi.perProduct.length ? table(['Product ID', 'Product', 'Category', 'Deals', 'Units', 'Retail', 'Cost', 'Gross'], fi.perProduct.map(p => [p.productId, p.name, p.category, p.deals, p.units, ...[p.retail, p.cost, p.gross].map(currency)])) : '<p class="empty">No accepted F&I products on sold deals in this range.</p>'}</section>
       <section class="card"><div class="heading"><h2>Sales</h2>${exportButton('sales')}</div><div class="metrics report-metrics">${[['Deals sold', String(sales.totals.dealsSold)], ['Total front gross', currency(sales.totals.totalFrontGross)], ['Total F&I gross', currency(sales.totals.totalFiGross)], ['Average gross', currency(sales.totals.averageGross)]].map(([label, value]) => `<div><span>${e(label)}</span><strong>${e(value)}</strong></div>`).join('')}</div>
       ${sales.rows.length ? table(['Sold date (UTC)', 'Deal', 'Buyer', 'Vehicle', 'Selling price', 'Front gross', 'F&I gross'], sales.rows.map(r => [r.soldDate, r.dealId, r.buyer, r.vehicle, currency(r.price), currency(r.frontGross), currency(r.fiGross)])) : '<p class="empty">No deals sold in this range.</p>'}</section>
-      <section class="card"><div class="heading"><div><h2>Lead pipeline</h2><p>Current snapshot · ${e(leads.total)} total leads · Not date-filtered</p></div>${exportButton('leads')}</div>${!leads.total ? '<p>No leads yet.</p>' : ''}<div class="detail-grid">${table(['Stage', 'Count'], leads.byStage.map(r => [r.stage, r.count]))}${table(['Source', 'Count'], leads.bySource.map(r => [r.source, r.count]))}</div></section>
+      ${fixedOpsHtml(fixed)}<section class="card"><div class="heading"><div><h2>Lead pipeline</h2><p>Current snapshot · ${e(leads.total)} total leads · Not date-filtered</p></div>${exportButton('leads')}</div>${!leads.total ? '<p>No leads yet.</p>' : ''}<div class="detail-grid">${table(['Stage', 'Count'], leads.byStage.map(r => [r.stage, r.count]))}${table(['Source', 'Count'], leads.bySource.map(r => [r.source, r.count]))}</div></section>
       <section class="card"><h2>Accounting export</h2><p>This CSV is the QuickBooks bridge until the full general ledger lands.</p>${exportButton('accounting', 'Download accounting CSV')}</section>${customReportsHtml}`);
     bindRange();
     bindCustomReports(ui, saved);
@@ -38,4 +38,8 @@ export async function reportsRoute(ui: UI & {download: (path: string, filename: 
       finally { button.disabled = false; }
     }));
   } catch (error) { if (ui.current()) { ui.shell(controls); bindRange(); ui.flash(error); } }
+}
+
+export function fixedOpsHtml(r: FixedOpsReport): string {
+  return `<section class="card"><h2>Fixed operations</h2><p>Currently finalized ROs and counter sales by creation date in range (UTC). Parts gross uses current stocked-part cost; free-text cost is zero. No labor cost is tracked.</p>${!r.roCount && !r.counterSaleCount ? '<p class="empty">No finalized repair orders or counter sales in this range.</p>' : ''}${table(['Repair orders','Labor total','RO parts total','RO total','Counter sales','Counter total','Parts cost','Labor gross','Parts gross'], [[r.roCount,currency(r.laborCents),currency(r.partsCents),currency(r.roTotalCents),r.counterSaleCount,currency(r.counterTotalCents),currency(r.partsCostCents),currency(r.laborGrossCents),currency(r.partsGrossCents)]])}</section>`;
 }

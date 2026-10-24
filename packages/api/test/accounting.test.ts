@@ -31,8 +31,8 @@ test('Accounting default chart, CRUD, duplicate conflicts, validation, tenant is
   const {call, handler, repositories} = await setup();
   assert.deepEqual(await repositories.forTenant('A').crmList('gl-account'), []);
   const defaults = (await call('A')).data as GlAccount[];
-  assert.equal(defaults.length, 13); assert.deepEqual(defaults.map(a => a.code), defaults.map(a => a.code).sort());
-  assert.equal((await call('A')).data.length, 13);
+  assert.equal(defaults.length, 20); assert.deepEqual(defaults.map(a => a.code), defaults.map(a => a.code).sort());
+  assert.equal((await call('A')).data.length, 20);
   const input = {code: '9000', name: 'Custom <account>', type: 'expense'};
   const created = await call('A', 'POST', '/accounting/accounts', input); assert.equal(created.status, 201); const a = created.data as GlAccount;
   assert.equal(a.active, true); assert.equal(a.system, false);
@@ -41,7 +41,7 @@ test('Accounting default chart, CRUD, duplicate conflicts, validation, tenant is
   assert.equal((await call('A', 'PUT', `/accounting/accounts/${a.id}`, {version: 1, name: 'stale', active: true})).status, 409);
   for (const extra of [{code: '9001'}, {type: 'income'}]) assert.equal((await call('A', 'PUT', `/accounting/accounts/${a.id}`, {version: 2, name: 'Bad', active: true, ...extra})).status, 400);
   for (const fields of [{code: 'abc'}, {code: '12'}, {code: '12345678901'}, {name: ''}, {name: 'x'.repeat(121)}, {type: 'bad'}, {active: 'yes'}, {tenantId: 'B'}]) assert.equal((await call('A', 'POST', '/accounting/accounts', {...input, code: '9001', ...fields})).status, 400);
-  assert.equal((await call('B')).data.length, 13);
+  assert.equal((await call('B')).data.length, 20);
   assert.equal(await repositories.forTenant('B').crmGet('gl-account', a.id), undefined);
   assert.equal((await call('B', 'PUT', `/accounting/accounts/${a.id}`, {version: 1, name: 'Bad', active: true})).status, 404);
   assert.equal((await call('A', 'PUT', '/accounting/accounts/missing', {version: 1, name: 'Bad', active: true})).status, 404);
@@ -86,7 +86,7 @@ test('Accounting exact posting, trial balance sales tie-out, commissions, snapsh
   await assert.rejects(repositories.forTenant('B').crmWrite([{record: entry, event: entryEvent, expectedVersion: 0}]), /scope/);
   await assert.rejects(repositories.forTenant('A').crmWrite([{record: {...entry, version: 2}, event: {...entryEvent, aggregateVersion: 2}, expectedVersion: 1}]), /immutable/);
   const balances = (await call('A', 'GET', '/accounting/balances')).data;
-  assert.equal(balances.length, 13); assert.equal(balances.find((b: GlAccount) => b.code === '1000').balance, 0);
+  assert.equal(balances.length, 20); assert.equal(balances.find((b: GlAccount) => b.code === '1000').balance, 0);
   for (const row of balances) { assert.equal(row.debit, entry.lines.filter(l => l.accountId === row.accountId).reduce((s, l) => s + l.debit, 0)); assert.equal(row.credit, entry.lines.filter(l => l.accountId === row.accountId).reduce((s, l) => s + l.credit, 0)); }
   assert.deepEqual((await call('A', 'GET', '/accounting/journal', undefined, {accountId: 'foreign'})).data, []);
   assert.equal((await call('A', 'GET', '/accounting/journal', undefined, {accountId: 'account-1200', dealId: d.id})).data.length, 1);
@@ -143,7 +143,7 @@ test('Accounting cash, overpayment, dead deals, commission rounding and legacy s
 });
 test('Concurrent lazy initialization, account uniqueness, selling and reversals remain exactly once', async () => {
   const {call, createDeal, repositories} = await setup();
-  const charts = await Promise.all([call('A'), call('A')]); assert.ok(charts.every(c => c.status === 200 && c.data.length === 13));
+  const charts = await Promise.all([call('A'), call('A')]); assert.ok(charts.every(c => c.status === 200 && c.data.length === 20));
   const creates = await Promise.all([call('A', 'POST', '/accounting/accounts', {code: '9999', name: 'One', type: 'asset'}), call('A', 'POST', '/accounting/accounts', {code: '9999', name: 'Two', type: 'asset'})]);
   assert.deepEqual(creates.map(c => c.status).sort(), [201, 409]);
   let d = await createDeal(); d = (await call('A', 'PUT', `/deals/${d.id}`, {version: 1, status: 'approved'})).data;
@@ -157,7 +157,7 @@ test('Sale seeds defaults without visiting accounting; invalid posting fails clo
   const d = await createDeal();
   assert.equal((await repositories.forTenant('A').crmList('gl-account')).length, 0);
   await sell(call, d);
-  assert.equal((await repositories.forTenant('A').crmList('gl-account')).length, 13);
+  assert.equal((await repositories.forTenant('A').crmList('gl-account')).length, 20);
   assert.equal((await repositories.forTenant('A').crmList('journal-entry')).length, 1);
   // An extreme trade underallowance would make the specified COGS debit negative.
   // Reject before committing any deal/vehicle/lead or journal changes.

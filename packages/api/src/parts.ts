@@ -1,3 +1,5 @@
+import { ensureDefaultAccounts, write } from './accounting.js';
+import { fixedPosting } from './fixed-ops.js';
 import { randomUUID } from 'node:crypto';
 import type { Part, PartsSale, Principal, RepairOrder, OutboxEvent } from '@freedms/shared';
 import { requireWrite } from './auth.js';
@@ -66,7 +68,8 @@ export async function parts(request: ApiRequest, principal: Principal, repo: Ten
     if(customerId && !customer) throw invalid('Customer must belong to this workspace.');
     const updated=stockChange(part,-quantity,override,time), stockNegative=updated.quantityOnHand<0;
     const record: PartsSale={...base,kind:'parts-sale',partId:part.id,partNumber:part.partNumber,description:part.description,quantity,unitPriceCents,totalCents,customerId,customerName:customer?.name ?? null,stockNegative,stockWarning:stockNegative ? `Negative stock explicitly allowed for ${part.partNumber}.` : null};
-    await repo.crmWrite([{record,expectedVersion:0,event:stockEvent(principal,time,record)},{record:updated,expectedVersion:part.version,event:stockEvent(principal,time,updated,record.id)}]);
+    const entry = fixedPosting(record, await ensureDefaultAccounts(repo, principal, now), quantity * part.costCents, now);
+    await repo.crmWrite([...(entry ? [write(entry, principal)] : []), {record,expectedVersion:0,event:stockEvent(principal,time,record)},{record:updated,expectedVersion:part.version,event:stockEvent(principal,time,updated,record.id)}]);
     return response(201,{data:record});
   }
   onlyKeys(b,['partNumber','description','binLocation','costCents','retailPriceCents','quantityOnHand','reorderPoint',...(id ? ['version'] : [])]);
