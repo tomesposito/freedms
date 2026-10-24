@@ -43,10 +43,6 @@ Real captures from the local app on the current build — the same screens the
 verification tours use. The sample dealership data is local-only; the app itself
 always starts empty.
 
-**Compliance** — dealer-recorded checks and jacket warnings (capture pending).
-
-![Compliance log — capture pending](docs/screenshots/compliance.png)
-
 **Inventory** — every vehicle with aging, cost, and status.
 
 ![Inventory list](docs/screenshots/inventory-list.png)
@@ -85,6 +81,19 @@ payoff quotes sit on the same page.
 completeness checklist, and any accepted F&I products.
 
 ![Deal jacket](docs/screenshots/deal-jacket.png)
+
+**Compliance** — the per-deal Red Flags checklist: dealer attestations for
+document inspection, address discrepancy, and privacy notice, a dealer-recorded
+OFAC/identity check, and consent derived from the customer record. Incomplete
+items are plain warnings — nothing blocks the deal. freeDMS did not run or
+verify any check against an external database.
+
+![Deal compliance checklist](docs/screenshots/compliance.png)
+
+**Compliance log** — every dealer-recorded check in the workspace, searchable
+by customer, source, initials, or result.
+
+![Compliance log](docs/screenshots/compliance-log.png)
 
 **Accounting** — chart of accounts, account balances, and a trial balance
 for the period that ties to the sales report. Selling a deal posts its
