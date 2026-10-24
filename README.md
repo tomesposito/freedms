@@ -87,10 +87,22 @@ repair orders and totals.
 
 ![Service board](docs/screenshots/service-board.png)
 
-**Repair order** — line items for labor and parts with totals in cents. Parts are
-simple line items in this slice; inventory depletion arrives with the parts module.
+**Repair order** — labor, free-text parts, and stocked parts with on-hand hints.
+Completion applies stock once; reopening restores it. Negative stock requires an
+explicit override and leaves a visible warning.
 
 ![Repair order](docs/screenshots/repair-order.png)
+
+**Parts catalog** — workspace stock, bins, cost and retail prices, with reorder
+flags and a list that includes parts exactly at their reorder point.
+
+![Parts catalog and reorder list](docs/screenshots/parts-catalog.png)
+
+**Counter sales** — walk-in or customer sales with totals and atomic stock
+updates. This local example includes an explicitly overridden shortage and its
+visible warning; no vendor ordering or parts import is included.
+
+![Parts counter sales](docs/screenshots/parts-counter-sale.png)
 
 **Compliance** — the per-deal Red Flags checklist: dealer attestations for
 document inspection, address discrepancy, and privacy notice, a dealer-recorded
