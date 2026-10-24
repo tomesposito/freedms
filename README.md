@@ -47,6 +47,10 @@ always starts empty.
 
 ![Inventory list](docs/screenshots/inventory-list.png)
 
+**Slim sidebar** — an icon rail leaves more room for the workspace.
+
+![Slim sidebar](docs/screenshots/sidebar-slim.png)
+
 **Leads** — the pipeline, with assignment, stage history, and follow-ups.
 
 ![Leads list](docs/screenshots/leads-list.png)

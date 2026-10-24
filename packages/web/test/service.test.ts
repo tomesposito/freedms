@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { appointmentStatuses, appointmentStatusLabels, lineItemAmountCents, repairOrderTotals, type ServiceAppointment, type ServiceBoardDay, type RepairOrderView, type RepairOrderLineItem } from '@freedms/shared';
 import { serviceBoardHtml, repairOrderLinesHtml, serviceHistoryHtml } from '../src/service.js';
+import { sidebarNavigation } from '../src/sidebar.js';
 import { currency } from '../src/format.js';
 const items: RepairOrderLineItem[] = [{id:'l',kind:'labor',description:'<script>',laborHoursHundredths:255,laborRateCents:12345,quantity:null,unitPriceCents:null},{id:'p',kind:'parts',description:'Filter',laborHoursHundredths:null,laborRateCents:null,quantity:3,unitPriceCents:1234}];
 const ro = {id:'ro',createdAt:'2026-10-24T10:00:00Z',customerName:'<img>',concern:'<script>',status:'open',payType:'customer-pay',lineItems:items,totals:repairOrderTotals(items)} as RepairOrderView;
@@ -25,9 +26,9 @@ test('Service navigation, history sections and form route are wired into vehicle
   const read = (name:string) => readFileSync(new URL(`../src/${name}.ts`,import.meta.url),'utf8');
   const main=read('main'),crm=read('crm'),service=read('service');
   // These destinations now live in separate sidebar groups.
-  assert.match(main,/<a href="#\/deals">Deals<\/a>/);
-  assert.match(main,/<a href="#\/service">Service<\/a>/);
-  assert.match(main,/<a href="#\/accounting">Accounting<\/a>/);
+  assert.ok(sidebarNavigation(true).includes('href="#/deals" title="Deals"'));
+  assert.ok(sidebarNavigation(true).includes('href="#/service" title="Service"'));
+  assert.ok(sidebarNavigation(true).includes('href="#/accounting" title="Accounting"'));
   for (const [source,scope] of [[main,'vehicleId'],[crm,'customerId']]) { assert.ok(source.includes(`/service/repair-orders?${scope}=`)); assert.match(source,/<h2>Service history<\/h2>\$\{serviceHistoryHtml\(serviceHistory\)\}/); }
   assert.match(main,/serviceRoute\(parts/); assert.match(service,/repair-orders\/new\/\$\{encodeURIComponent\(a.id\)\}/); assert.doesNotMatch(service,/disabled/);
 });

@@ -1,3 +1,4 @@
+import { icon, sidebarNavigation, readSidebarPreference, writeSidebarPreference } from './sidebar';
 import { partsRoute } from './parts';
 import { serviceRoute, serviceHistoryHtml } from './service';
 import type { RepairOrderView } from '@freedms/shared';
@@ -52,25 +53,30 @@ function flash(error: unknown): void { const el = document.querySelector<HTMLEle
 function shell(content: string): void {
   const section = location.hash.replace(/^#\//, '').split('/')[0];
   const active = ['', 'new', 'import', 'vehicles'].includes(section) ? '' : section;
-  const group = (label: string, links: string) => `<div class="nav-group"><p class="nav-label">${label}</p>${links}</div>`;
-  app.innerHTML = `<aside class="sidebar">
-    <div class="sidebar-heading"><a class="brand" href="#/">free<span>DMS</span></a><button type="button" class="menu-toggle" aria-expanded="false" aria-controls="nav-panel">Menu</button></div>
+  const slim = readSidebarPreference();
+  app.innerHTML = `<aside class="sidebar${slim ? ' is-slim' : ''}">
+    <div class="sidebar-heading"><a class="brand" href="#/" aria-label="freeDMS" title="freeDMS"><span class="brand-mark" aria-hidden="true">f</span><span class="brand-name">free<span>DMS</span></span></a><button type="button" class="menu-toggle" aria-expanded="false" aria-controls="nav-panel">Menu</button></div>
     <div id="nav-panel" class="nav-panel">
       <div class="workspace">${e(session?.tenant?.name || 'Your dealership')}</div>
       <nav aria-label="Main navigation">
-        ${group('Sales', '<a href="#/">Inventory</a><a href="#/leads">Leads</a><a href="#/deals">Deals</a>')}
-        ${group('Operations', '<a href="#/service">Service</a><a href="#/parts">Parts</a>')}
-        ${group('Back office', '<a href="#/accounting">Accounting</a><a href="#/fi-products">F&I</a><a href="#/documents">Documents</a><a href="#/compliance">Compliance</a><a href="#/reports">Reports</a>')}
-        ${group('Connect', '<a href="#/feeds">Feeds</a><a href="#/webhooks">Webhooks</a>')}
-        ${group('Workspace', '<a href="#/account">Account</a>' + (session?.principal.role === 'admin' ? '<a href="#/users">Users</a>' : ''))}
+        ${sidebarNavigation(session?.principal.role === 'admin')}
       </nav>
-      <div class="sidebar-footer">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet">Sign out</button></div>
+      <div class="sidebar-footer">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button type="button" id="sidebar-toggle" class="quiet" aria-pressed="${slim}" aria-label="${slim ? 'Expand sidebar' : 'Collapse sidebar'}" title="${slim ? 'Expand sidebar' : 'Collapse sidebar'}">${icon('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18m7-13-4 4 4 4"/>')}<span class="nav-text">Slim mode</span></button><button id="signout" class="quiet" title="Sign out" aria-label="Sign out">${icon('<path d="M9 3H3v18h6m6-14 5 5-5 5m-7-5h12"/>')}<span class="nav-text">Sign out</span></button></div>
     </div>
   </aside><main class="app-main"><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main>`;
   app.querySelectorAll<HTMLAnchorElement>('.sidebar nav a').forEach(anchor => {
     if (anchor.getAttribute('href') === `#/${active}`) anchor.setAttribute('aria-current', 'page');
   });
   const sidebar = app.querySelector<HTMLElement>('.sidebar')!;
+  const slimToggle = app.querySelector<HTMLButtonElement>('#sidebar-toggle')!;
+  slimToggle.addEventListener('click', () => {
+    const slim = sidebar.classList.toggle('is-slim');
+    writeSidebarPreference(slim);
+    slimToggle.setAttribute('aria-pressed', String(slim));
+    const label = slim ? 'Expand sidebar' : 'Collapse sidebar';
+    slimToggle.setAttribute('aria-label', label);
+    slimToggle.title = label;
+  });
   const toggle = app.querySelector<HTMLButtonElement>('.menu-toggle')!;
   const setMenu = (open: boolean) => {
     sidebar.classList.toggle('is-open', open);
