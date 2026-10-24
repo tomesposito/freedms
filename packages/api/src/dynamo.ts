@@ -96,7 +96,16 @@ export class DynamoRepositories implements RepositoryFactory {
       crmWrite: async (writes, vehicles = []) => {
         assertVehicleWrites(tenantId, vehicles, writes);
         assertCrmWrites(tenantId, writes);
-        await transact([...vehicles.flatMap(({record, expectedVersion, event}) => [put(`VEHICLE#${requireId(record.id)}`, record, '#d.#v = :v', expectedVersion), eventPut(event)]), ...writes.flatMap(({record, expectedVersion, event}) => [
+        // Reserve part numbers in the same transaction, including concurrent creates/renames.
+        const reservations: NonNullable<TransactWriteCommandInput['TransactItems']> = [];
+        for (const {record, expectedVersion} of writes) if (record.kind === 'part') {
+          const old = expectedVersion ? await get<Extract<CrmEntity, {kind: 'part'}>>(`PART#${record.id}`) : undefined;
+          if (!old || old.partNumber !== record.partNumber) {
+            reservations.push(put(`PART-NUMBER#${record.partNumber}`, {id:record.id}));
+            if (old) reservations.push({Delete:{TableName:this.table,Key:key(`PART-NUMBER#${old.partNumber}`),ConditionExpression:'#d.#id = :id',ExpressionAttributeNames:{'#d':'data','#id':'id'},ExpressionAttributeValues:{':id':record.id}}});
+          }
+        }
+        await transact([...reservations, ...vehicles.flatMap(({record, expectedVersion, event}) => [put(`VEHICLE#${requireId(record.id)}`, record, '#d.#v = :v', expectedVersion), eventPut(event)]), ...writes.flatMap(({record, expectedVersion, event}) => [
           put(`${record.kind.toUpperCase()}#${requireId(record.id)}`, record,
             expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined), eventPut(event)])]);
       },

@@ -14,7 +14,7 @@ export interface ServiceAppointment extends CrmRecord {
   scheduledStart: string; scheduledEnd: string; concern: string; status: AppointmentStatus;
 }
 export interface RepairOrderLineItem {
-  id: string; kind: 'labor' | 'parts'; description: string;
+  partId?: string | null; id: string; kind: 'labor' | 'parts'; description: string;
   laborHoursHundredths: number | null; laborRateCents: number | null;
   quantity: number | null; unitPriceCents: number | null;
 }
@@ -28,6 +28,7 @@ export function repairOrderTotals(items: RepairOrderLineItem[]): RepairOrderTota
   return {laborCents, partsCents, totalCents: laborCents + partsCents};
 }
 export interface RepairOrder extends CrmRecord {
+  stockApplied?: boolean; stockWarning?: string | null;
   kind: 'repair-order'; appointmentId: string | null; customerId: string; customerName: string;
   vehicleId: string | null; vehicleDescription: string; payType: RepairOrderPayType;
   status: RepairOrderStatus; advisorId: string | null; concern: string; lineItems: RepairOrderLineItem[];

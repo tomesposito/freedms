@@ -60,6 +60,13 @@ export class MemoryRepositories implements RepositoryFactory {
           if (s.vehicles.get(record.id)?.version !== expectedVersion) throw conflict();
         }
         assertCrmWrites(tenantId, writes);
+        const finalRows = new Map(s.crm);
+        for (const {record} of writes) finalRows.set(`${record.kind}#${record.id}`, record);
+        const numbers = new Set<string>();
+        for (const record of finalRows.values()) if (record.kind === 'part') {
+          if (numbers.has(record.partNumber)) throw conflict();
+          numbers.add(record.partNumber);
+        }
         for (const {record, expectedVersion, event} of writes) {
           requireId(record.id); check(event);
           if ((s.crm.get(`${record.kind}#${record.id}`)?.version ?? 0) !== expectedVersion) throw conflict();

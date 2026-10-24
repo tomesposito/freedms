@@ -1,3 +1,4 @@
+import { reconcileStock, negativeOverride } from './parts.js';
 import { randomUUID } from 'node:crypto';
 import { appointmentStatuses, repairOrderPayTypes, repairOrderStatuses, repairOrderTotals, type ServiceAppointment, type RepairOrder, type RepairOrderLineItem, type Principal, type ServiceBoardDay } from '@freedms/shared';
 import { requireWrite } from './auth.js';
@@ -17,16 +18,17 @@ function lineItems(value: unknown): RepairOrderLineItem[] {
   const ids = new Set<string>();
   const count = (v: unknown): number => { if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 100000) throw invalid('Hours / quantity must be an integer from 1 to 100000.'); return v; };
   const items = value.map(value => {
-    const b = object(value); onlyKeys(b, ['id','kind','description','laborHoursHundredths','laborRateCents','quantity','unitPriceCents']);
+    const b = object(value); onlyKeys(b, ['partId','id','kind','description','laborHoursHundredths','laborRateCents','quantity','unitPriceCents']);
     const id = b.id === undefined ? randomUUID() : text(b.id, 'Line id', 64);
     if (ids.has(id)) throw invalid('Line ids must be unique.'); ids.add(id);
     const kind = choice(b.kind, ['labor','parts'], 'line kind'), description = text(b.description, 'Description', 200);
     if (kind === 'labor') {
+      if (b.partId != null) throw invalid('Labor cannot reference a stocked part.');
       if (b.quantity !== null || b.unitPriceCents !== null) throw invalid('Labor must have null parts fields.');
       return {id, kind, description, laborHoursHundredths: count(b.laborHoursHundredths), laborRateCents: money(b.laborRateCents, 'Labor rate'), quantity: null, unitPriceCents: null};
     }
     if (b.laborHoursHundredths !== null || b.laborRateCents !== null) throw invalid('Parts must have null labor fields.');
-    return {id, kind, description, laborHoursHundredths: null, laborRateCents: null, quantity: count(b.quantity), unitPriceCents: money(b.unitPriceCents, 'Unit price')};
+    return {id, kind, description, partId: b.partId == null ? null : requireId(b.partId), laborHoursHundredths: null, laborRateCents: null, quantity: count(b.quantity), unitPriceCents: money(b.unitPriceCents, 'Unit price')};
   });
   if (!Number.isSafeInteger(repairOrderTotals(items).totalCents)) throw invalid('Repair order total is too large.');
   return items;
@@ -73,7 +75,7 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
   }
   requireWrite(principal, method);
   const b = parseBody(request.body);
-  onlyKeys(b, ['vehicleId','vehicleDescription','advisorId','concern', ...(appt ? ['scheduledStart','scheduledEnd', 'status'] : ['payType','lineItems', ...(old ? ['status'] : ['appointmentId'])]), ...(old ? ['version'] : ['customerId'])]);
+  onlyKeys(b, ['vehicleId','vehicleDescription','advisorId','concern', ...(appt ? ['scheduledStart','scheduledEnd', 'status'] : ['payType','lineItems', ...(old ? ['status','allowNegativeStock'] : ['appointmentId'])]), ...(old ? ['version'] : ['customerId'])]);
   const expected = old ? version(b.version) : 0; if (old && expected !== old.version) throw conflict();
   let appointment: ServiceAppointment | undefined;
   if (!appt && !old && b.appointmentId != null) {
@@ -94,6 +96,7 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
     record = {...base, kind: 'repair-order', appointmentId: old?.kind === 'repair-order' ? old.appointmentId : appointment?.id ?? null,
       payType: choice(merged.payType, repairOrderPayTypes, 'pay type'), status: old ? choice(merged.status, repairOrderStatuses, 'status') : 'open', lineItems: lineItems(merged.lineItems === undefined ? [] : merged.lineItems)};
   }
-  await repo.crmWrite([{record, expectedVersion: expected, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: `${record.kind}.${old ? 'updated' : 'created'}`, occurredAt: time, deliveryStatus: 'pending'}}]);
+  const stockWrites = record.kind === 'repair-order' ? await reconcileStock(repo, principal, time, old?.kind === 'repair-order' ? old : undefined, record, negativeOverride(b.allowNegativeStock)) : [];
+  await repo.crmWrite([...stockWrites, {record, expectedVersion: expected, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: `${record.kind}.${old ? 'updated' : 'created'}`, occurredAt: time, deliveryStatus: 'pending'}}]);
   return response(old ? 200 : 201, {data: record.kind === 'repair-order' ? view(record) : record});
 }

@@ -1,4 +1,4 @@
-import { appointmentStatuses, appointmentStatusLabels, repairOrderPayTypes, repairOrderPayTypeLabels, repairOrderStatuses, repairOrderStatusLabels, repairOrderTotals, lineItemAmountCents, type ServiceBoardDay, type ServiceAppointment, type RepairOrderView, type RepairOrderLineItem, type User, type Customer, type VehicleView } from '@freedms/shared';
+import { appointmentStatuses, appointmentStatusLabels, repairOrderPayTypes, repairOrderPayTypeLabels, repairOrderStatuses, repairOrderStatusLabels, repairOrderTotals, lineItemAmountCents, type Part, type ServiceBoardDay, type ServiceAppointment, type RepairOrderView, type RepairOrderLineItem, type User, type Customer, type VehicleView } from '@freedms/shared';
 import { escapeHtml as e, currency, cents } from './format';
 import type { UI } from './desking';
 const link = (r: RepairOrderView) => `#/service/repair-orders/${encodeURIComponent(r.id)}`;
@@ -16,8 +16,8 @@ const input = (label: string, name: string, value: unknown, attrs = '') => `<lab
 const select = (label: string, name: string, values: {id:string; name:string}[], selected: string | null, optional = true) => `<label>${e(label)}<select name="${e(name)}" ${optional ? '' : 'required'}>${optional ? '<option value="">Unassigned</option>' : `<option value="">Choose ${e(label.toLowerCase())}</option>`}${values.map(v => `<option value="${e(v.id)}" ${v.id === selected ? 'selected' : ''}>${e(v.name)}</option>`).join('')}</select></label>`;
 const choices = (label: string, name: string, values: readonly string[], labels: Record<string,string>, value: string) => select(label,name,values.map(id => ({id,name:labels[id]})),value,false);
 function localInput(iso?: string): string { if (!iso) return ''; const d = new Date(iso); return new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,16); }
-function rowHtml(i: RepairOrderLineItem): string {
-  return `<fieldset data-line="${e(i.id)}" data-kind="${i.kind}"><legend>${i.kind === 'labor' ? 'Labor' : 'Parts'}</legend>${input('Description','description',i.description,'required maxlength="200"')}${i.kind === 'labor' ? input('Hours','hours',(i.laborHoursHundredths! / 100).toFixed(2),'type="number" min="0.01" max="1000" step="0.01" required') + input('Rate (USD/hour)','rate',(i.laborRateCents! / 100).toFixed(2),'type="number" min="0" step="0.01" required') : input('Quantity','quantity',i.quantity,'type="number" min="1" max="100000" step="1" required') + input('Unit price (USD)','price',(i.unitPriceCents! / 100).toFixed(2),'type="number" min="0" step="0.01" required')}<button type="button" data-remove>Remove line</button></fieldset>`;
+export function rowHtml(i: RepairOrderLineItem, catalog: Part[] = []): string {
+  return `<fieldset data-line="${e(i.id)}" data-kind="${i.kind}"><legend>${i.kind === 'labor' ? 'Labor' : 'Parts'}</legend>${i.kind === 'parts' ? `<label class="stock-picker">Stocked part<select name="partId"><option value="">Free-text part</option>${catalog.map(p=>`<option value="${e(p.id)}" ${p.id===i.partId ? 'selected' : ''}>${e(p.partNumber)} · ${e(p.description)}</option>`).join('')}</select></label><p data-stock-hint>${i.partId ? `${catalog.find(p=>p.id===i.partId)?.quantityOnHand ?? 'Unknown'} on hand` : 'Free-text lines do not affect stock.'}</p>` : ''}${input('Description','description',i.description,'required maxlength="200"')}${i.kind === 'labor' ? input('Hours','hours',(i.laborHoursHundredths! / 100).toFixed(2),'type="number" min="0.01" max="1000" step="0.01" required') + input('Rate (USD/hour)','rate',(i.laborRateCents! / 100).toFixed(2),'type="number" min="0" step="0.01" required') : input('Quantity','quantity',i.quantity,'type="number" min="1" max="100000" step="1" required') + input('Unit price (USD)','price',(i.unitPriceCents! / 100).toFixed(2),'type="number" min="0" step="0.01" required')}<button type="button" data-remove>Remove line</button></fieldset>`;
 }
 export async function serviceRoute(parts: string[], ui: UI): Promise<void> {
   if (!parts[1]) {
@@ -37,22 +37,35 @@ export async function serviceRoute(parts: string[], ui: UI): Promise<void> {
   const appt = parts[1] === 'appointments';
   if (!['appointments','repair-orders'].includes(parts[1]) || !parts[2]) throw new Error('Service page not found.');
   const creating = parts[2] === 'new', base = `/service/${parts[1]}`;
-  const [customers,vehicles,users,record,appointment] = await Promise.all([
+  const [customers,vehicles,users,record,appointment,catalog] = await Promise.all([
     ui.api<Customer[]>('/customers'),ui.api<VehicleView[]>('/vehicles'),ui.api<User[]>('/users'),
     creating ? undefined : ui.api<ServiceAppointment | RepairOrderView>(`${base}/${encodeURIComponent(parts[2])}`),
-    creating && !appt && parts[3] ? ui.api<ServiceAppointment>(`/service/appointments/${encodeURIComponent(parts[3])}`) : undefined
+    creating && !appt && parts[3] ? ui.api<ServiceAppointment>(`/service/appointments/${encodeURIComponent(parts[3])}`) : undefined,
+    appt ? [] : ui.api<Part[]>('/parts')
   ]);
   if (!ui.current()) return;
   const source = record ?? appointment, ro = record?.kind === 'repair-order' ? record : undefined, a = record?.kind === 'service-appointment' ? record : undefined;
-  ui.shell(`<a href="#/service">← Service board</a><h1>${creating ? 'New' : 'Edit'} ${appt ? 'service appointment' : 'repair order'}</h1>${a ? `<p><a class="button" href="#/service/repair-orders/new/${encodeURIComponent(a.id)}">Open repair order</a></p>` : ''}${!customers.length ? '<p>Add a customer from <a href="#/leads/new">Leads</a> before scheduling service.</p>' : ''}<form id="service-form"><section class="card"><div class="form-grid">${creating && !appointment ? select('Customer','customerId',customers, null,false) : `<p>Customer: ${e(source?.customerName)}</p>`}${select('Vehicle','vehicleId',vehicles.map(v => ({id:v.id,name:`${v.year} ${v.make} ${v.model}`})),source?.vehicleId ?? null)}${input('Vehicle description','vehicleDescription',source?.vehicleDescription ?? '', 'maxlength="1000"')}${select('Advisor','advisorId',users,source?.advisorId ?? null)}${appt ? input('Start','scheduledStart',localInput(a?.scheduledStart),'type="datetime-local" required') + input('End','scheduledEnd',localInput(a?.scheduledEnd),'type="datetime-local" required') : choices('Pay type','payType',repairOrderPayTypes,repairOrderPayTypeLabels,ro?.payType ?? 'customer-pay')}${record ? appt ? choices('Status','status',appointmentStatuses,appointmentStatusLabels,a!.status) : choices('Status','status',repairOrderStatuses,repairOrderStatusLabels,ro!.status) : ''}</div><label>Concern<textarea name="concern" maxlength="2000">${e(source?.concern ?? '')}</textarea></label></section>${!appt ? `<section class="card"><h2>Line items</h2><p>Parts are simple line items; inventory depletion arrives with the parts module.</p><div id="service-lines">${(ro?.lineItems ?? []).map(rowHtml).join('')}</div><button type="button" data-add="labor">Add labor</button> <button type="button" data-add="parts">Add parts</button><div id="service-totals" aria-live="polite">${repairOrderLinesHtml(ro?.lineItems ?? [])}</div></section>` : ''}<button>Save ${appt ? 'appointment' : 'repair order'}</button></form>`);
+  ui.shell(`<a href="#/service">← Service board</a><h1>${creating ? 'New' : 'Edit'} ${appt ? 'service appointment' : 'repair order'}</h1>${a ? `<p><a class="button" href="#/service/repair-orders/new/${encodeURIComponent(a.id)}">Open repair order</a></p>` : ''}${!customers.length ? '<p>Add a customer from <a href="#/leads/new">Leads</a> before scheduling service.</p>' : ''}<form id="service-form"><section class="card"><div class="form-grid">${creating && !appointment ? select('Customer','customerId',customers, null,false) : `<p>Customer: ${e(source?.customerName)}</p>`}${select('Vehicle','vehicleId',vehicles.map(v => ({id:v.id,name:`${v.year} ${v.make} ${v.model}`})),source?.vehicleId ?? null)}${input('Vehicle description','vehicleDescription',source?.vehicleDescription ?? '', 'maxlength="1000"')}${select('Advisor','advisorId',users,source?.advisorId ?? null)}${appt ? input('Start','scheduledStart',localInput(a?.scheduledStart),'type="datetime-local" required') + input('End','scheduledEnd',localInput(a?.scheduledEnd),'type="datetime-local" required') : choices('Pay type','payType',repairOrderPayTypes,repairOrderPayTypeLabels,ro?.payType ?? 'customer-pay')}${record ? appt ? choices('Status','status',appointmentStatuses,appointmentStatusLabels,a!.status) : choices('Status','status',repairOrderStatuses,repairOrderStatusLabels,ro!.status) : ''}</div><label>Concern<textarea name="concern" maxlength="2000">${e(source?.concern ?? '')}</textarea></label></section>${!appt ? `<section class="card"><h2>Line items</h2><p>Stock applied: ${ro?.stockApplied ? 'Yes' : 'No'}</p>${ro?.stockWarning ? `<p role="alert">${e(ro.stockWarning)}</p>` : ''}<p>Stocked parts deplete on completion and restore when reopened. Free-text parts do not affect stock.</p><div id="service-lines">${(ro?.lineItems ?? []).map(i=>rowHtml(i,catalog)).join('')}</div><button type="button" data-add="labor">Add labor</button> <button type="button" data-add="parts">Add parts</button><div id="service-totals" aria-live="polite">${repairOrderLinesHtml(ro?.lineItems ?? [])}</div></section>` : ''}${ro ? '<label id="stock-override" class="stock-override" hidden><input type="checkbox" name="allowNegativeStock"> Explicitly allow negative stock</label>' : ''}<button>Save ${appt ? 'appointment' : 'repair order'}</button></form>`);
   const form = document.querySelector<HTMLFormElement>('#service-form')!;
   const readLines = (): RepairOrderLineItem[] => Array.from(form.querySelectorAll<HTMLFieldSetElement>('[data-line]')).map(row => {
     const value = (name: string) => row.querySelector<HTMLInputElement>(`[name="${name}"]`)!.value;
     const labor = row.dataset.kind === 'labor';
-    return {id:row.dataset.line!,kind:labor ? 'labor':'parts',description:value('description'),laborHoursHundredths:labor ? cents(value('hours')):null,laborRateCents:labor ? cents(value('rate')):null,quantity:labor ? null:Number(value('quantity')),unitPriceCents:labor ? null:cents(value('price'))};
+    return {partId:labor ? null:value('partId')||null,id:row.dataset.line!,kind:labor ? 'labor':'parts',description:value('description'),laborHoursHundredths:labor ? cents(value('hours')):null,laborRateCents:labor ? cents(value('rate')):null,quantity:labor ? null:Number(value('quantity')),unitPriceCents:labor ? null:cents(value('price'))};
   });
   const totals = () => { try { document.querySelector('#service-totals')!.innerHTML = repairOrderLinesHtml(readLines()); } catch { document.querySelector('#service-totals')!.textContent = 'Enter valid hours, quantities and prices to calculate totals.'; } };
   if (!appt) {
+    const override = form.querySelector<HTMLElement>('#stock-override');
+    const updateOverride = () => { if(override) { override.hidden = !['completed','picked-up'].includes(form.querySelector<HTMLSelectElement>('[name="status"]')!.value); if(override.hidden) override.querySelector<HTMLInputElement>('input')!.checked=false; } };
+    updateOverride();
+    form.addEventListener('change',event=>{
+      const target=event.target as HTMLSelectElement;
+      if(target.name==='status') updateOverride();
+      if(target.name==='partId') {
+        const row=target.closest('fieldset')!, part=catalog.find(p=>p.id===target.value);
+        row.querySelector('[data-stock-hint]')!.textContent=part ? `${part.quantityOnHand} on hand` : 'Free-text lines do not affect stock.';
+        if(part) { row.querySelector<HTMLInputElement>('[name="description"]')!.value=part.description; row.querySelector<HTMLInputElement>('[name="price"]')!.value=(part.retailPriceCents/100).toFixed(2); } totals();
+      }
+    });
     form.addEventListener('input',totals);
     form.addEventListener('click',event => {
       const button = (event.target as Element).closest<HTMLButtonElement>('button'); if (!button) return;
@@ -60,7 +73,7 @@ export async function serviceRoute(parts: string[], ui: UI): Promise<void> {
       if (button.dataset.add) {
         if (form.querySelectorAll('[data-line]').length >= 100) { ui.flash(new Error('At most 100 line items.')); return; }
         const labor = button.dataset.add === 'labor';
-        document.querySelector('#service-lines')!.insertAdjacentHTML('beforeend',rowHtml({id:crypto.randomUUID(),kind:labor?'labor':'parts',description:'',laborHoursHundredths:labor?100:null,laborRateCents:labor?0:null,quantity:labor?null:1,unitPriceCents:labor?null:0})); totals();
+        document.querySelector('#service-lines')!.insertAdjacentHTML('beforeend',rowHtml({id:crypto.randomUUID(),kind:labor?'labor':'parts',description:'',laborHoursHundredths:labor?100:null,laborRateCents:labor?0:null,quantity:labor?null:1,unitPriceCents:labor?null:0},catalog)); totals();
       }
     });
   }
@@ -70,6 +83,7 @@ export async function serviceRoute(parts: string[], ui: UI): Promise<void> {
     try {
       const data = new FormData(form), body: Record<string,unknown> = {};
       for (const key of ['vehicleId','vehicleDescription','advisorId','concern',...(appt ? ['scheduledStart','scheduledEnd'] : ['payType']),...(record ? ['status'] : [])]) body[key] = String(data.get(key) ?? '');
+      if(ro && ['completed','picked-up'].includes(String(body.status)) && data.has('allowNegativeStock')) body.allowNegativeStock=true;
       body.vehicleId ||= null; body.advisorId ||= null;
       if (record) body.version = record.version; else if (appointment) body.appointmentId = appointment.id; else body.customerId = String(data.get('customerId') ?? '');
       if (appt) { body.scheduledStart = new Date(String(body.scheduledStart)).toISOString(); body.scheduledEnd = new Date(String(body.scheduledEnd)).toISOString(); } else body.lineItems = readLines();

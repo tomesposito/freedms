@@ -1,3 +1,4 @@
+import { parts } from './parts.js';
 import { service } from './service.js';
 import { compliance } from './compliance.js';
 import { reportsP2 } from './reports-p2.js';
@@ -66,6 +67,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
       const execute = async (): Promise<ApiResponse> => {
+        if (/^\/parts(\/|$)/.test(path)) return await parts(request, principal, repository, now());
         if (/^\/service(\/|$)/.test(path)) return await service(request, principal, repository, now());
         if (/^\/compliance(\/|$)/.test(path) || /^\/deals\/[^/]+\/(compliance|compliance-checks)(\/|$)/.test(path)) return await compliance(request, principal, repository, now());
         if (/^\/documents(\/|$)/.test(path)) return await documentControls(request, principal, repository, now(), documents);
