@@ -1,26 +1,50 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: freeDMS inventory and CRM foundations (no deployment performed by the build)
+Description: freeDMS invite-only pilot - deploy in us-east-1
 Parameters:
-  WebOrigin:
+  RootDomain:
     Type: String
-    Description: Exact HTTPS origin serving the static web app (no trailing slash)
-    AllowedPattern: 'https://[^/]+'
-  WebCallbackUrl:
+    Default: freedms.co
+    AllowedPattern: '[a-z0-9.-]+'
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+  AlertEmail:
     Type: String
-    Description: Exact frontend URL ending with /, registered for sign-in and sign-out
-    AllowedPattern: 'https://.*/'
+    AllowedPattern: '[^\s@]+@[^\s@]+\.[^\s@]+'
+  OriginSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Random private origin credential; never put in frontend configuration
   CognitoDomainPrefix:
     Type: String
-    Description: Globally unique prefix for the Cognito hosted sign-in domain
     AllowedPattern: '[a-z0-9-]+'
+  PublishSite:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable app/apex DNS only after Free plan and application acceptance
+Conditions:
+  Publish: !Equals [!Ref PublishSite, 'true']
+Rules:
+  DeploymentRegion:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', us-east-1]
+        AssertDescription: CloudFront certificates and WAF must deploy in us-east-1
 Resources:
   Table:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BillingMode: PAY_PER_REQUEST
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+        RecoveryPeriodInDays: 1
+      Tags: [{Key: Project, Value: freeDMS}]
       AttributeDefinitions:
         - AttributeName: PK
           AttributeType: S
@@ -38,6 +62,14 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: BoundedRecovery
+            Status: Enabled
+            NoncurrentVersionExpiration: {NoncurrentDays: 30}
+            AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -68,7 +100,14 @@ Resources:
                 aws:SecureTransport: 'false'
   UserPool:
     Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
+      DeletionProtection: ACTIVE
+      UserPoolTier: LITE
+      UsernameConfiguration: {CaseSensitive: false}
+      AccountRecoverySetting:
+        RecoveryMechanisms: [{Name: verified_email, Priority: 1}]
       AdminCreateUserConfig:
         AllowAdminCreateUserOnly: true
       UsernameAttributes: [email]
@@ -96,12 +135,12 @@ Resources:
       GenerateSecret: false
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows: [code]
-      AllowedOAuthScopes: [openid, profile]
+      AllowedOAuthScopes: [openid, email, profile]
       SupportedIdentityProviders: [COGNITO]
-      CallbackURLs: [!Ref WebCallbackUrl]
-      LogoutURLs: [!Ref WebCallbackUrl]
-      ReadAttributes: [email, name, 'custom:tenant_id']
-      WriteAttributes: [email, name]
+      CallbackURLs: [!Sub 'https://app.${RootDomain}/']
+      LogoutURLs: [!Sub 'https://app.${RootDomain}/']
+      ReadAttributes: [email, email_verified, name, 'custom:tenant_id']
+      WriteAttributes: [name]
       PreventUserExistenceErrors: ENABLED
       EnableTokenRevocation: true
       IdTokenValidity: 1
@@ -118,8 +157,11 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: '$default'
+      DefaultRouteSettings:
+        ThrottlingRateLimit: 5
+        ThrottlingBurstLimit: 10
       CorsConfiguration:
-        AllowOrigins: [!Ref WebOrigin]
+        AllowOrigins: [!Sub 'https://app.${RootDomain}']
         AllowHeaders: [Authorization, Content-Type]
         AllowMethods: [GET, POST, PUT, DELETE, OPTIONS]
       Auth:
@@ -135,12 +177,16 @@ Resources:
     Properties:
       CodeUri: ../packages/api/dist/
       Handler: lambda.handler
-      Runtime: nodejs20.x
+      Runtime: nodejs24.x
+      Architectures: [arm64]
+      ReservedConcurrentExecutions: 2
       MemorySize: 256
       Timeout: 15
       Environment:
         Variables:
           TABLE_NAME: !Ref Table
+          DOCUMENTS_BUCKET: !Ref Documents
+          ORIGIN_SECRET: !Ref OriginSecret
           TOKEN_ISSUER: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
           TOKEN_AUDIENCE: !Ref UserPoolClient
       Policies:
@@ -148,6 +194,9 @@ Resources:
             - Effect: Allow
               Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:PutItem, dynamodb:DeleteItem]
               Resource: !GetAtt Table.Arn
+            - Effect: Allow
+              Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+              Resource: !Sub '${Documents.Arn}/tenants/*'
       Events:
         AdfIntake:
           Type: HttpApi
@@ -157,6 +206,34 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
+        ShareView:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/share/{token}'
+            Method: GET
+            Auth: {Authorizer: NONE}
+        ShareResponse:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/share/{token}/respond'
+            Method: POST
+            Auth: {Authorizer: NONE}
+        ShareUpload:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/share/{token}/documents'
+            Method: POST
+            Auth: {Authorizer: NONE}
+        InviteView:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/invite/{token}'
+            Method: GET
+            Auth: {Authorizer: NONE}
         Proxy:
           Type: HttpApi
           Properties:
@@ -168,7 +245,263 @@ Resources:
     Properties:
       LogGroupName: !Sub '/aws/lambda/${InventoryFunction}'
       RetentionInDays: 14
+  Frontend:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+  FrontendPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Frontend
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudfront.amazonaws.com}
+            Action: s3:GetObject
+            Resource: !Sub '${Frontend.Arn}/*'
+            Condition:
+              StringEquals:
+                'AWS:SourceArn': !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+          - Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt Frontend.Arn, !Sub '${Frontend.Arn}/*']
+            Condition:
+              Bool: {'aws:SecureTransport': 'false'}
+  OriginAccess:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-frontend'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref RootDomain
+      SubjectAlternativeNames: [!Sub 'app.${RootDomain}']
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref RootDomain
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub 'app.${RootDomain}'
+          HostedZoneId: !Ref HostedZoneId
+  ViewerFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub '${AWS::StackName}-routing'
+      AutoPublish: true
+      FunctionConfig: {Comment: Marketing host and private application routing, Runtime: cloudfront-js-2.0}
+      FunctionCode: !Sub |
+        function handler(event) {
+          var request = event.request;
+          if (request.headers.host.value === '${RootDomain}') {
+            if (request.uri === '/login' || request.uri === '/login/') {
+              return {statusCode: 302, headers: {location: {value: 'https://app.${RootDomain}/'}, 'cache-control': {value: 'no-store'}}};
+            }
+            if (request.uri === '/signup' || request.uri === '/signup/') {
+              return {statusCode: 302, headers: {location: {value: 'https://${RootDomain}/#signup'}, 'cache-control': {value: 'no-store'}}};
+            }
+            if (request.uri === '/' || request.uri === '/index.html') request.uri = '/marketing/index.html';
+            else if (/^\/assets\/[A-Za-z0-9_-]+\.(png|svg|css|js|woff2)$/.test(request.uri)) request.uri = '/marketing' + request.uri;
+            else return {statusCode: 404, headers: {'cache-control': {value: 'no-store'}}};
+            return request;
+          }
+          if (request.headers.host.value !== 'app.${RootDomain}' || request.uri.indexOf('/marketing/') === 0) return {statusCode: 404};
+          if (request.uri.indexOf('/api/') === 0) request.uri = request.uri.slice(4);
+          return request;
+        }
+  WebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Scope: CLOUDFRONT
+      DefaultAction: {Allow: {}}
+      VisibilityConfig: {CloudWatchMetricsEnabled: false, SampledRequestsEnabled: false, MetricName: Pilot}
+      Rules:
+        - Name: PerIpRateLimit
+          Priority: 0
+          Action: {Block: {}}
+          Statement:
+            RateBasedStatement: {Limit: 600, AggregateKeyType: IP, EvaluationWindowSec: 300}
+          VisibilityConfig: {CloudWatchMetricsEnabled: false, SampledRequestsEnabled: false, MetricName: PilotRate}
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        IPV6Enabled: true
+        Aliases: [!Ref RootDomain, !Sub 'app.${RootDomain}']
+        DefaultRootObject: index.html
+        WebACLId: !GetAtt WebAcl.Arn
+        Origins:
+          - Id: frontend
+            DomainName: !GetAtt Frontend.RegionalDomainName
+            OriginAccessControlId: !Ref OriginAccess
+            S3OriginConfig: {OriginAccessIdentity: ''}
+          - Id: api
+            DomainName: !Sub '${Api}.execute-api.${AWS::Region}.amazonaws.com'
+            CustomOriginConfig: {OriginProtocolPolicy: https-only, OriginSSLProtocols: [TLSv1.2]}
+            OriginCustomHeaders:
+              - HeaderName: x-freedms-origin
+                HeaderValue: !Ref OriginSecret
+        DefaultCacheBehavior:
+          TargetOriginId: frontend
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt ViewerFunction.FunctionARN
+        CacheBehaviors:
+          - PathPattern: /assets/*
+            TargetOriginId: frontend
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+            ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt ViewerFunction.FunctionARN
+          - PathPattern: /api/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE]
+            CachedMethods: [GET, HEAD]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt ViewerFunction.FunctionARN
+        ViewerCertificate:
+          AcmCertificateArn: !Ref Certificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+  FreePlan:
+    Type: AWS::PricingPlanManager::Subscription
+    Properties:
+      PlanFamily: CloudFront
+      PlanTier: FREE
+      UsageLevel: DEFAULT
+      ResourceArns:
+        - !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+        - !GetAtt WebAcl.Arn
+        - !Sub 'arn:${AWS::Partition}:route53:::hostedzone/${HostedZoneId}'
+  SiteDns:
+    Type: AWS::Route53::RecordSetGroup
+    Condition: Publish
+    DependsOn: FreePlan
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      RecordSets:
+        - Name: !Ref RootDomain
+          Type: A
+          AliasTarget: {DNSName: !GetAtt Distribution.DomainName, HostedZoneId: Z2FDTNDATAQYW2}
+        - Name: !Ref RootDomain
+          Type: AAAA
+          AliasTarget: {DNSName: !GetAtt Distribution.DomainName, HostedZoneId: Z2FDTNDATAQYW2}
+        - Name: !Sub 'app.${RootDomain}'
+          Type: A
+          AliasTarget: {DNSName: !GetAtt Distribution.DomainName, HostedZoneId: Z2FDTNDATAQYW2}
+        - Name: !Sub 'app.${RootDomain}'
+          Type: AAAA
+          AliasTarget: {DNSName: !GetAtt Distribution.DomainName, HostedZoneId: Z2FDTNDATAQYW2}
+  Alerts:
+    Type: AWS::SNS::Topic
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: Publish
+    Properties:
+      TopicArn: !Ref Alerts
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+  LambdaErrors:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{Name: FunctionName, Value: !Ref InventoryFunction}]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref Alerts]
+  ApiErrors:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions: [{Name: ApiId, Value: !Ref Api}]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref Alerts]
+  DatabaseThrottles:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      Namespace: AWS/DynamoDB
+      MetricName: WriteThrottleEvents
+      Dimensions: [{Name: TableName, Value: !Ref Table}]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref Alerts]
+  AccountBudget:
+    Type: AWS::Budgets::Budget
+    Condition: Publish
+    Properties:
+      Budget:
+        BudgetName: !Sub '${AWS::StackName}-account-cost-awareness'
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: {Amount: 10, Unit: USD}
+      NotificationsWithSubscribers:
+        - Notification: {NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 50, ThresholdType: PERCENTAGE}
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref AlertEmail}]
+        - Notification: {NotificationType: FORECASTED, ComparisonOperator: GREATER_THAN, Threshold: 100, ThresholdType: PERCENTAGE}
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref AlertEmail}]
 Outputs:
+  WebUrl:
+    Value: !Sub 'https://app.${RootDomain}/'
+  FrontendBucket:
+    Value: !Ref Frontend
+  DistributionId:
+    Value: !Ref Distribution
+  DistributionDomain:
+    Value: !GetAtt Distribution.DomainName
+  FreePlanArn:
+    Value: !Ref FreePlan
+  FreePlanStatus:
+    Value: !GetAtt FreePlan.Status
+  FunctionName:
+    Value: !Ref InventoryFunction
+
   ApiUrl:
     Value: !Sub 'https://${Api}.execute-api.${AWS::Region}.amazonaws.com'
   TableName:

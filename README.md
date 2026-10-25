@@ -40,8 +40,9 @@ Purchase orders are local records; vendor transmission and parts import are not 
 In-app signature capture for deals and service authorization is complete locally as a
 captured, auditable record. This is not a claim of legal e-signature compliance.
 Third-party e-signature services/connections remain external and are not included.
-Lender connections and later accounting phases remain queued. Nothing is deployed
-yet; everything runs locally.
+Lender connections and later accounting phases remain queued. The invite-only AWS pilot is live at
+[freedms.co](https://freedms.co), with operator-provisioned access and fictional demo data.
+See [the deployment runbook](docs/DEPLOYMENT.md) for access, recovery, and cost limits.
 
 ## Screenshots
 
@@ -397,61 +398,20 @@ results are recorded separately per endpoint/event pair. No background worker ru
 first slice is intended for small independent lots, with API pagination/indexing
 left for scale. Stock numbers and VINs are not uniqueness-constrained in this build.
 
-## AWS packaging and operator setup
+## AWS pilot deployment
 
-Nothing is deployed automatically. Build first, then use an installed SAM CLI:
+The invite-only pilot uses Node 24 Lambda, API Gateway HTTP API, a small
+provisioned DynamoDB table, Cognito with required authenticator MFA, private S3
+storage, and CloudFront's Free plan. The operator creates the first administrator
+and additional invited identities. Hosted users accept invitations with their
+verified Cognito account; public self-registration remains disabled.
 
-```sh
-npm run build
-sam validate --lint --template-file infra/template.yaml
-sam build --template-file infra/template.yaml
-# Deploy only in your chosen AWS account when ready:
-sam deploy --guided
-```
-
-Provide an exact HTTPS `WebOrigin`, `WebCallbackUrl` (ending in `/`), and unique
-`CognitoDomainPrefix`. The document bucket is private and is not the web host.
-Publish `packages/web/dist` to a separately configured static host (including
-S3 behind an HTTPS delivery layer). Hash routes need no server-side route rewrites.
-Build the web client with these values from stack outputs:
-
-```sh
-VITE_API_URL="$API_URL" \
-VITE_COGNITO_DOMAIN="$COGNITO_DOMAIN" \
-VITE_COGNITO_CLIENT_ID="$COGNITO_CLIENT_ID" \
-npm run build -w @freedms/web
-```
-
-Cognito sign-in uses authorization code + PKCE, session-only token storage, and
-software-token MFA. Self-signup is disabled. An operator creates the first Cognito
-user with an immutable `custom:tenant_id` attribute (an opaque UUID), obtains its
-`sub`, and provisions the matching dealership/membership:
-
-```sh
-TABLE_NAME="$TABLE_NAME" npm run provision -w @freedms/api -- \
-  "$TENANT_ID" "$COGNITO_SUB" "$DEALERSHIP_NAME" "$USER_NAME"
-```
-
-The bootstrap is conditional and cannot overwrite an existing dealership. It is
-an operator command, not an API endpoint; use separately authorized AWS credentials.
-The app client cannot write `custom:tenant_id`. The Lambda has only GetItem, Query,
-PutItem, and DeleteItem permissions on its table (transaction operations authorize
-against those underlying actions), and no document permissions. HTTP API validates
-JWT signatures/issuer/audience; Lambda checks claim shape and membership again.
-There is no production local-token fallback. Staff membership administration,
-self-service onboarding, and account management UI are outside this build.
-
-**Runtime constraint:** the requested template targets `nodejs20.x` exactly. AWS
-now lists Node 20 as deprecated; check its current creation/update restrictions
-before deployment and approve a supported-runtime migration for production.
-See [AWS Lambda runtimes](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html).
-
-**Cost model:** no always-on server, provisioned concurrency, NAT gateway, or
-provisioned database capacity is configured. On-demand requests, retained storage,
-logs, and auth can still incur charges; free-tier eligibility is account-dependent.
-DynamoDB's provisioned-capacity free allowance is not a promise of free on-demand
-requests. See [DynamoDB pricing](https://aws.amazon.com/dynamodb/pricing/). Retained
-tables and buckets survive stack deletion; review their storage when cleaning up.
+See [the deployment runbook](docs/DEPLOYMENT.md) for verification, deployment,
+account provisioning, optional fictional demo data, costs, and recovery.
+`npm run build` and `npm test` do not deploy resources or populate data.
+GitHub Actions tests pull requests and publishes versioned builds from `master`.
+An independently approved build can be promoted through the private release
+workflow; see [GitHub Actions releases](docs/DEPLOYMENT.md#github-actions-releases).
 
 The direct libraries use MIT or Apache-2.0 licenses. Vite's transitive toolchain
 also includes permissive BSD/ISC-licensed packages; see `package-lock.json` for the
@@ -621,8 +581,8 @@ notes. Buyers can choose an option, request a change, or upload documents; deale
 responses appear on the worksheet and customer uploads appear in the jacket and
 its checklist. Each mutation records a metadata-only outbox event.
 
-The public buyer route is **LOCAL-ONLY** in this build, served by the same local
-API for development/testing; there is no hosted deployment. Uploads use the
+The public buyer route works locally and through the hosted pilot gateway, with
+its own expiring share-token checks. Uploads use the
 existing document types and 40 KiB limit (choose Other for pay stubs).
 
 ## Desking / the pencil (build 3)
@@ -716,9 +676,8 @@ File bytes never enter business records or events. `DocumentStore.forTenant`
 binds storage to authenticated tenant claims; its in-memory implementation is
 explicitly injected into the local handler and tests. Files, like other local
 records, disappear on restart. Failed metadata commits remove staged local bytes.
-Production S3 wiring is deferred: without an injected store, upload/content
-requests return 503 rather than pretending files are durable. No infrastructure
-or deployment changes are part of this build.
+Hosted Lambda uses the tenant-scoped S3 document adapter. Local development uses
+in-memory storage. An unconfigured handler returns 503 for upload/content requests.
 
 
 Signatures are in-store capture only: typed signer name plus drawn PNG or typed
@@ -1119,8 +1078,8 @@ After signing out, an added user enters that ID and their email in **Join an
 existing local workspace** (and a TOTP/recovery code when MFA is enabled). This
 uses `POST /local/session` with `{tenantId, email, code?}`. New workspace creation
 still accepts `{dealership, name}`. Both flows remain loopback-only development
-tools; data is ephemeral and tokens last one hour. Hosted Cognito provisioning and
-invite email delivery are out of scope; no invite is sent.
+tools; data is ephemeral and tokens last one hour. The hosted pilot uses the operator provisioning CLI and Cognito-backed invitation
+acceptance described in the deployment runbook. No invitation email is sent.
 
 
 Service authorization capture (#31) is local-only and in-store only.

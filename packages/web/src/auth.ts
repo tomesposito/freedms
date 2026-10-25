@@ -11,12 +11,13 @@ export function signOut(): void {
   else location.assign(redirect());
 }
 export async function signIn(): Promise<void> {
+  sessionStorage.setItem('freedms-return', location.hash);
   if (!domain || !client) throw new Error('Configure the Cognito domain and client ID to sign in.');
   const verifier = encode(crypto.getRandomValues(new Uint8Array(32)));
   const state = encode(crypto.getRandomValues(new Uint8Array(32)));
   sessionStorage.setItem('freedms-pkce', verifier); sessionStorage.setItem('freedms-state', state);
   const challenge = encode(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
-  const params = new URLSearchParams({response_type: 'code', client_id: client, redirect_uri: redirect(), scope: 'openid profile', state, code_challenge_method: 'S256', code_challenge: challenge});
+  const params = new URLSearchParams({response_type: 'code', client_id: client, redirect_uri: redirect(), scope: 'openid email profile', state, code_challenge_method: 'S256', code_challenge: challenge});
   location.assign(`${domain}/oauth2/authorize?${params}`);
 }
 export async function finishSignIn(): Promise<void> {
@@ -31,4 +32,7 @@ export async function finishSignIn(): Promise<void> {
   const body = await response.json();
   if (!response.ok || !body.id_token) throw new Error('Sign-in failed. Please try again.');
   setToken(body.id_token);
+  const returnHash = sessionStorage.getItem('freedms-return');
+  sessionStorage.removeItem('freedms-return');
+  if (returnHash?.startsWith('#/')) history.replaceState(null, '', `${location.pathname}${returnHash}`);
 }

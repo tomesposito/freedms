@@ -1,0 +1,88 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Dedicated, revocable freeDMS release access; existing GitHub OIDC provider
+Parameters:
+  FunctionArn: {Type: String}
+  FrontendBucket: {Type: String}
+  OperationsBucketName: {Type: String}
+  PrivateRepository: {Type: String, Default: tomesposito/freedms-deploy}
+  RepositoryId: {Type: String, AllowedPattern: '[0-9]+'}
+  OwnerId: {Type: String, AllowedPattern: '[0-9]+'}
+  ControllerSha: {Type: String, AllowedPattern: '[a-f0-9]{40}'}
+Resources:
+  Operations:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref OperationsBucketName
+      VersioningConfiguration: {Status: Enabled}
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      LifecycleConfiguration:
+        Rules:
+          - Id: BoundedNoncurrentVersions
+            Status: Enabled
+            NoncurrentVersionExpiration: {NoncurrentDays: 30}
+            AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}
+  OperationsPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Operations
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt Operations.Arn, !Sub '${Operations.Arn}/*']
+            Condition: {Bool: {'aws:SecureTransport': 'false'}}
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRoleWithWebIdentity
+            Principal:
+              Federated: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': sts.amazonaws.com
+                'token.actions.githubusercontent.com:sub': !Sub 'repository_id:${RepositoryId}:repository_owner_id:${OwnerId}:ref:refs/heads/master:event_name:workflow_dispatch:job_workflow_ref:${PrivateRepository}/.github/workflows/controller.yml@${ControllerSha}'
+      Policies:
+        - PolicyName: ApplicationReleaseOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [lambda:GetFunction, lambda:GetFunctionConfiguration, lambda:UpdateFunctionCode]
+                Resource: !Ref FunctionArn
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub '${Operations.Arn}/config.json'
+                  - !Sub '${Operations.Arn}/approvals/*'
+                  - !Sub '${Operations.Arn}/state/*'
+                  - !Sub '${Operations.Arn}/history/*'
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: [!Sub '${Operations.Arn}/state/*', !Sub '${Operations.Arn}/history/*']
+              - Effect: Allow
+                Action: s3:DeleteObject
+                Resource: !Sub '${Operations.Arn}/state/lock.json'
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/index.html'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/assets/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/index.html'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/assets/*'
+Outputs:
+  OperationsBucket: {Value: !Ref Operations}
+  DeployRoleArn: {Value: !GetAtt DeployRole.Arn}
