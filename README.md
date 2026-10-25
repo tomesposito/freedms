@@ -134,16 +134,27 @@ explicit override and leaves a visible warning.
 
 ![Repair order](docs/screenshots/repair-order.png)
 
-**Parts catalog** — workspace stock, bins, cost and retail prices, with reorder
-flags and a list that includes parts exactly at their reorder point.
+**Parts catalog** — workspace stock, bins, locations, cost and retail prices,
+and reserved counts, with reorder flags and a list that includes parts exactly
+at their reorder point. The catalog filters by location.
 
 ![Parts catalog and reorder list](docs/screenshots/parts-catalog.png)
 
 **Counter sales** — walk-in or customer sales with totals and atomic stock
 updates. Each sale posts its own journal entry, and the Journal column shows
-whether it posted; no vendor ordering or parts import is included.
+whether it posted. Sales cannot take stock reserved for a special order.
 
 ![Parts counter sales](docs/screenshots/parts-counter-sale.png)
+
+**Parts ordering** — local purchase orders started from the reorder list or
+built by hand, with partial receiving that updates stock and part cost.
+Special-order lines reserve stock on arrival until fulfilled; vendor returns
+take quantity and value back out. An optional cost-plus pricing matrix
+(off by default) proposes retail prices the dealer can accept or override.
+Purchase orders are local records — nothing is transmitted to a vendor,
+and no parts import is included.
+
+![Parts purchase orders](docs/screenshots/parts-orders.png)
 
 **Compliance** — the per-deal Red Flags checklist: dealer attestations for
 document inspection, address discrepancy, and privacy notice, a dealer-recorded
