@@ -209,7 +209,7 @@ application's runtime permissions, so source review remains required.
    reads (`FREEDMS_GH_BINARY` can select its installed path):
 
    ```sh
-   python3 ops/releases/operator.py approve /private/release-operator.json \
+   python3 ops/releases/release_operator.py approve /private/release-operator.json \
      --source FULL_SOURCE_SHA --manifest MANIFEST_SHA256
    ```
 
@@ -223,7 +223,7 @@ application's runtime permissions, so source review remains required.
 5. A successful deployment checks the actual Lambda code digest, S3 index, every
    public frontend file, anonymous API rejection, and invalid-share rejection.
    The private current-release record is updated only after those checks pass.
-   `operator.py status /private/release-operator.json` reads that record and checks
+   `release_operator.py status /private/release-operator.json` reads that record and checks
    the live Lambda/index again. These are public smoke checks, not a fresh
    authenticated end-to-end business transaction.
 
