@@ -221,7 +221,8 @@ test('Locations default empty, update and search/filter exactly; reservations ca
   assert.equal((await call('GET','/parts',undefined,'A',{search:'north'})).data[0].id,p.id);
   assert.equal((await call('GET','/parts',undefined,'A',{location:'North'})).data[0].id,p.id);
   assert.deepEqual((await call('GET','/parts',undefined,'A',{location:'north'})).data,[]);
-  result=await call('PUT',`/parts/${p.id}`,{version:2});assert.equal(result.data.location,'');
+  result=await call('PUT',`/parts/${p.id}`,{version:2});assert.equal(result.data.location,'North');
+  result=await call('PUT',`/parts/${p.id}`,{version:3,location:''});assert.equal(result.data.location,'');
 });
 test('Concurrent receipts cannot double receive; maximum eight-line PO uses one atomic write and latest receipt cost wins',async()=>{
   const {part,call,stock}=await setup();const ps=[];for(let i=0;i<8;i++)ps.push((await part({partNumber:`DEPTH-${i}`})).data);
