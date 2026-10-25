@@ -14,6 +14,7 @@ import controller as c
 
 SOURCE = 'a' * 40
 CONFIG = {'repository': 'tomesposito/freedms', 'infrastructure': 'infra', 'configuration': 'config',
+          'functionConfiguration': c.function_fingerprint({'Runtime': 'nodejs24.x', 'Architectures': ['arm64']}),
           'function': 'function', 'frontendBucket': 'frontend', 'webUrl': 'https://app.example.test'}
 
 
@@ -39,6 +40,18 @@ def package(directory):
 
 
 class PackageTests(unittest.TestCase):
+    def test_existing_asset_can_only_be_reused_with_identical_bytes(self):
+        aws = c.Aws('test-bucket')
+        with patch.object(aws, 'put', side_effect=c.CommandError('PreconditionFailed')), patch.object(aws, 'get', return_value=(b'original', 'etag')):
+            aws.asset('assets/a.js', b'original', 'frontend', 'application/javascript')
+            with self.assertRaisesRegex(RuntimeError, 'overwrite'):
+                aws.asset('assets/a.js', b'different', 'frontend', 'application/javascript')
+
+    def test_configuration_fingerprint_ignores_release_metadata_but_detects_authority_changes(self):
+        original = {'Runtime': 'nodejs24.x', 'Role': 'original', 'Environment': {'Variables': {'TABLE_NAME': 'one'}}}
+        self.assertEqual(c.function_fingerprint(original), c.function_fingerprint({**original, 'RevisionId': 'new'}))
+        self.assertNotEqual(c.function_fingerprint(original), c.function_fingerprint({**original, 'Role': 'other'}))
+
     def test_valid_package_and_tampered_bytes(self):
         with tempfile.TemporaryDirectory() as d:
             manifest, digest, code, files = package(d)
@@ -181,6 +194,20 @@ class PromotionTests(unittest.TestCase):
             self.run_release(aws)
         self.assertEqual(aws.updates, [])
         self.assertEqual(aws.get('state/lock.json')[0], b'other run')
+
+    def test_external_code_change_is_never_overwritten_by_recovery(self):
+        aws = FakeAws()
+        original_call = aws.call
+        def call(*args):
+            if args[:2] == ('lambda', 'get-function') and aws.updates:
+                aws.code = b'external operator change'
+            return original_call(*args)
+        with patch.object(aws, 'call', side_effect=call):
+            with self.assertRaisesRegex(RuntimeError, 'Unrecognized code change'):
+                self.run_release(aws)
+        self.assertEqual(aws.code, b'external operator change')
+        self.assertEqual(len(aws.updates), 1)
+        self.assertIn((None, 'state/lock.json'), aws.rows)
 
     def test_asset_failure_leaves_current_application_untouched(self):
         aws = FakeAws()

@@ -29,6 +29,12 @@ def encode(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
 
+def function_fingerprint(configuration):
+    keys = ['Runtime', 'Architectures', 'Handler', 'Role', 'MemorySize', 'Timeout', 'Environment', 'Layers',
+            'VpcConfig', 'KMSKeyArn', 'DeadLetterConfig', 'TracingConfig', 'FileSystemConfigs', 'EphemeralStorage', 'SnapStart', 'LoggingConfig']
+    return digest(encode({key: configuration[key] for key in keys if key in configuration}))
+
+
 class CommandError(RuntimeError):
     def __init__(self, code):
         super().__init__('External command failed; inspect the private operation before retrying')
@@ -152,6 +158,7 @@ def inspect(aws, config, current):
     function = info['Configuration']
     require(function['State'] == 'Active' and function['LastUpdateStatus'] == 'Successful', 'Lambda is not ready')
     require(function['Runtime'] == 'nodejs24.x' and function['Architectures'] == ['arm64'], 'Unexpected Lambda configuration')
+    require(function_fingerprint(function) == config['functionConfiguration'], 'Live Lambda configuration changed')
     require(function['CodeSha256'] == current['codeSha256'], 'Live Lambda differs from recorded release')
     index, etag = aws.get('index.html', config['frontendBucket'])
     require(digest(index) == current['indexSha256'], 'Live frontend differs from recorded release')
@@ -227,8 +234,13 @@ def promote(aws, config, current, current_etag, config_digest, source, manifest_
         elif snapshot:
             # Any rollback failure preserves the lock and snapshot for operator recovery.
             live = aws.call('lambda', 'get-function', '--function-name', config['function'])
+            target_code_sha = base64.b64encode(hashlib.sha256(code).digest()).decode()
+            require(live['Configuration']['CodeSha256'] in [current['codeSha256'], target_code_sha], 'Unrecognized code change; operator recovery required')
+            require(function_fingerprint(live['Configuration']) == config['functionConfiguration'], 'Configuration changed; operator recovery required')
+            live_index, rollback_index_etag = aws.get('index.html', config['frontendBucket'])
+            require(digest(live_index) in [current['indexSha256'], digest(files['index.html'])], 'Unrecognized frontend change; operator recovery required')
             replace_code(aws, config, previous_code, live['Configuration']['RevisionId'])
-            aws.put('index.html', previous_index, bucket=config['frontendBucket'], content_type='text/html')
+            aws.put('index.html', previous_index, bucket=config['frontendBucket'], etag=rollback_index_etag, content_type='text/html')
             inspect(aws, config, current)
             smoke(config, {'index.html': previous_index})
             recovered = {**current, 'recoveredAt': time.time(), 'failedOperation': operation}
