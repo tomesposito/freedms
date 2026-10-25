@@ -13,8 +13,11 @@
 }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;color:var(--ink);background:var(--paper);line-height:1.55;-webkit-font-smoothing:antialiased}
-img{max-width:100%;display:block}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;color:var(--ink);background:var(--paper);line-height:1.55;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+@supports (overflow:clip){body{overflow-x:clip}}
+img{max-width:100%;height:auto;display:block}
+.grid>*,.price-grid>*,.steps>*,.stats-in>*,.split>*{min-width:0}
+.shot{min-width:0}
 a{color:var(--accent)}
 .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
 h1,h2,h3{line-height:1.15;letter-spacing:-.01em;margin:0}
@@ -130,7 +133,17 @@ footer a:hover{color:#fff}
   .split{grid-template-columns:1fr;gap:30px}
 }
 @media (max-width:640px){
-  section{padding:60px 0}
+  section{padding:56px 0}
+  .wrap{padding:0 18px}
+  .stats-in{gap:14px;padding:24px 0}
+  .stat b{font-size:1.12rem}
+  .stat span{font-size:.86rem}
+  .frame{margin-top:36px}
+  .frame-bar .url{font-size:.7rem;margin-left:6px}
+  .problem p{font-size:1.15rem}
+  .price .amount{font-size:1.75rem}
+  .card,.price,.step{padding:20px}
+  .tour-thumbs button{padding:7px 13px;font-size:.88rem}
   .grid,.price-grid,.steps{grid-template-columns:1fr}
   .nav-links{display:none;position:absolute;top:64px;left:0;right:0;background:#fff;flex-direction:column;align-items:flex-start;padding:16px 24px 22px;border-bottom:1px solid var(--line);gap:16px}
   .nav-links.open{display:flex}
@@ -393,7 +406,7 @@ footer a:hover{color:#fff}
         <a href="#pricing">Pricing</a>
         <a href="#faq">FAQ</a>
         <a href="https://github.com/tomesposito/freedms">GitHub</a>
-        <a href="https://app.freedms.co/">Sign in</a>
+        <a href="/login">Sign in</a>
       </nav>
     </div>
     <p class="foot-note">&copy; <span id="yr">2026</span> freeDMS &middot; MIT License &middot; Built in the open.</p>

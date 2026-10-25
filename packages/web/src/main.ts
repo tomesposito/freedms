@@ -96,7 +96,7 @@ function shell(content: string): void {
 }
 function badge(value: string): string { return `<span class="badge ${value.replace(' ', '-')}">${e(value)}</span>`; }
 async function login(): Promise<void> {
-  app.innerHTML = `<main class="login"><a class="brand" href="#/">free<span>DMS</span></a><h1>Your inventory, in one place.</h1><p>${localMode ? 'Create an empty local workspace to start stocking vehicles. This development session lasts one hour; data is cleared when the API restarts.' : 'Invite-only pilot. Sign in with the account provided by your pilot operator.'}</p><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${localMode ? '<section id="onboarding"></section><h2>Join an existing local workspace</h2><form id="join"><label>Workspace ID<input name="tenantId" required maxlength="128"></label><label>Email<input name="email" type="email" required maxlength="254"></label><label>Authenticator or recovery code (if MFA enabled)<input name="code" autocomplete="one-time-code" maxlength="32"></label><button>Sign in locally</button></form>' : '<button id="cognito" class="primary">Sign in</button>'}</main>`;
+  app.innerHTML = `<main class="login"><a class="brand" href="#/">free<span>DMS</span></a><h1>Your inventory, in one place.</h1><p>${localMode ? 'Create an empty local workspace to start stocking vehicles. This development session lasts one hour; data is cleared when the API restarts.' : 'Sign in to your dealership workspace.'}</p><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${localMode ? '<section id="onboarding"></section><h2>Join an existing local workspace</h2><form id="join"><label>Workspace ID<input name="tenantId" required maxlength="128"></label><label>Email<input name="email" type="email" required maxlength="254"></label><label>Authenticator or recovery code (if MFA enabled)<input name="code" autocomplete="one-time-code" maxlength="32"></label><button>Sign in locally</button></form>' : '<button id="cognito" class="primary">Sign in</button>'}</main>`;
   if (localMode) mountOnboarding(document.querySelector<HTMLElement>('#onboarding')!, async data => {
     const result = await api<{token: string; invites: Invite[]}>('/local/session', 'POST', data);
     setToken(result.token);
@@ -193,8 +193,7 @@ async function route(): Promise<void> {
     try {
       const view = await publicApi<InviteView>(`/invite/${encodeURIComponent(location.hash.slice(9))}`);
       if (sequence !== routeSequence) return;
-      app.innerHTML = inviteLandingHtml(view, !localMode, !!getToken());
-      document.querySelector('#invite-signin')?.addEventListener('click', () => { void signIn(); });
+      app.innerHTML = inviteLandingHtml(view);
       if (view.valid) {
         const form = app.querySelector<HTMLFormElement>('#accept-invite')!;
         const email = form.querySelector<HTMLInputElement>('[name=email]')!;
@@ -204,12 +203,12 @@ async function route(): Promise<void> {
           event.preventDefault(); const button = form.querySelector('button')!; button.disabled = true;
           const message = form.querySelector<HTMLElement>('#invite-message')!;
           try {
-            const result = await (localMode ? publicApi : api)<{outcome: string; reason?: 'expired' | 'revoked' | 'accepted'; message?: string; tenantId: string; email: string}>(path, 'POST', Object.fromEntries(new FormData(form)));
+            const result = await publicApi<{outcome: string; reason?: 'expired' | 'revoked' | 'accepted'; message?: string; tenantId: string; email: string}>(path, 'POST', Object.fromEntries(new FormData(form)));
             if (sequence !== routeSequence) return;
             if (result.outcome === 'email-mismatch') { message.textContent = result.message!; return; }
             if (result.outcome === 'refused') { app.innerHTML = inviteLandingHtml({valid: false, reason: result.reason}); if (result.message) app.querySelector('main')!.append(Object.assign(document.createElement('p'), {textContent: result.message})); return; }
-            if (result.outcome === 'already-member') { app.innerHTML = inviteSignInHtml(result.tenantId, result.email, true, !localMode); return; }
-            app.innerHTML = inviteSignInHtml(result.tenantId, result.email, false, !localMode);
+            if (result.outcome === 'already-member') { app.innerHTML = inviteSignInHtml(result.tenantId, result.email, true); return; }
+            app.innerHTML = inviteSignInHtml(result.tenantId, result.email);
             if (localMode) {
               try {
                 const signed = await publicApi<{token: string}>('/local/session', 'POST', {tenantId: result.tenantId, email: result.email});
@@ -228,13 +227,13 @@ async function route(): Promise<void> {
     return;
   }
   if (location.hash.startsWith('#/share/')) { ++routeSequence; await buyerRoute(location.hash.slice(8)); return; }
-  if (!session) { await start(); return; } const sequence = ++routeSequence;
+  if (!session) return; const sequence = ++routeSequence;
   try {
     const parts = location.hash.replace(/^#\//, '').split('/');
     if (parts[0] === 'welcome') {
       const {tenantId, userId, role} = session.principal;
       if (welcomeDismissed(localStorage, tenantId, userId)) { location.hash = '#/'; return; }
-      shell(welcomeHtml(role, session.tenant.name, !localMode));
+      shell(welcomeHtml(role, session.tenant.name));
       app.querySelectorAll<HTMLButtonElement>('[data-welcome]').forEach(button => button.addEventListener('click', () => { dismissWelcome(localStorage, tenantId, userId); location.hash = `#${button.dataset.welcome}`; }));
     }
     else if (parts[0] === 'deals') {
@@ -250,9 +249,9 @@ async function route(): Promise<void> {
     else if (parts[0] === 'service') await serviceRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'compliance') await complianceRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, parts[1]);
     else if (parts[0] === 'documents') await documentsRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
-    else if (parts[0] === 'users') await usersRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void start(); }, admin: session.principal.role === 'admin'}, session.principal.tenantId, !localMode);
+    else if (parts[0] === 'users') await usersRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void start(); }, admin: session.principal.role === 'admin'}, session.principal.tenantId);
     else if (parts[0] === 'webhooks') await webhooksRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
-    else if (parts[0] === 'account') await accountRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, {}, !localMode);
+    else if (parts[0] === 'account') await accountRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'feeds') await feedRoute({api, download, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'accounting') await accountingRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'fi-products') await fiRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
@@ -263,13 +262,8 @@ async function route(): Promise<void> {
   } catch (error) { if (sequence === routeSequence) { if (!getToken()) await login(); flash(error); } }
 }
 async function start(): Promise<void> {
-  try {
-    await finishSignIn();
-    if (location.hash.startsWith('#/share/') || location.hash.startsWith('#/invite/')) { await route(); return; }
-    if (!getToken()) { await login(); return; }
-    session = await api('/session');
-    await route();
-  }
+  if (location.hash.startsWith('#/share/') || location.hash.startsWith('#/invite/')) { await route(); return; }
+  try { await finishSignIn(); if (!getToken()) { await login(); return; } session = await api('/session'); await route(); }
   catch (error) { await login(); flash(error); }
 }
 window.addEventListener('hashchange', () => { void route(); });

@@ -64,7 +64,7 @@ export function acceptanceWrite(tenantId: string, current: Invite | undefined, s
   const memberEvent = {...event, id: randomUUID(), aggregateId: user.id, aggregateVersion: 1, type: 'user.added' as const};
   return {record, member, event, memberEvent};
 }
-export async function publicInvite(request: ApiRequest, repositories: RepositoryFactory, now: Date, hosted = false) {
+export async function publicInvite(request: ApiRequest, repositories: RepositoryFactory, now: Date) {
   const method = request.method.toUpperCase();
   const accepting = request.path.endsWith('/accept');
   if (method !== (accepting ? 'POST' : 'GET')) throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
@@ -83,11 +83,7 @@ export async function publicInvite(request: ApiRequest, repositories: Repository
   const tenant = await repo.tenant(); if (!tenant) return refuse();
   if (profile) {
     if (profile.email !== invite.email.toLowerCase()) return response(200, {data: {outcome: 'email-mismatch', message: 'Use the invited email address to accept this invitation.'}});
-    if (hosted && (!request.claims || request.claims['custom:tenant_id'] !== tenant.id ||
-      request.claims.email?.toLowerCase() !== invite.email.toLowerCase() ||
-      ![true, 'true'].includes(request.claims.email_verified ?? false)))
-      throw new ApiError(403, 'INVITE_IDENTITY', 'Sign in with the verified account invited to this dealership.');
-    const user = {id: hosted ? requireId(request.claims!.sub) : randomUUID(), name: profile.name, email: invite.email};
+    const user = {id: randomUUID(), name: profile.name, email: invite.email};
     try {
       const outcome = await repo.acceptInvite(invite, user, now);
       return response(200, {data: {outcome, tenantId: tenant.id, email: invite.email, role: invite.role, dealership: tenant.name}});

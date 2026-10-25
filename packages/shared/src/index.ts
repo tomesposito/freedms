@@ -48,7 +48,7 @@ export interface OutboxEvent {
 }
 export interface DecodedVin { vin: string; year: number | null; make: string; model: string; trim: string; warnings: string[] }
 export type ApiEnvelope<T> = { data: T } | { error: { code: string; message: string } };
-export interface AuthClaims { email?: string; email_verified?: boolean | string; sub: string; 'custom:tenant_id': string; iss: string; aud: string; exp: number; token_use: 'id' }
+export interface AuthClaims { sub: string; 'custom:tenant_id': string; iss: string; aud: string; exp: number; token_use: 'id' }
 
 export const leadSources = ['walk-in', 'phone', 'website', 'marketplace', 'referral', 'other'] as const;
 export const leadStages = ['new', 'contacted', 'appointment', 'in-store', 'working-deal', 'sold', 'lost'] as const;

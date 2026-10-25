@@ -7,20 +7,19 @@
     "packages/*"
   ],
   "engines": {
-    "node": ">=22 <25"
+    "node": ">=20 <25"
   },
   "scripts": {
     "build": "npm run typecheck && npm run build -w @freedms/shared && npm run build -w @freedms/api && npm run build -w @freedms/web",
-    "typecheck": "tsc -p packages/shared && tsc -p packages/api && tsc -p packages/web && tsc -p scripts",
+    "typecheck": "tsc -p packages/shared && tsc -p packages/api && tsc -p packages/web",
     "test": "node --import tsx scripts/test.ts",
-    "dev": "node scripts/dev.mjs",
-    "pilot": "node --import tsx scripts/pilot.ts"
+    "dev": "node scripts/dev.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",
-    "esbuild": "^0.25.0",
+    "typescript": "~5.7.3",
     "tsx": "^4.20.0",
-    "typescript": "~5.7.3"
+    "esbuild": "^0.25.0"
   },
   "license": "MIT"
 }
