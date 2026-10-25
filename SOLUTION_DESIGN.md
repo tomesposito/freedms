@@ -368,6 +368,15 @@ security, and a useful AI summary/draft capability from that first slice.
 **Status: DECIDED — owner, 2026-10-19: AWS Lambda + serverless on free tiers.
 This overrides the recommendation below.**
 
+**Pilot update — owner, 2026-10-25:** invite-only deployment approved, initially
+for the owner's testing and demos. Operator-provisioned Cognito accounts require
+password and authenticator MFA. Use private S3 document storage, CloudFront Free
+plan with DNS/WAF, and 5/5 provisioned DynamoDB capacity within the shared account
+allowance. Explicit synthetic demo loading is permitted only into an empty demo
+workspace. API requests, backup/storage usage, and other services may still incur
+small charges; serverless is not a guarantee of a zero bill. See
+[deployment and recovery](docs/DEPLOYMENT.md).
+
 **Owner's reasoning:** stay on AWS free tiers to start, as with OpenSight's
 hosted setup — Lambda and serverless, so the product costs nothing while there
 is no activity and no revenue. Reassess if and when real traffic arrives; the
@@ -379,9 +388,7 @@ restores, and an affordable free tier without prematurely becoming an infrastruc
 **Decision (owner, 2026-10-19):** AWS serverless — Lambda, API Gateway, DynamoDB,
 S3, Cognito — on free tiers, pay only on activity. Implementation detail within
 that decision: DynamoDB is the data store because it is AWS's always-free,
-zero-idle-cost option; the design sketch's relational database would bill while
-idle (Aurora Serverless minimum capacity), which the owner's zero-cost rule
-rules out. The data layer sits behind an interface so storage can change when
+zero-idle-cost option; the design sketch's relational database can bill for retained storage and active compute even with auto-pause, which are less suited to the pilot's free-tier objective. The data layer sits behind an interface so storage can change when
 traffic justifies it.
 
 **Options:** managed application hosting with managed Postgres/object storage;
@@ -390,7 +397,8 @@ AWS managed containers/database/queues; a serverless application/database platfo
 **Recommendation:** start with managed application hosting, managed Postgres,
 object storage, and durable workers. Select the named provider after comparing
 security controls, residency, recovery, portability, and measured operating costs.
-No provider, spending, or deployment is authorized by this draft.
+The owner-approved pilot update above authorizes the initial deployment. Builds
+remain separate from reviewed operator deployment actions.
 
 ### D-5 — Minimum cohorts and release policy
 

@@ -10,7 +10,11 @@ export function adminMfaHtml(users: AdminMfaEntry[], admin: boolean): string {
 }
 type Reveal = {secret?: string; otpauthUrl?: string; recoveryCodes?: string[]; verified?: boolean};
 const codeForm = (action: string, label: string, totpOnly = false) => `<form data-mfa-action="${e(action)}"><label>${totpOnly ? 'Authenticator code' : 'Authenticator or recovery code'}<input name="code" required autocomplete="one-time-code" ${totpOnly ? 'inputmode="numeric" pattern="[0-9]{6}" maxlength="6"' : 'maxlength="32"'}></label><button class="${action === 'disable' ? 'danger' : ''}">${e(label)}</button></form>`;
-export async function accountRoute(ui: UI, reveal: Reveal = {}): Promise<void> {
+export async function accountRoute(ui: UI, reveal: Reveal = {}, hosted = false): Promise<void> {
+  if (hosted) {
+    ui.shell('<h1>Account security</h1><section class="card"><h2>Authenticator required</h2><p>Your pilot account requires a password and authenticator code at sign-in. Use the sign-in page to reset your password. Contact the pilot operator if you lose your authenticator.</p></section>');
+    return;
+  }
   ui.shell('<p>Loading account security…</p>');
   try {
     const [status, users] = await Promise.all([ui.api<PublicMfaStatus>('/account/mfa'), ui.admin ? ui.api<AdminMfaEntry[]>('/admin/mfa') : Promise.resolve([])]);
