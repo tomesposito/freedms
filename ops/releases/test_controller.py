@@ -2,6 +2,8 @@ import base64
 import hashlib
 import io
 import json
+import subprocess
+import sys
 from pathlib import Path
 import tarfile
 import tempfile
@@ -40,6 +42,11 @@ def package(directory):
 
 
 class PackageTests(unittest.TestCase):
+    def test_operator_command_starts_without_shadowing_the_standard_library(self):
+        result = subprocess.run([sys.executable, str(Path(__file__).with_name('release_operator.py')), '--help'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('approve', result.stdout)
+
     def test_existing_asset_can_only_be_reused_with_identical_bytes(self):
         aws = c.Aws('test-bucket')
         with patch.object(aws, 'put', side_effect=c.CommandError('PreconditionFailed')), patch.object(aws, 'get', return_value=(b'original', 'etag')):
