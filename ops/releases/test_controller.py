@@ -17,14 +17,14 @@ import controller as c
 SOURCE = 'a' * 40
 CONFIG = {'repository': 'tomesposito/freedms', 'infrastructure': 'infra', 'configuration': 'config',
           'functionConfiguration': c.function_fingerprint({'Runtime': 'nodejs24.x', 'Architectures': ['arm64']}),
-          'function': 'function', 'frontendBucket': 'frontend', 'webUrl': 'https://app.example.test'}
+          'function': 'function', 'frontendBucket': 'frontend', 'webUrl': 'https://app.example.test', 'marketingUrl': 'https://example.test'}
 
 
 def package(directory):
     code = io.BytesIO()
     with zipfile.ZipFile(code, 'w') as archive:
         archive.writestr('lambda.cjs', 'exports.handler = async () => 1;')
-    files = {'index.html': b'<html>test</html>', 'assets/main-12345678.js': b'console.log(1)'}
+    files = {'index.html': b'<html>test</html>', 'assets/main-12345678.js': b'console.log(1)', 'marketing/index.html': b'<html>marketing</html>', 'marketing/assets/hero-12345678.png': b'image'}
     web = io.BytesIO()
     with tarfile.open(fileobj=web, mode='w:gz') as archive:
         for name, content in files.items():
@@ -32,7 +32,7 @@ def package(directory):
             info.size = len(content)
             archive.addfile(info, io.BytesIO(content))
     artifacts = {'api.zip': code.getvalue(), 'web.tar.gz': web.getvalue()}
-    manifest = {'version': 1, 'repository': CONFIG['repository'], 'source': SOURCE, 'infrastructure': 'infra', 'configuration': 'config',
+    manifest = {'version': 2, 'repository': CONFIG['repository'], 'source': SOURCE, 'infrastructure': 'infra', 'configuration': 'config',
                 'artifacts': {name: {'sha256': c.digest(data), 'size': len(data)} for name, data in artifacts.items()},
                 'frontend': [{'path': name, 'sha256': c.digest(data), 'size': len(data)} for name, data in files.items()]}
     raw = c.encode(manifest)
@@ -76,6 +76,17 @@ class PackageTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     c.verify_package(d, source, checksum, config)
 
+    def test_marketing_index_is_required_and_tampering_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            manifest, checksum, _, _ = package(d)
+            manifest['frontend'] = [entry for entry in manifest['frontend'] if not entry['path'].startswith('marketing/')]
+            with self.assertRaisesRegex(RuntimeError, 'Unexpected archive entries'):
+                c.frontend_files((Path(d) / 'web.tar.gz').read_bytes(), manifest['frontend'])
+            manifest, _, _, _ = package(d)
+            next(entry for entry in manifest['frontend'] if entry['path'] == 'marketing/index.html')['sha256'] = '0' * 64
+            with self.assertRaisesRegex(RuntimeError, 'digest mismatch'):
+                c.frontend_files((Path(d) / 'web.tar.gz').read_bytes(), manifest['frontend'])
+
     def test_archive_rejects_traversal_symlinks_and_duplicate_names(self):
         entries = [{'path': 'index.html', 'size': 1, 'sha256': c.digest(b'x')}, {'path': 'assets/a.js', 'size': 1, 'sha256': c.digest(b'x')}]
         for names, link in [(['../index.html', 'assets/a.js'], False), (['index.html', 'assets/a.js'], True), (['index.html', 'index.html'], False)]:
@@ -110,10 +121,11 @@ class FakeAws:
         self.fail_rollback = False
         self.fail_assets = False
         self.updates = []
-        self.current = {'source': 'old', 'codeSha256': base64.b64encode(hashlib.sha256(self.code).digest()).decode(), 'indexSha256': c.digest(b'old index')}
+        self.current = {'source': 'old', 'codeSha256': base64.b64encode(hashlib.sha256(self.code).digest()).decode(), 'indexSha256': c.digest(b'old index'), 'marketingIndexSha256': c.digest(b'old marketing')}
         self.put('config.json', c.encode(CONFIG))
         self.etag = self.put('state/current.json', c.encode(self.current))
         self.put('index.html', b'old index', bucket='frontend')
+        self.put('marketing/index.html', b'old marketing', bucket='frontend')
 
     def get(self, key, bucket=None):
         return self.rows[(bucket, key)]
@@ -168,6 +180,8 @@ class PromotionTests(unittest.TestCase):
         self.assertEqual(record['source'], SOURCE)
         self.assertNotIn((None, 'state/lock.json'), aws.rows)
         self.assertIn((None, 'history/test-run/api.zip'), aws.rows)
+        self.assertIn((None, 'history/test-run/marketing.html'), aws.rows)
+        self.assertEqual(record['marketingIndexSha256'], c.digest(aws.get('marketing/index.html', 'frontend')[0]))
         self.assertNotEqual(aws.get('state/current.json')[1], aws.etag)
 
     def test_smoke_failure_restores_application_and_consumes_approval(self):
@@ -183,6 +197,7 @@ class PromotionTests(unittest.TestCase):
                         c.promote(aws, CONFIG, aws.current, aws.etag, c.digest(c.encode(CONFIG)), SOURCE, digest, manifest, code, files, 'test-run')
         self.assertEqual(aws.code, b'old code')
         self.assertEqual(aws.get('index.html', 'frontend')[0], b'old index')
+        self.assertEqual(aws.get('marketing/index.html', 'frontend')[0], b'old marketing')
         self.assertNotIn((None, 'state/lock.json'), aws.rows)
         self.assertNotEqual(aws.get('state/current.json')[1], aws.etag)
 
@@ -223,7 +238,31 @@ class PromotionTests(unittest.TestCase):
             self.run_release(aws)
         self.assertEqual(aws.updates, [])
         self.assertEqual(aws.get('index.html', 'frontend')[0], b'old index')
+        self.assertEqual(aws.get('marketing/index.html', 'frontend')[0], b'old marketing')
         self.assertNotIn((None, 'state/lock.json'), aws.rows)
+
+    def test_marketing_drift_blocks_before_application_writes(self):
+        aws = FakeAws()
+        aws.put('marketing/index.html', b'external edit', bucket='frontend')
+        with self.assertRaisesRegex(RuntimeError, 'marketing site differs'):
+            self.run_release(aws)
+        self.assertEqual(aws.updates, [])
+        self.assertEqual(aws.get('marketing/index.html', 'frontend')[0], b'external edit')
+        self.assertNotIn((None, 'state/lock.json'), aws.rows)
+
+    def test_external_marketing_change_is_never_overwritten_by_recovery(self):
+        aws = FakeAws()
+        original_get = aws.get
+        def get(key, bucket=None):
+            if key == 'marketing/index.html' and bucket == 'frontend' and aws.updates:
+                aws.put(key, b'external marketing edit', bucket=bucket)
+            return original_get(key, bucket)
+        with patch.object(aws, 'get', side_effect=get):
+            with self.assertRaisesRegex(RuntimeError, 'Unrecognized marketing change'):
+                self.run_release(aws)
+        self.assertEqual(aws.get('marketing/index.html', 'frontend')[0], b'external marketing edit')
+        self.assertEqual(len(aws.updates), 1)
+        self.assertIn((None, 'state/lock.json'), aws.rows)
 
 
 if __name__ == '__main__':

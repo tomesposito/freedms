@@ -30,7 +30,8 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: python3 -m unittest discover -s ops/releases -p 'test_*.py' -v
-      - name: Package the tested application
+      - run: node --test ops/releases/test_marketing.mjs
+      - name: Package the tested application and marketing site
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         run: node ops/releases/package.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -80,5 +81,5 @@ jobs:
         run: |
           set -euo pipefail
           cp "$PROVENANCE" release/provenance.jsonl
-          gh release create "build-$SOURCE" release/* --repo "$REPOSITORY" --target "$SOURCE" --title "Application build $SOURCE" --notes 'Tested application artifacts and attested manifest. Deployment requires separate operator approval.'
+          gh release create "build-$SOURCE" release/* --repo "$REPOSITORY" --target "$SOURCE" --title "Application and marketing build $SOURCE" --notes 'Tested application and marketing artifacts with an attested manifest. Deployment requires separate operator approval.'
           gh api --method DELETE "repos/$REPOSITORY/actions/artifacts/$ARTIFACT"

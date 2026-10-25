@@ -304,13 +304,23 @@ Resources:
     Properties:
       Name: !Sub '${AWS::StackName}-routing'
       AutoPublish: true
-      FunctionConfig: {Comment: Canonical host and API routing, Runtime: cloudfront-js-2.0}
+      FunctionConfig: {Comment: Marketing host and private application routing, Runtime: cloudfront-js-2.0}
       FunctionCode: !Sub |
         function handler(event) {
           var request = event.request;
           if (request.headers.host.value === '${RootDomain}') {
-            return {statusCode: 302, headers: {location: {value: 'https://app.${RootDomain}/'}, 'cache-control': {value: 'no-store'}}};
+            if (request.uri === '/login' || request.uri === '/login/') {
+              return {statusCode: 302, headers: {location: {value: 'https://app.${RootDomain}/'}, 'cache-control': {value: 'no-store'}}};
+            }
+            if (request.uri === '/signup' || request.uri === '/signup/') {
+              return {statusCode: 302, headers: {location: {value: 'https://${RootDomain}/#signup'}, 'cache-control': {value: 'no-store'}}};
+            }
+            if (request.uri === '/' || request.uri === '/index.html') request.uri = '/marketing/index.html';
+            else if (/^\/assets\/[A-Za-z0-9_-]+\.(png|svg|css|js|woff2)$/.test(request.uri)) request.uri = '/marketing' + request.uri;
+            else return {statusCode: 404, headers: {'cache-control': {value: 'no-store'}}};
+            return request;
           }
+          if (request.headers.host.value !== 'app.${RootDomain}' || request.uri.indexOf('/marketing/') === 0) return {statusCode: 404};
           if (request.uri.indexOf('/api/') === 0) request.uri = request.uri.slice(4);
           return request;
         }

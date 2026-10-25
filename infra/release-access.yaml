@@ -81,6 +81,8 @@ Resources:
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/index.html'
                   - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/assets/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/index.html'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/assets/*'
 Outputs:
   OperationsBucket: {Value: !Ref Operations}
   DeployRoleArn: {Value: !GetAtt DeployRole.Arn}

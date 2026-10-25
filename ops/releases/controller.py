@@ -94,7 +94,7 @@ def frontend_files(archive, entries):
     expected = {}
     for entry in entries:
         path = entry['path']
-        require(path == 'index.html' or re.fullmatch(r'assets/[A-Za-z0-9_-]+\.(js|css|woff2|png|svg)', path), 'Unsafe frontend path')
+        require(re.fullmatch(r'(marketing/)?index\.html', path) or re.fullmatch(r'(marketing/)?assets/[A-Za-z0-9_-]+\.(js|css|woff2|png|svg)', path), 'Unsafe frontend path')
         require(path not in expected and 0 < entry['size'] <= 20_000_000, 'Invalid frontend entry')
         expected[path] = entry
     require(sum(entry['size'] for entry in entries) <= 50_000_000, 'Frontend exceeds release limit')
@@ -109,7 +109,7 @@ def frontend_files(archive, entries):
             content = tar.extractfile(member).read()
             require(digest(content) == entry['sha256'], 'Frontend digest mismatch')
             result[member.name] = content
-    require('index.html' in result, 'Frontend index missing')
+    require('index.html' in result and 'marketing/index.html' in result, 'Frontend or marketing index missing')
     return result
 
 
@@ -119,7 +119,7 @@ def verify_package(directory, source, manifest_digest, config):
     require(re.fullmatch(r'[a-f0-9]{40}', source or '') and re.fullmatch(r'[a-f0-9]{64}', manifest_digest or ''), 'Exact source and manifest required')
     require(digest(raw) == manifest_digest, 'Manifest digest mismatch')
     manifest = json.loads(raw)
-    require(manifest.get('version') == 1 and manifest.get('source') == source and manifest.get('repository') == config['repository'], 'Release identity mismatch')
+    require(manifest.get('version') == 2 and manifest.get('source') == source and manifest.get('repository') == config['repository'], 'Release identity mismatch')
     require(manifest['infrastructure'] == config['infrastructure'], 'Infrastructure change requires operator deployment')
     require(manifest['configuration'] == config['configuration'], 'Frontend configuration mismatch')
     require(set(manifest['artifacts']) == {'api.zip', 'web.tar.gz'}, 'Unexpected artifacts')
@@ -162,6 +162,8 @@ def inspect(aws, config, current):
     require(function['CodeSha256'] == current['codeSha256'], 'Live Lambda differs from recorded release')
     index, etag = aws.get('index.html', config['frontendBucket'])
     require(digest(index) == current['indexSha256'], 'Live frontend differs from recorded release')
+    marketing, _ = aws.get('marketing/index.html', config['frontendBucket'])
+    require(digest(marketing) == current['marketingIndexSha256'], 'Live marketing site differs from recorded release')
     return info, index, etag
 
 
@@ -169,9 +171,14 @@ def smoke(config, files):
     # Public checks never log in, load demo data, or write application records.
     origin = config['webUrl'].rstrip('/')
     require(re.fullmatch(r'https://[a-z0-9.-]+', origin), 'Invalid web origin')
+    marketing_origin = config['marketingUrl'].rstrip('/')
+    require(re.fullmatch(r'https://[a-z0-9.-]+', marketing_origin) and marketing_origin != origin, 'Invalid marketing origin')
     for path, expected in files.items():
-        with urllib.request.urlopen(origin + '/' + path, timeout=20) as response:
-            require(response.status == 200 and digest(response.read()) == digest(expected), 'Live frontend mismatch')
+        site = marketing_origin if path.startswith('marketing/') else origin
+        public_path = path.removeprefix('marketing/')
+        for suffix in [public_path, ''] if public_path == 'index.html' else [public_path]:
+            with urllib.request.urlopen(site + '/' + suffix, timeout=20) as response:
+                require(response.status == 200 and response.geturl() == site + '/' + suffix and digest(response.read()) == digest(expected), 'Live frontend mismatch')
     for path, status in [('/api/session', 401), ('/api/share/invalid-release-smoke', 404)]:
         try:
             urllib.request.urlopen(origin + path, timeout=20)
@@ -205,25 +212,29 @@ def promote(aws, config, current, current_etag, config_digest, source, manifest_
         approval, _ = aws.get(f'approvals/{source}-{manifest_digest}.json')
         check_approval(json.loads(approval), current_etag, config_digest, source, manifest_digest)
         info, previous_index, index_etag = inspect(aws, config, current)
+        previous_marketing, marketing_etag = aws.get('marketing/index.html', config['frontendBucket'])
+        require(digest(previous_marketing) == current['marketingIndexSha256'], 'Marketing site changed before snapshot')
         with urllib.request.urlopen(info['Code']['Location'], timeout=30) as response:
             previous_code = response.read(50_000_001)
         require(base64.b64encode(hashlib.sha256(previous_code).digest()).decode() == current['codeSha256'], 'Rollback code mismatch')
         prefix = 'history/' + operation
         aws.put(prefix + '/api.zip', previous_code, content_type='application/zip', create=True)
         aws.put(prefix + '/index.html', previous_index, content_type='text/html', create=True)
+        aws.put(prefix + '/marketing.html', previous_marketing, content_type='text/html', create=True)
         snapshot = {'previous': current, 'target': source, 'manifest': manifest_digest, 'operation': operation, 'prefix': prefix}
         aws.put(prefix + '/snapshot.json', encode(snapshot), create=True)
         for path, data in files.items():
-            if path != 'index.html':
+            if path not in ['index.html', 'marketing/index.html']:
                 content_type = {'js': 'application/javascript', 'css': 'text/css', 'svg': 'image/svg+xml', 'png': 'image/png', 'woff2': 'font/woff2'}[path.rsplit('.', 1)[1]]
                 aws.asset(path, data, config['frontendBucket'], content_type)
         # Changes are compatible application bytes only. Existing assets remain available.
         started = True
         code_sha = replace_code(aws, config, code, info['Configuration']['RevisionId'])
         aws.put('index.html', files['index.html'], bucket=config['frontendBucket'], etag=index_etag, content_type='text/html')
-        live, _, _ = inspect(aws, config, {'codeSha256': code_sha, 'indexSha256': digest(files['index.html'])})
+        aws.put('marketing/index.html', files['marketing/index.html'], bucket=config['frontendBucket'], etag=marketing_etag, content_type='text/html')
+        live, _, _ = inspect(aws, config, {'codeSha256': code_sha, 'indexSha256': digest(files['index.html']), 'marketingIndexSha256': digest(files['marketing/index.html'])})
         smoke(config, files)
-        record = {'source': source, 'manifest': manifest_digest, 'codeSha256': code_sha, 'indexSha256': digest(files['index.html']),
+        record = {'source': source, 'manifest': manifest_digest, 'codeSha256': code_sha, 'indexSha256': digest(files['index.html']), 'marketingIndexSha256': digest(files['marketing/index.html']),
                   'operation': operation, 'previous': prefix, 'deployedAt': time.time()}
         aws.put('state/current.json', encode(record), etag=current_etag)
         aws.remove_lock(lock)
@@ -239,10 +250,13 @@ def promote(aws, config, current, current_etag, config_digest, source, manifest_
             require(function_fingerprint(live['Configuration']) == config['functionConfiguration'], 'Configuration changed; operator recovery required')
             live_index, rollback_index_etag = aws.get('index.html', config['frontendBucket'])
             require(digest(live_index) in [current['indexSha256'], digest(files['index.html'])], 'Unrecognized frontend change; operator recovery required')
+            live_marketing, rollback_marketing_etag = aws.get('marketing/index.html', config['frontendBucket'])
+            require(digest(live_marketing) in [current['marketingIndexSha256'], digest(files['marketing/index.html'])], 'Unrecognized marketing change; operator recovery required')
             replace_code(aws, config, previous_code, live['Configuration']['RevisionId'])
             aws.put('index.html', previous_index, bucket=config['frontendBucket'], etag=rollback_index_etag, content_type='text/html')
+            aws.put('marketing/index.html', previous_marketing, bucket=config['frontendBucket'], etag=rollback_marketing_etag, content_type='text/html')
             inspect(aws, config, current)
-            smoke(config, {'index.html': previous_index})
+            smoke(config, {'index.html': previous_index, 'marketing/index.html': previous_marketing})
             recovered = {**current, 'recoveredAt': time.time(), 'failedOperation': operation}
             aws.put('state/current.json', encode(recovered), etag=current_etag)
             aws.remove_lock(lock)

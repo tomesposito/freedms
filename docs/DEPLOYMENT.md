@@ -2,12 +2,14 @@
 
 The pilot uses Node 24 Lambda, API Gateway HTTP API, DynamoDB, Cognito, private
 S3 buckets, and CloudFront. Deploy `infra/template.yaml` in `us-east-1`.
-The apex redirects to `app.<RootDomain>`. The frontend uses `/api`; CloudFront
+The apex serves the marketing site from `site/`; `app.<RootDomain>` serves the
+invite-only application. Both use the same private S3 bucket and CloudFront Free
+subscription. The application frontend uses `/api`; CloudFront
 removes that prefix and adds a private origin header. Lambda rejects direct
 origin traffic without that credential. API responses are never cached.
 
-The pilot launched at `https://app.freedms.co/` on October 25, 2026; the apex
-redirects there. CloudFormation completed successfully and the CloudFront Free
+The pilot launched at `https://app.freedms.co/` on October 25, 2026. The marketing
+site is published at `https://freedms.co/`. CloudFormation completed successfully and the CloudFront Free
 subscription was verified active with this distribution, WAF, and DNS zone.
 The release passed 292 automated tests plus live checks of password change,
 required authenticator enrollment, authenticated access, tenant isolation, buyer
@@ -82,14 +84,19 @@ account IDs, or generated stack outputs. Runtime dependencies use Apache-2.0/MIT
 5. Build the web app with `VITE_API_URL=/api`, `VITE_COGNITO_DOMAIN`, and
    `VITE_COGNITO_CLIENT_ID` from outputs. Upload hashed assets with long immutable
    caching; upload `index.html` last with `Cache-Control: no-store`. Keep previous
-   release assets and a copy of the previous index for rollback.
+   release assets and a copy of each previous index for rollback. Package the marketing
+   site with `ops/releases/marketing.mjs`: upload its content-addressed screenshots
+   under `marketing/assets/` and its page as `marketing/index.html` in the same
+   frontend bucket. The viewer function maps apex requests to that prefix. Upload
+   these files before enabling the marketing route; never overwrite the app index
+   with the marketing page. Both indexes use `Cache-Control: no-store`.
 6. Provision the administrator and optional fictional demo records using the CLI
    below. Verify HTTPS, unauthenticated rejection, login/MFA, tenant isolation,
    documents, and recovery. `PublishSite=false` keeps public app/apex DNS absent;
    `curl --connect-to` can exercise the intended host through the distribution
    before DNS cutover.
 7. Update the existing stack with `PublishSite=true`, using previous values for
-   unchanged parameters. Verify apex redirect, app login, and the public API path.
+   unchanged parameters. Verify the apex marketing page, app login, and the public API path.
    Confirm the SNS subscription email to receive operational alarms.
 
 The API entry point receives only verified API Gateway claims. Public routes are
@@ -169,7 +176,7 @@ recovered from retained versions within 30 days. Keep application metadata and
 object versions consistent when restoring an attachment.
 
 For application rollback, restore the previous Lambda artifact/template and
-previous frontend index; keep hashed assets immutable. To withdraw the pilot,
+previous application and marketing indexes; keep hashed assets immutable. To withdraw the pilot,
 remove public DNS with `PublishSite=false`; CloudFront remains reachable by its
 service hostname, so revoke memberships or disable the distribution as well if
 access itself must stop. Do not delete retained data as a rollback step.
@@ -182,15 +189,28 @@ runs on `master` also publish `build-<full-source-sha>` with `api.zip`,
 Publishing does not deploy. The public repository has no AWS trust or access keys.
 The build uses repository variables `VITE_COGNITO_DOMAIN` and
 `VITE_COGNITO_CLIENT_ID`; these are public browser configuration, not credentials.
-The marketing source in `site/` is not part of the application release; the apex
-continues to redirect to the invite-only app.
+Every release also packages `site/` with content-addressed screenshots under
+`marketing/` in `web.tar.gz`. The version-2 manifest binds both frontends. The
+marketing page describes the invite-only pilot and links sign-in to the app;
+legacy apex `/signup` links point to the pilot information section and `/login`
+redirects to the app. Unknown apex paths (including `/api/*`) return 404.
+
+The one-time marketing cutover updates only the CloudFront viewer function in the
+pilot stack, using its existing packaged template to preserve the Lambda artifact.
+An operator must stage the marketing files first, inspect the change set, verify
+both hosts and the Free subscription, then record the new infrastructure digest,
+`marketingUrl`, and live `marketingIndexSha256` in the private release baseline.
+The release-access stack additionally grants read/write access only to
+`marketing/index.html` and `marketing/assets/*`; its reviewed controller pin must
+match the version-2 controller. Version-1 builds require an operator migration and
+are not accepted by this controller.
 
 The private `tomesposito/freedms-deploy` repository contains a manual
 `Deploy approved freeDMS release` workflow. Its reusable controller is pinned to a
 reviewed commit, and AWS OIDC trust binds that commit, the private repository's
 numeric identity, owner identity, `master`, and the dispatch event. Credentials
 last 15 minutes. The deployment role can update only this application's Lambda
-code, frontend index/assets, and private release records. It cannot write its own
+code, application and marketing indexes/assets, and private release records. It cannot write its own
 approvals/configuration, change IAM, deploy infrastructure, provision users, or
 access the database/document bucket directly. Deploying code can exercise the
 application's runtime permissions, so source review remains required.
@@ -220,16 +240,16 @@ application's runtime permissions, so source review remains required.
 4. Run the private workflow from `master` with `mode=preflight`, that source, and
    that manifest digest. Then run it with `mode=deploy` and the same values.
    `mode=probe` checks OIDC access and the current application without changing it.
-5. A successful deployment checks the actual Lambda code digest, S3 index, every
-   public frontend file, anonymous API rejection, and invalid-share rejection.
+5. A successful deployment checks the actual Lambda code digest, both S3 indexes, every
+   public application and marketing file, anonymous API rejection, and invalid-share rejection.
    The private current-release record is updated only after those checks pass.
    `release_operator.py status /private/release-operator.json` reads that record and checks
-   the live Lambda/index again. These are public smoke checks, not a fresh
+   the live Lambda and both indexes again. These are public smoke checks, not a fresh
    authenticated end-to-end business transaction.
 
 The controller downloads data artifacts only; it never checks out or executes the
 requested public source with AWS credentials. Existing frontend assets are kept
-and never overwritten with different bytes. The previous Lambda ZIP/index are
+and never overwritten with different bytes. The previous Lambda ZIP and both indexes are
 saved before promotion. Ordinary failures attempt recovery and verify it; failed
 recovery or a lost runner leaves a durable lock that blocks further deployments.
 
@@ -242,10 +262,11 @@ record, requiring a fresh approval before retrying.
 
 If a job disappears or recovery fails, **do not simply rerun or delete the lock**.
 Using independent operator credentials, read `state/lock.json`, its matching
-`history/<operation>/snapshot.json`, and the actual Lambda/index. Confirm no job
+`history/<operation>/snapshot.json`, and the actual Lambda and both indexes. Confirm no job
 is running. Restore the snapshot's `api.zip` with Lambda's current `RevisionId`,
-wait for the update, restore its `index.html` with `Cache-Control: no-store`, and
-verify both hashes against `snapshot.previous`. Write a new current record based
+wait for the update, restore its `index.html` and `marketing.html` to the application
+`index.html` and `marketing/index.html` keys with `Cache-Control: no-store`, and
+verify all three hashes against `snapshot.previous`. Write a new current record based
 on `snapshot.previous` with a recovery timestamp, then conditionally delete the
 observed lock. The snapshot and lock survive cancellation; there is no unattended
 watchdog that can guarantee recovery after the runner is lost.
