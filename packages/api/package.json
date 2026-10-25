@@ -4,12 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/lambda.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/lambda.cjs",
+    "build": "esbuild src/lambda.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/lambda.cjs",
     "dev": "tsx watch src/local.ts",
     "provision": "node --import tsx src/provision.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.1156.0",
     "@aws-sdk/client-dynamodb": "^3.900.0",
+    "@aws-sdk/client-s3": "^3.1156.0",
     "@aws-sdk/lib-dynamodb": "^3.900.0",
     "@freedms/shared": "0.1.0",
     "@xmldom/xmldom": "^0.9.12"

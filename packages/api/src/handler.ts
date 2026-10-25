@@ -48,7 +48,7 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
   if (!body || Buffer.byteLength(body) > limit) throw invalid(`A JSON body of at most ${limit} bytes is required.`);
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
-export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender = fetchWebhookSender) {
+export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender = fetchWebhookSender, options: {hosted?: boolean} = {}) {
   return async (request: ApiRequest): Promise<ApiResponse> => {
     try {
       if (request.method.toUpperCase() === 'POST' && request.path.replace(/\/$/, '') === '/intake/adf') {
@@ -66,11 +66,13 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         }
         return result;
       }
-      if (request.path.startsWith('/invite/')) return await publicInvite(request, repositories, now());
+      if (request.path.startsWith('/invite/')) return await publicInvite(request, repositories, now(), options.hosted);
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
       const execute = async (): Promise<ApiResponse> => {
+        if (options.hosted && ((path === '/admin/users' && method === 'POST') || /^\/(account|admin)\/mfa(\/|$)/.test(path)))
+          throw new ApiError(403, 'HOSTED_ACCOUNT_MANAGEMENT', 'Pilot accounts and authenticator recovery are managed by the pilot operator.');
         if (/^\/deals\/[^/]+\/(buyers-order\/signatures|documents\/[^/]+\/(signatures|replace))$/.test(path) || /^\/service\/repair-orders\/[^/]+\/signatures$/.test(path)) return await signatures(request, principal, repository, now(), documents);
         if (/^\/parts(\/|$)/.test(path)) return await parts(request, principal, repository, now());
         if (/^\/service(\/|$)/.test(path)) return await service(request, principal, repository, now(), documents);
