@@ -377,6 +377,14 @@ workspace. API requests, backup/storage usage, and other services may still incu
 small charges; serverless is not a guarantee of a zero bill. See
 [deployment and recovery](docs/DEPLOYMENT.md).
 
+**Release automation — owner, 2026-10-25:** follow OpenSight's separation of
+public tested builds and private manual promotion. Public CI has no AWS trust.
+A pinned private controller uses short-lived OIDC credentials, exact artifact
+provenance/digests, and an independent operator approval bound to current state.
+Routine releases update compatible application bytes only, with saved recovery
+artifacts and a durable deployment lock. Infrastructure and data migrations
+remain separate operator actions.
+
 **Owner's reasoning:** stay on AWS free tiers to start, as with OpenSight's
 hosted setup — Lambda and serverless, so the product costs nothing while there
 is no activity and no revenue. Reassess if and when real traffic arrives; the

@@ -409,6 +409,9 @@ verified Cognito account; public self-registration remains disabled.
 See [the deployment runbook](docs/DEPLOYMENT.md) for verification, deployment,
 account provisioning, optional fictional demo data, costs, and recovery.
 `npm run build` and `npm test` do not deploy resources or populate data.
+GitHub Actions tests pull requests and publishes versioned builds from `master`.
+An independently approved build can be promoted through the private release
+workflow; see [GitHub Actions releases](docs/DEPLOYMENT.md#github-actions-releases).
 
 The direct libraries use MIT or Apache-2.0 licenses. Vite's transitive toolchain
 also includes permissive BSD/ISC-licensed packages; see `package-lock.json` for the
