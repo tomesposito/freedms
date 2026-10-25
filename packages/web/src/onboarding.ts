@@ -44,7 +44,7 @@ export function mountOnboarding(root: HTMLElement, finish: (data: Onboarding & {
       form.querySelectorAll('button').forEach(b => { b.disabled = true; });
       try {
         const result = await finish({...data, onboarding: true});
-        root.innerHTML = `<h2>Your workspace is ready</h2><p>No email was sent. Copy and share these invite links yourself. Acceptance and profile setup arrive in the next step.</p>${inviteLinksHtml(result.invites)}<button id="enter-app" class="primary">Enter workspace</button>`;
+        root.innerHTML = `<h2>Your workspace is ready</h2><p>No email was sent. Copy and share these invite links yourself. Invitees can open their link to set up a profile and join.</p>${inviteLinksHtml(result.invites)}<button id="enter-app" class="primary">Enter workspace</button>`;
         bindInviteCopies(root); root.querySelector('#enter-app')!.addEventListener('click', enter);
       } catch (reason) { error.textContent = reason instanceof Error ? reason.message : 'Unable to create workspace.'; error.hidden = false; error.focus(); form.querySelectorAll('button').forEach(b => { b.disabled = false; }); }
     });

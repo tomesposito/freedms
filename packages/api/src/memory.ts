@@ -1,3 +1,4 @@
+import { acceptanceWrite } from './invites.js';
 import { validateMemberWrite } from './users.js';
 import type { MfaRecord } from '@freedms/shared';
 import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
@@ -17,6 +18,15 @@ export class MemoryRepositories implements RepositoryFactory {
     const check = (event: OutboxEvent) => { assertScope(tenantId, event); if (s.events.has(event.id)) throw conflict(); };
     // Synchronous validation followed by synchronous map writes: no interleaved await or partial commits.
     return {
+      acceptInvite: async (invite, user, now) => {
+        const write = acceptanceWrite(tenantId, s.crm.get(`invite#${invite.id}`) as import('@freedms/shared').Invite | undefined, invite, user, [...s.memberships.values()].map(membership => ({membership, user: s.users.get(membership.userId)!})), now);
+        if (!write) return 'already-member';
+        const {record, member, event, memberEvent} = write;
+        check(event); check(memberEvent);
+        s.crm.set(`invite#${invite.id}`, structuredClone(record)); s.users.set(user.id, structuredClone(user)); s.memberships.set(user.id, structuredClone(member));
+        s.events.set(event.id, structuredClone(event)); s.events.set(memberEvent.id, structuredClone(memberEvent));
+        return 'accepted';
+      },
       workspaceUsers: async () => structuredClone([...s.memberships.values()].map(membership => ({membership, user: s.users.get(membership.userId)!}))),
       saveMember: async (user, member, expected, event) => {
         assertScope(tenantId, member, event); check(event);

@@ -56,14 +56,17 @@ invites. Nothing is created until Finish; the workspace starts empty.
 
 ![Onboarding finish and invite links](docs/screenshots/onboarding-finish.png)
 
-**Invite landing** — public links show the dealership and role. Acceptance and
-profile setup follow in issue #34.
+**Invite acceptance** — confirm your profile and invited email to join with the assigned role.
 
 ![Pending invite landing](docs/screenshots/invite-landing.png)
 
-**Unavailable invites** — expired, revoked, or replaced links show a clear message.
+**Unavailable invites** — expired, revoked, used, or invalid links explain how to get a new link.
 
 ![Invalid invite landing](docs/screenshots/invite-invalid.png)
+
+**Welcome** — role guidance and optional MFA setup, dismissible once per member.
+
+![Invite welcome](docs/screenshots/invite-welcome.png)
 
 **Inventory** — every vehicle with aging, cost, and status.
 
@@ -220,7 +223,7 @@ has MFA on and can reset it.
 **Workspace users** — admin-only membership management with role, active status,
 and MFA status. Fresh workspaces contain only their admin. Local sign-in only;
 admins create invites during onboarding and share copyable links themselves. No
-email is sent. Reissue replaces the old link; revocation is final.
+email is sent. Accepted invites record when and as whom; reissue replaces pending links.
 
 ![Workspace user management](docs/screenshots/user-management.png)
 

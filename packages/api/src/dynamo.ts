@@ -1,3 +1,4 @@
+import { acceptanceWrite } from './invites.js';
 import { validateMemberWrite } from './users.js';
 import type { MfaRecord } from '@freedms/shared';
 import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
@@ -46,6 +47,19 @@ export class DynamoRepositories implements RepositoryFactory {
       return members.map(membership => ({membership, user: users.find(u => u.id === membership.userId)!}));
     };
     return {
+      acceptInvite: async (invite, user, now) => {
+        const guard = await get<{version: number}>('MEMBERSHIP_GUARD');
+        const current = await get<import('@freedms/shared').Invite>(`INVITE#${requireId(invite.id)}`);
+        const write = acceptanceWrite(tenantId, current, invite, user, await workspaceUsers(), now);
+        if (!write) return 'already-member';
+        const {record, member, event, memberEvent} = write;
+        await transact([
+          put('MEMBERSHIP_GUARD', {version: (guard?.version ?? 0) + 1}, guard ? '#d.#v = :v' : 'attribute_not_exists(PK)', guard?.version),
+          put(`INVITE#${invite.id}`, record, '#d.#v = :v', invite.version),
+          put(`USER#${requireId(user.id)}`, user), put(`MEMBER#${user.id}`, member), eventPut(event), eventPut(memberEvent)
+        ]);
+        return 'accepted';
+      },
       workspaceUsers,
       saveMember: async (user, member, expected, event) => {
         assertScope(tenantId, member, event);

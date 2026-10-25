@@ -1,5 +1,5 @@
 import { mountOnboarding } from './onboarding';
-import { inviteLandingHtml, type InviteView } from './invites';
+import { inviteLandingHtml, invitedEmailMatches, inviteSignInHtml, welcomeHtml, welcomeDismissed, dismissWelcome, type InviteView } from './invites';
 import { publicApi } from './retail';
 import type { Invite } from '@freedms/shared';
 import { icon, sidebarToggleIcon, sidebarNavigation, readSidebarPreference, writeSidebarPreference } from './sidebar';
@@ -104,10 +104,12 @@ async function login(): Promise<void> {
     document.querySelector('.login > h2')?.remove();
     return result;
   }, () => { void start(); });
+  const joinParams = new URLSearchParams(location.hash.split('?')[1]);
+  for (const field of ['tenantId', 'email']) { const input = document.querySelector<HTMLInputElement>(`#join [name=${field}]`); if (input) input.value = joinParams.get(field) ?? ''; }
   document.querySelector('#cognito')?.addEventListener('click', () => { void signIn().catch(flash); });
   document.querySelectorAll<HTMLFormElement>('#join').forEach(form => form.addEventListener('submit', async event => {
     event.preventDefault(); const form = event.currentTarget as HTMLFormElement; const button = form.querySelector('button')!; button.disabled = true;
-    try { const data = Object.fromEntries(new FormData(form)); const result = await api<{token: string}>('/local/session', 'POST', data); setToken(result.token); await start(); }
+    try { const data = Object.fromEntries(new FormData(form)); const result = await api<{token: string}>('/local/session', 'POST', data); setToken(result.token); history.replaceState(null, '', '#/'); await start(); }
     catch (error) { flash(error); button.disabled = false; }
   }));
 }
@@ -184,12 +186,41 @@ async function form(id: string | undefined, sequence: number): Promise<void> {
   });
 }
 async function route(): Promise<void> {
+  if (location.hash.startsWith('#/join')) { ++routeSequence; await login(); return; }
   if (location.hash.startsWith('#/invite/')) {
     const sequence = ++routeSequence;
     app.innerHTML = '<main class="login"><p>Loading invite…</p></main>';
     try {
       const view = await publicApi<InviteView>(`/invite/${encodeURIComponent(location.hash.slice(9))}`);
-      if (sequence === routeSequence) app.innerHTML = inviteLandingHtml(view);
+      if (sequence !== routeSequence) return;
+      app.innerHTML = inviteLandingHtml(view);
+      if (view.valid) {
+        const form = app.querySelector<HTMLFormElement>('#accept-invite')!;
+        const email = form.querySelector<HTMLInputElement>('[name=email]')!;
+        email.addEventListener('input', () => { form.querySelector<HTMLElement>('#email-warning')!.hidden = invitedEmailMatches(email.value, view.email); });
+        const path = `/invite/${encodeURIComponent(location.hash.slice(9))}/accept`;
+        form.addEventListener('submit', async event => {
+          event.preventDefault(); const button = form.querySelector('button')!; button.disabled = true;
+          const message = form.querySelector<HTMLElement>('#invite-message')!;
+          try {
+            const result = await publicApi<{outcome: string; reason?: 'expired' | 'revoked' | 'accepted'; message?: string; tenantId: string; email: string}>(path, 'POST', Object.fromEntries(new FormData(form)));
+            if (sequence !== routeSequence) return;
+            if (result.outcome === 'email-mismatch') { message.textContent = result.message!; return; }
+            if (result.outcome === 'refused') { app.innerHTML = inviteLandingHtml({valid: false, reason: result.reason}); if (result.message) app.querySelector('main')!.append(Object.assign(document.createElement('p'), {textContent: result.message})); return; }
+            if (result.outcome === 'already-member') { app.innerHTML = inviteSignInHtml(result.tenantId, result.email, true); return; }
+            app.innerHTML = inviteSignInHtml(result.tenantId, result.email);
+            if (localMode) {
+              try {
+                const signed = await publicApi<{token: string}>('/local/session', 'POST', {tenantId: result.tenantId, email: result.email});
+                if (sequence !== routeSequence) return;
+                setToken(signed.token); session = await api('/session');
+                history.replaceState(null, '', '#/welcome'); await route();
+              } catch { /* The accepted panel provides a manual sign-in path. */ }
+            }
+          } catch (error) { message.textContent = errorMessage(error); }
+          finally { button.disabled = false; }
+        });
+      }
     } catch {
       if (sequence === routeSequence) app.innerHTML = '<main class="login"><h1>Unable to check this invite</h1><p>Please reload to try again.</p></main>';
     }
@@ -199,7 +230,13 @@ async function route(): Promise<void> {
   if (!session) return; const sequence = ++routeSequence;
   try {
     const parts = location.hash.replace(/^#\//, '').split('/');
-    if (parts[0] === 'deals') {
+    if (parts[0] === 'welcome') {
+      const {tenantId, userId, role} = session.principal;
+      if (welcomeDismissed(localStorage, tenantId, userId)) { location.hash = '#/'; return; }
+      shell(welcomeHtml(role, session.tenant.name));
+      app.querySelectorAll<HTMLButtonElement>('[data-welcome]').forEach(button => button.addEventListener('click', () => { dismissWelcome(localStorage, tenantId, userId); location.hash = `#${button.dataset.welcome}`; }));
+    }
+    else if (parts[0] === 'deals') {
       const ui = {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'};
       if (parts[2] === 'compliance' && parts[1]) await dealComplianceRoute(parts[1], ui);
       else if (parts[2] === 'credit' && parts[1]) await creditRoute(parts[1], ui);
