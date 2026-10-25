@@ -114,7 +114,8 @@ payoff quotes sit on the same page.
 ![Credit application](docs/screenshots/credit-application.png)
 
 **Deal jacket** — buyer's order, FTC Buyers Guide, attachments, the
-completeness checklist, and any accepted F&I products.
+completeness checklist, and any accepted F&I products. The buyer's order
+here is signed in store; the record shows the signer, time, and document hash.
 
 ![Deal jacket](docs/screenshots/deal-jacket.png)
 
@@ -134,7 +135,8 @@ free-text and stocked parts, inspection
 checklists and photos, and customer recommendations with recorded approvals/declines.
 Completion applies stock once and posts the journal entry shown at the bottom;
 reopening restores the stock and reverses the entry. Negative stock requires an
-explicit override and leaves a visible warning.
+explicit override and leaves a visible warning. The customer authorization
+below the form is signed in store against the $180.00 estimate.
 
 ![Repair order](docs/screenshots/repair-order.png)
 
