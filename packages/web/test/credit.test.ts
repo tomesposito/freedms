@@ -33,7 +33,7 @@ test('Printed packet includes the adverse action article only for declined decis
   const pencil = {id: 'p', name: 'Pencil', fiSelections: [], lease: null, price: 200000, down: 0, term: 36, aprBps: 0};
   const deal: import('@freedms/shared').DealView = {...base, kind: 'deal', vehicleId: vehicle.id, customerId: customer.id, leadId: null, type: 'cash', trade: null, pencils: [pencil], workingPencilId: pencil.id, status: 'approved', history: [], taxRateBps: 0, taxTradeDifference: false, docFee: 0, vehicle, customer};
   for (const outcome of [null, 'approved', 'conditioned', 'declined'] as const) {
-    const jacket: import('@freedms/shared').DealJacket = {compliance: {checklist: [], checks: [], complete: false}, deal, pencil, numbers: pencilMath(pencil, null, deal, vehicle, 'cash'), buyersGuide: {vehicle, asIs: true, dealerWarranty: null, manufacturerWarranty: null}, fiProducts: [], documents: [], checklist: [], payoffQuotes: [q],
+    const jacket: import('@freedms/shared').DealJacket = {signatures: [], buyersOrderSignature: {status: 'awaiting', hash: ''}, compliance: {checklist: [], checks: [], complete: false}, deal, pencil, numbers: pencilMath(pencil, null, deal, vehicle, 'cash'), buyersGuide: {vehicle, asIs: true, dealerWarranty: null, manufacturerWarranty: null}, fiProducts: [], documents: [], checklist: [], payoffQuotes: [q],
       credit: outcome ? {status: 'decision-recorded', decisionOutcome: outcome, lenderName: 'Bank', applicantSsnLast4: '6789'} : null,
       adverseAction: outcome === 'declined' ? {applicantName: applicant.fullName, decidedAt: '2026-10-23T12:00:00Z', lenderName: 'Bank', reasons: ['credit-history']} : null};
     const html = renderPacket(jacket);

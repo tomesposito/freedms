@@ -1,3 +1,5 @@
+import { packetInputs, packetHash, documentSignatureStatus } from './signature-targets.js';
+import { signatureStatusFor } from '@freedms/shared';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { defaultShareExpiryDays, documentTypes, maxDocumentBytes, pencilMath, leaseMath, paymentGrid, type BuyerDealView, type Deal, type DealShare, type ShareResponse, type DealDocument, type Principal } from '@freedms/shared';
 import { requireWrite } from './auth.js';
@@ -43,15 +45,19 @@ export async function dealerShare(request: ApiRequest, principal: Principal, rep
   await repo.crmWrite([...current.map(revoke), write(record, principal.userId)]);
   return response(201, {data: {token, shareId: record.id, expiresAt: record.expiresAt, path: `/share/${token}`}});
 }
-async function buyerView(repo: TenantRepository, deal: Deal, share: DealShare): Promise<BuyerDealView> {
+async function buyerView(repo: TenantRepository, deal: Deal, share: DealShare, store?: DocumentStore): Promise<BuyerDealView> {
   const [vehicle, customer, tenant] = await Promise.all([repo.get(deal.vehicleId), repo.crmGet('customer', deal.customerId), repo.tenant()]);
   const p = deal.pencils.find(p => p.id === deal.workingPencilId);
   if (!vehicle || !customer || !tenant || !p) throw unavailable();
   const m = pencilMath(p, deal.trade, deal, vehicle, deal.type), l = deal.type === 'lease' ? leaseMath(p, deal.trade, deal, vehicle) : null;
+  const signatures = await repo.crmList('signature');
+  const buyersOrderSignature = signatureStatusFor(signatures, 'buyers-order', deal.id, packetHash(await packetInputs(repo, deal)));
+  const docs = (await repo.crmList('document')).filter(d => d.dealId === deal.id && !d.status);
+  const documentsAwaitingSignature = (await Promise.all(docs.map(d => documentSignatureStatus(d, signatures, store)))).filter(s => s !== 'signed').length;
   // Lease maps adjusted capitalized balance to amountFinanced, rent to financeCharge,
   // monthly payment times term to totalPayments, and drive-off to cashDue.
   return {
-    dealershipName: tenant.name, customerName: customer.name, dealType: deal.type,
+    buyersOrderSignature, documentsAwaitingSignature, dealershipName: tenant.name, customerName: customer.name, dealType: deal.type,
     vehicle: {year: vehicle.year, make: vehicle.make, model: vehicle.model, trim: vehicle.trim, vin: vehicle.vin, stockNumber: vehicle.stockNumber},
     price: p.price, docFee: deal.docFee, salesTax: m.salesTax,
     fiProducts: p.fiSelections.filter(s => s.status === 'accepted').map(s => ({name: s.name, retailPrice: s.retailPrice, termNotes: s.termNotes})), fiRetailTotal: m.fiRetailTotal,
@@ -75,7 +81,7 @@ export async function publicShare(request: ApiRequest, repositories: RepositoryF
   const deal = await repo.crmGet('deal', share.dealId);
   if (!deal || !['working', 'approved'].includes(deal.status)) throw unavailable();
   onlyKeys(request.query ?? {}, []);
-  if (!match[2]) return {result: response(200, {data: await buyerView(repo, deal, share)}), tenantId: parts[0]};
+  if (!match[2]) return {result: response(200, {data: await buyerView(repo, deal, share, store)}), tenantId: parts[0]};
   const b = parseBody(request.body), date = now.toISOString();
   const base = {id: randomUUID(), tenantId: parts[0], version: 1, createdAt: date, updatedAt: date, dealId: deal.id};
   if (match[2] === 'respond') {
@@ -83,7 +89,7 @@ export async function publicShare(request: ApiRequest, repositories: RepositoryF
     if (('optionId' in b) === ('message' in b)) throw invalid('Choose one payment option or send a message.');
     const record: ShareResponse = {...base, kind: 'share-response', shareId: share.id, responseKind: 'change-request', optionId: null, termMonths: null, down: 0, monthlyPayment: null, amountDue: null, message: ''};
     if ('optionId' in b) {
-      const option = (await buyerView(repo, deal, share)).paymentOptions.find(o => o.id === b.optionId);
+      const option = (await buyerView(repo, deal, share, store)).paymentOptions.find(o => o.id === b.optionId);
       if (!option) throw invalid('Choose an available payment option.');
       Object.assign(record, {responseKind: 'payment-choice', optionId: option.id, termMonths: option.termMonths, down: option.down, monthlyPayment: option.monthlyPayment, amountDue: option.amountDue});
     } else record.message = text(b.message, 'Message', 1000);

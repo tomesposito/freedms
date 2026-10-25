@@ -1,3 +1,4 @@
+import { signatures } from './signatures.js';
 import { reportsP3 } from './reports-p3.js';
 import { manageInvites, publicInvite } from './invites.js';
 import { parts } from './parts.js';
@@ -70,6 +71,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
       const execute = async (): Promise<ApiResponse> => {
+        if (/^\/deals\/[^/]+\/(buyers-order\/signatures|documents\/[^/]+\/(signatures|replace))$/.test(path) || /^\/service\/repair-orders\/[^/]+\/signatures$/.test(path)) return await signatures(request, principal, repository, now(), documents);
         if (/^\/parts(\/|$)/.test(path)) return await parts(request, principal, repository, now());
         if (/^\/service(\/|$)/.test(path)) return await service(request, principal, repository, now(), documents);
         if (/^\/compliance(\/|$)/.test(path) || /^\/deals\/[^/]+\/(compliance|compliance-checks)(\/|$)/.test(path)) return await compliance(request, principal, repository, now());

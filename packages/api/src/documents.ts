@@ -1,3 +1,4 @@
+import { documentSignatureStatus } from './signature-targets.js';
 import { randomUUID } from 'node:crypto';
 import { documentTypes, type DealDocument, type DocumentRetention, type DocumentSearchResult, type OutboxEvent, type Principal } from '@freedms/shared';
 import { ApiError, conflict, missing, requireId } from './errors.js';
@@ -61,6 +62,7 @@ export async function documentControls(request: ApiRequest, principal: Principal
   const from = day(q.from), to = day(q.to);
   if (from && to && from > to) throw invalid('From date must be on or before to date.');
   const [docs, deals, customers] = await Promise.all([repo.crmList('document'), repo.crmList('deal'), repo.crmList('customer')]);
+  const signatures = await repo.crmList('signature');
   const results: DocumentSearchResult[] = [];
   for (const doc of docs) {
     const deal = deals.find(d => d.id === doc.dealId); if (!deal) continue;
@@ -68,7 +70,7 @@ export async function documentControls(request: ApiRequest, principal: Principal
     if (path === '/documents/past-retention') {
       if (doc.status === 'disposed' || (doc.status !== 'disposal-pending' && (settings?.retentionDays == null || Date.parse(doc.uploadedAt) >= now.getTime() - settings.retentionDays * 86400000))) continue;
     } else if (!doc.name.toLowerCase().includes(name) || (type && doc.type !== type) || !`${deal.id} ${buyerName}`.toLowerCase().includes(buyer) || (from && doc.uploadedAt.slice(0, 10) < from) || (to && doc.uploadedAt.slice(0, 10) > to)) continue;
-    results.push({...doc, buyerName, dealStatus: deal.status});
+    results.push({...doc, buyerName, dealStatus: deal.status, signatureStatus: await documentSignatureStatus(doc, signatures, store)});
   }
   results.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt) || a.id.localeCompare(b.id));
   return response(200, {data: results});

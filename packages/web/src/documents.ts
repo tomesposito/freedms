@@ -1,10 +1,11 @@
+import { signatureStatusLabel } from './signatures';
 import { documentTypes, type DocumentSearchResult } from '@freedms/shared';
 import { escapeHtml as e } from './format';
 import type { UI } from './desking';
 type Retention = {version: number; retentionDays: number | null};
 export function documentResultsHtml(docs: DocumentSearchResult[], disposal = false): string {
   if (!docs.length) return `<p class="empty">${disposal ? 'No documents past retention or awaiting disposal.' : 'No documents match your search.'}</p>`;
-  return `<ul>${docs.map(d => `<li><strong>${e(d.name)}</strong> · ${e(d.type)} · ${e(d.buyerName)} · Uploaded ${e(d.uploadedAt)} · <a href="#/deals/${e(d.dealId)}/jacket">Deal jacket ${e(d.dealId)}</a>${!['approved', 'sold'].includes(d.dealStatus) ? ' (packet available after approval)' : ''}${d.status ? ` · <strong>${d.status === 'disposed' ? 'Disposed' : 'Disposal pending'}</strong>` : ''}${disposal ? ` <button data-dispose="${e(d.id)}">${d.status === 'disposal-pending' ? 'Retry disposal' : 'Dispose'}</button>` : ''}</li>`).join('')}</ul>`;
+  return `<ul>${docs.map(d => `<li><strong>${e(d.name)}</strong> · ${e(d.type)} · ${e(d.buyerName)} · Uploaded ${e(d.uploadedAt)} · <a href="#/deals/${e(d.dealId)}/jacket">Deal jacket ${e(d.dealId)}</a>${!['approved', 'sold'].includes(d.dealStatus) ? ' (packet available after approval)' : ''}${d.status ? ` · <strong>${d.status === 'disposed' ? 'Disposed' : 'Disposal pending'}</strong>` : ''}${!d.status ? ` · ${signatureStatusLabel(d.signatureStatus)}` : ''}${disposal ? ` <button data-dispose="${e(d.id)}">${d.status === 'disposal-pending' ? 'Retry disposal' : 'Dispose'}</button>` : ''}</li>`).join('')}</ul>`;
 }
 export async function documentsRoute(ui: UI, filters = new URLSearchParams()): Promise<void> {
   ui.shell('<p>Loading documents…</p>');

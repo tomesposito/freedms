@@ -1,6 +1,8 @@
+import { packetInputs, packetHash, documentSignatureStatus } from './signature-targets.js';
+import { signatureStatusFor } from '@freedms/shared';
 import { dealCompliance } from './compliance.js';
 import { randomUUID } from 'node:crypto';
-import { jacketChecklist, documentTypes, maxDocumentBytes, pencilMath, type DealDocument, type DealJacket, type Principal } from '@freedms/shared';
+import { jacketChecklist, documentTypes, maxDocumentBytes, type DealDocument, type DealJacket, type Principal } from '@freedms/shared';
 import { ApiError, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
 import { invalid, onlyKeys, text } from './validation.js';
@@ -16,10 +18,11 @@ export async function jacket(request: ApiRequest, principal: Principal, repo: Te
   if (match[2] === 'jacket') {
     if (method !== 'GET') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
     if (!['approved', 'sold'].includes(deal.status)) throw invalid('A deal jacket is available only for approved or sold deals.');
-    const [vehicle, customer, documents] = await Promise.all([repo.get(deal.vehicleId), repo.crmGet('customer', deal.customerId), repo.crmList('document')]);
-    if (!vehicle || !customer) throw missing();
-    const pencil = deal.pencils.find(p => p.id === deal.workingPencilId); if (!pencil) throw missing();
-    const attached = documents.filter(d => d.dealId === deal.id);
+    const packet = await packetInputs(repo, deal), {deal: {vehicle}} = packet;
+    const documents = await repo.crmList('document');
+    const signatures = (await repo.crmList('signature')).filter(s => s.dealId === deal.id).sort((a,b) => a.signedAt.localeCompare(b.signedAt) || a.id.localeCompare(b.id));
+    const hash = packetHash(packet), status = signatureStatusFor(signatures, 'buyers-order', deal.id, hash);
+    const attached = await Promise.all(documents.filter(d => d.dealId === deal.id).map(async d => ({...d, signatureStatus: await documentSignatureStatus(d, signatures, store)})));
     const application = (await repo.crmList('credit-application')).find(a => a.dealId === deal.id);
     const payoffQuotes = (await repo.crmList('payoff-quote')).filter(q => q.dealId === deal.id).sort((a, b) => a.quotedAt.localeCompare(b.quotedAt) || a.id.localeCompare(b.id));
     const compliance = await dealCompliance(repo, deal);
@@ -27,10 +30,9 @@ export async function jacket(request: ApiRequest, principal: Principal, repo: Te
       compliance: {checklist: compliance.checklist, complete: compliance.complete, checks: compliance.checks.filter(c => c.dealId === deal.id)},
       credit: application ? {status: application.status, decisionOutcome: application.decision?.outcome ?? null, lenderName: application.decision?.lenderName ?? null, applicantSsnLast4: application.applicant.ssnLast4} : null,
       adverseAction: application?.decision?.outcome === 'declined' ? {applicantName: application.applicant.fullName, decidedAt: application.decision.decidedAt, lenderName: application.decision.lenderName, reasons: application.decision.adverseReasons} : null,
-      payoffQuotes,deal: {...deal, vehicle, customer}, pencil, numbers: pencilMath(pencil, deal.trade, deal, vehicle, deal.type),
-      fiProducts: pencil.fiSelections.filter(s => s.status === 'accepted').map(({name, category, retailPrice, termNotes}) => ({name, category, retailPrice, termNotes})),
+      payoffQuotes, ...packet, signatures, buyersOrderSignature: {status, hash},
       buyersGuide: {vehicle: {year: vehicle.year, make: vehicle.make, model: vehicle.model, vin: vehicle.vin, stockNumber: vehicle.stockNumber}, asIs: true, dealerWarranty: null, manufacturerWarranty: null}, documents: attached,
-      checklist: jacketChecklist(attached)};
+      checklist: jacketChecklist(attached).map(item => item.key === 'buyers-order' ? {...item, signatureStatus: status} : item)};
     return response(200, {data});
   }
   if (method === 'GET' && !match[3]) return response(200, {data: (await repo.crmList('document')).filter(d => d.dealId === deal.id)});

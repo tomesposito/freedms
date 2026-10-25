@@ -11,7 +11,7 @@ const hash = (token: string) => createHash('sha256').update(token).digest('hex')
 function context(principal: Principal, now: Date) {
   const date = now.toISOString();
   const base = () => ({id: randomUUID(), tenantId: principal.tenantId, version: 1, createdAt: date, updatedAt: date});
-  const write = (record: Exclude<CrmEntity, {kind: 'parts-return' | 'parts-sale' | 'compliance-check' | 'journal-entry' | 'payoff-quote' | 'share-response'}>, expectedVersion = 0): CrmWrite => ({record, expectedVersion, event: {
+  const write = (record: Exclude<CrmEntity, {kind: 'signature' | 'parts-return' | 'parts-sale' | 'compliance-check' | 'journal-entry' | 'payoff-quote' | 'share-response'}>, expectedVersion = 0): CrmWrite => ({record, expectedVersion, event: {
     id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id,
     aggregateVersion: record.version, type: `${record.kind}.${expectedVersion ? 'updated' : 'created'}`,
     occurredAt: date, deliveryStatus: 'pending'

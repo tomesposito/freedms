@@ -36,7 +36,7 @@ export interface RepairOrder extends CrmRecord, Dispatch {
   vehicleId: string | null; vehicleDescription: string; payType: RepairOrderPayType;
   status: RepairOrderStatus; advisorId: string | null; concern: string; lineItems: RepairOrderLineItem[];
 }
-export interface RepairOrderView extends RepairOrder { totals: RepairOrderTotals }
+export interface RepairOrderView extends RepairOrder { totals: RepairOrderTotals; signatureStatus: import('./signatures.js').SignatureStatus; signatures?: import('./signatures.js').SignatureRecord[]; signatureHash?: string }
 export interface ServiceBoardDay {
   technicians?: (Technician & {dayLoad: number})[];
   date: string; appointments: ServiceAppointment[];

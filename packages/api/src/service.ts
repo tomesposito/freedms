@@ -1,3 +1,4 @@
+import { repairOrderSignatureView } from './signature-targets.js';
 import { serviceCatalog, dispatch, inspect } from './service-depth.js';
 import type { DocumentStore } from './document-store.js';
 import { reconcilePosting } from './fixed-ops.js';
@@ -10,7 +11,7 @@ import { parseBody, response, type ApiRequest } from './handler.js';
 import { choice, timestamp } from './crm-validation.js';
 import { invalid, object, onlyKeys, text, money, version } from './validation.js';
 import type { TenantRepository } from './repository.js';
-const view = (r: RepairOrder) => ({...r, totals: repairOrderTotals(r.lineItems)});
+
 function date(value: unknown): string {
   const s = text(value, 'Date', 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || !Number.isFinite(Date.parse(s)) || new Date(s).toISOString().slice(0,10) !== s) throw invalid('Provide a real calendar date.');
@@ -53,6 +54,8 @@ async function references(repo: TenantRepository, b: Record<string, unknown>) {
 }
 export async function service(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date, store?: DocumentStore) {
   const path = request.path.replace(/\/$/, ''), method = request.method.toUpperCase(), q = request.query ?? {}, time = now.toISOString();
+  const signatureRecords = await repo.crmList('signature');
+  const view = (r: RepairOrder) => repairOrderSignatureView(r, signatureRecords);
   const methodError = () => new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
   const catalog = await serviceCatalog(request,principal,repo,now); if (catalog) return catalog;
   // Jacket documents require a deal. Inspection references instead live on the RO,

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { documentResultsHtml, documentsRoute } from '../src/documents.js';
 import type { DocumentSearchResult } from '@freedms/shared';
 import type { UI } from '../src/desking.js';
-const doc: DocumentSearchResult = {id: 'doc', tenantId: 'A', kind: 'document', version: 1, createdAt: '', updatedAt: '', dealId: 'deal', name: '<img src=x>', type: 'id', size: 1, uploadedBy: 'admin', uploadedAt: '2026-10-19T12:00:00Z', buyerName: '<script>', dealStatus: 'approved'};
+const doc: DocumentSearchResult = {signatureStatus: 'awaiting', id: 'doc', tenantId: 'A', kind: 'document', version: 1, createdAt: '', updatedAt: '', dealId: 'deal', name: '<img src=x>', type: 'id', size: 1, uploadedBy: 'admin', uploadedAt: '2026-10-19T12:00:00Z', buyerName: '<script>', dealStatus: 'approved'};
 test('document results preserve jacket links, escape user text and distinguish disposed/pending states', () => {
   assert.match(documentResultsHtml([]), /No documents match/);
   assert.match(documentResultsHtml([], true), /No documents past retention/);

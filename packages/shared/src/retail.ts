@@ -12,6 +12,8 @@ export interface BuyerPaymentOption {
 }
 /** Explicit buyer allowlist; never extend dealer records or calculator output. */
 export interface BuyerDealView {
+  buyersOrderSignature: import('./signatures.js').SignatureStatus;
+  documentsAwaitingSignature: number;
   dealershipName: string; customerName: string; dealType: Deal['type'];
   vehicle: {year: number; make: string; model: string; trim: string; vin: string; stockNumber: string};
   price: number; docFee: number; salesTax: number;

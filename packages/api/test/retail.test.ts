@@ -70,7 +70,7 @@ test('retail explicit buyer allowlist and exact working finance pencil, cash and
   assert.doesNotMatch(serialized, /cost|gross|actualCashValue|overallowance|notes|tokenHash|INTERNAL PRIVATE|Declined GAP/i);
   const numbers = (x: unknown): number[] => typeof x === 'number' ? [x] : x && typeof x === 'object' ? Object.values(x).flatMap(numbers) : [];
   for (const secret of [712345, 91234, 156789]) assert.ok(!numbers(v).includes(secret));
-  assert.deepEqual(Object.keys(v).sort(), ['dealershipName', 'customerName', 'dealType', 'vehicle', 'price', 'docFee', 'salesTax', 'fiProducts', 'fiRetailTotal', 'trade', 'down', 'amountFinanced', 'monthlyPayment', 'totalPayments', 'financeCharge', 'cashDue', 'aprBps', 'termMonths', 'paymentOptions', 'expiresAt'].sort());
+  assert.deepEqual(Object.keys(v).sort(), ['buyersOrderSignature', 'documentsAwaitingSignature', 'dealershipName', 'customerName', 'dealType', 'vehicle', 'price', 'docFee', 'salesTax', 'fiProducts', 'fiRetailTotal', 'trade', 'down', 'amountFinanced', 'monthlyPayment', 'totalPayments', 'financeCharge', 'cashDue', 'aprBps', 'termMonths', 'paymentOptions', 'expiresAt'].sort());
   assert.equal(v.paymentOptions.length, 9);
   for (const type of ['cash', 'lease']) {
     const deal = await createDeal('B', type), t = (await call('B', 'POST', `/deals/${deal.id}/share`, {})).data.token;

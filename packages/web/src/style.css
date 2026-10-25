@@ -226,6 +226,7 @@ button, .button { transition: background-color .15s, border-color .15s; }
 }
 
 @media print {
+  .signature-capture { display: none !important; }
   body:has(.jacket-packet) { background: white; color: black; font-size: 10pt; }
   body:has(.jacket-packet) .sidebar,
   body:has(.jacket-packet) #message, .jacket-screen { display: none !important; }

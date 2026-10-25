@@ -37,8 +37,11 @@ Native credit applications, GL/deal posting, service/parts GL posting and depart
 Parts operations include location lookup, reserved stock, local purchase orders with partial receiving,
 special-order fulfillment, vendor returns, and optional cost-plus retail proposals.
 Purchase orders are local records; vendor transmission and parts import are not included.
-Lender/signature connections and later accounting phases remain queued. Nothing is
-deployed yet; everything runs locally.
+In-app signature capture for deals and service authorization is complete locally as a
+captured, auditable record. This is not a claim of legal e-signature compliance.
+Third-party e-signature services/connections remain external and are not included.
+Lender connections and later accounting phases remain queued. Nothing is deployed
+yet; everything runs locally.
 
 ## Screenshots
 
@@ -639,7 +642,7 @@ be deleted. No lease, F&I menu, lender submission, documents, or reporting is in
 | GET | `/deals/{id}` | Worksheet data and saved pencils |
 | POST / GET | `/deals/{id}/share` | Create/rotate a private buyer link with `{}` / view share status and buyer responses |
 | POST | `/deals/{id}/share/revoke` | Revoke the active link with `{}` |
-| GET | `/share/{token}` | Public buyer-safe vehicle, numbers and payment options for one deal |
+| GET | `/share/{token}` | Public buyer-safe vehicle, numbers and payment options; `buyersOrderSignature` status and `documentsAwaitingSignature` count only, with no signature records or signer data |
 | POST | `/share/{token}/respond` | Exactly one of `optionId` (server-computed snapshot) or `message` (up to 1,000 characters) |
 | POST | `/share/{token}/documents` | `{name, type, content}`; canonical base64, at most 40 KiB decoded; marked customer-uploaded in the jacket |
 | PUT | `/deals/{id}` | Required `version`; optional `type`, `trade`, `docFee`, `pencils`, `workingPencilId`, `status` |
@@ -661,17 +664,19 @@ or network-dependent tests.
 | GET | `/deals/{id}/jacket` | Approved/sold only; deal with buyer/vehicle, working pencil, `pencilMath` numbers, AS IS Buyers Guide data, documents and checklist |
 | GET | `/deals/{id}/documents` | Attachment metadata list; any deal status |
 | POST | `/deals/{id}/documents` | `{name, type, content}`; canonical base64 content, nonempty, at most 40 KiB decoded |
+| POST | `/deals/{id}/buyers-order/signatures` | In-store capture only: `{signerName, method, signatureData}`; approved/sold deal; snapshots packet SHA-256 and consent |
+| POST | `/deals/{id}/documents/{documentId}/signatures` | In-store capture only: same signature body; snapshots stored file SHA-256 and document version |
+| POST | `/deals/{id}/documents/{documentId}/replace` | `{version, content}`; canonical base64, 40 KiB maximum; increments version and retains signature history; stale version returns 409 |
 | GET | `/deals/{id}/documents/{documentId}/content` | `{data: {content}}` containing base64 bytes; owning tenant and matching deal only |
 
 Names are required (160 characters maximum). Types are `id`, `insurance`, `title`,
 `registration`, `signed-form`, and `other`. The existing 64 KiB JSON request cap
-still applies. Unknown keys, malformed base64 and oversize files return 400;
+still applies to attachments; signature capture endpoints allow 136 KiB JSON bodies. Unknown keys, malformed base64 and oversize files return 400;
 foreign/missing deals or documents return 404. Working/dead jackets return 400
 with an explanation; those deals may still collect attachments.
 
 `document` metadata records and minimal `document.created` outbox events commit
-through `crmWrite`. The shared event union also permits `document.updated` for the
-generic repository contract; there is no attachment update/delete endpoint.
+through `crmWrite`. `document.updated` records explicit file replacement; disposal uses the document controls described below.
 File bytes never enter business records or events. `DocumentStore.forTenant`
 binds storage to authenticated tenant claims; its in-memory implementation is
 explicitly injected into the local handler and tests. Files, like other local
@@ -679,6 +684,29 @@ records, disappear on restart. Failed metadata commits remove staged local bytes
 Production S3 wiring is deferred: without an injected store, upload/content
 requests return 503 rather than pretending files are durable. No infrastructure
 or deployment changes are part of this build.
+
+
+Signatures are in-store capture only: typed signer name plus drawn PNG or typed
+signature, with the exact shared consent text, capturing staff user, timestamp,
+target version and SHA-256 hash retained in immutable tenant-scoped records.
+This is a captured, auditable record, not a claim of legal e-signature compliance.
+Third-party e-signature services/connections remain external and are not included.
+`method` is `drawn` or `typed`; names and typed signatures are trimmed, required,
+and limited to 160 characters. Drawn signatures are PNG data URLs with canonical
+base64, at most 131072 characters. Every capture emits `signature.created` through
+`crmWrite`; signing a currently signed target returns 409. Missing file storage
+returns 503. Disposed/pending documents cannot be signed or replaced.
+
+The jacket includes `signatures`, `buyersOrderSignature: {status, hash}`, document
+`signatureStatus`, and the buyer's-order checklist signature status. Document
+search also includes `signatureStatus`. Unsigned targets are `awaiting`; changed
+content becomes `superseded`, retaining prior records. File replacement always
+increments the document version, even for identical bytes, requiring a new
+signature. Failed replacement metadata writes restore the previous bytes.
+The packet hash uses recursively sorted JSON keys over the saved packet inputs.
+Document status requires matching version and bytes hash; unavailable disposed
+bytes fall back to version matching, while the UI displays disposal status.
+Buyer share links show status and counts only. Remote buyer signing is deferred.
 
 The checklist derives generated buyer’s order and Buyers Guide as present,
 plus ID and insurance as present only when matching attachment categories exist.
@@ -1059,6 +1087,19 @@ still accepts `{dealership, name}`. Both flows remain loopback-only development
 tools; data is ephemeral and tokens last one hour. Hosted Cognito provisioning and
 invite email delivery are out of scope; no invite is sent.
 
+
+Service authorization capture (#31) is local-only and in-store only.
+
+| Method | Path | Contract |
+|---|---|---|
+| POST | `/service/repair-orders/{id}/signatures` | `{signerName, method, signatureData}`; captures work authorization, saved estimate in integer cents, shared service consent, version and SHA-256 |
+
+Repair-order detail includes `signatureStatus`, `signatures` (oldest first), and
+`signatureHash` for history display. Lists and the service board also derive
+signature status. Changing work or estimate inputs supersedes the authorization
+without deleting it; save edits before capturing authorization. Hash inputs are
+customer identity, vehicle description, concern, pay type, line items and totals.
+This is a captured, auditable record, not a claim of legal e-signature compliance.
 
 Service depth (#28) is local-only. Technician and labor-rate records are tenant
 scoped under `/service/technicians` and `/service/labor-rates` (list/create and
