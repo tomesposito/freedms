@@ -1,6 +1,6 @@
 import type { CrmRecord } from './index.js';
 export interface Part extends CrmRecord {
-  kind: 'part'; partNumber: string; description: string; binLocation: string;
+  kind: 'part'; partNumber: string; description: string; binLocation: string; location: string; quantityReserved: number;
   costCents: number; retailPriceCents: number; quantityOnHand: number; reorderPoint: number;
 }
 export interface PartsSale extends CrmRecord {
@@ -8,3 +8,19 @@ export interface PartsSale extends CrmRecord {
   quantity: number; unitPriceCents: number; totalCents: number;
   customerId: string | null; customerName: string | null; stockNegative: boolean; stockWarning: string | null;
 }
+
+export interface PurchaseOrderLine {
+  id: string; partId: string; quantityOrdered: number; quantityReceived: number; costCents: number;
+  specialOrder: null | {customerId: string | null; repairOrderId: string | null; customerName: string | null};
+  quantityReserved: number; quantityFulfilled: number; fulfilled: boolean;
+}
+export interface PartsPurchaseOrder extends CrmRecord {
+  kind: 'parts-po'; vendorName: string; status: 'open' | 'partially-received' | 'received'; lines: PurchaseOrderLine[];
+}
+export interface PartsReturn extends CrmRecord {
+  kind: 'parts-return'; partId: string; vendorName: string; quantity: number; reason: string;
+  purchaseOrderId: string | null; costCents: number; totalValueCents: number;
+}
+export interface PricingBracket { maxCostCents: number | null; markupBps: number }
+export interface PricingMatrix extends CrmRecord { kind: 'pricing-matrix'; enabled: boolean; brackets: PricingBracket[] }
+export interface PricingProposal { costCents: number; proposedRetailCents: number | null; markupBps: number | null }

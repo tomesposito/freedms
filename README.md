@@ -34,6 +34,9 @@ and usage tracking. Native F&I product catalogs, saved deal menus, and per-deal 
 [SOLUTION_DESIGN.md](SOLUTION_DESIGN.md) remains the living design document.
 Dealer-recorded Red Flags / OFAC compliance checklists and searchable check logs are complete locally. freeDMS does not run or verify external screening.
 Native credit applications, GL/deal posting, service/parts GL posting and departmental statements, AP/AR, cash registers, and bank reconciliation are complete locally.
+Parts operations include location lookup, reserved stock, local purchase orders with partial receiving,
+special-order fulfillment, vendor returns, and optional cost-plus retail proposals.
+Purchase orders are local records; vendor transmission and parts import are not included.
 Lender/signature connections and later accounting phases remain queued. Nothing is
 deployed yet; everything runs locally.
 
