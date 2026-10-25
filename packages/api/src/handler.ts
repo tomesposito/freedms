@@ -1,3 +1,4 @@
+import { reportsP3 } from './reports-p3.js';
 import { manageInvites, publicInvite } from './invites.js';
 import { parts } from './parts.js';
 import { service } from './service.js';
@@ -83,6 +84,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (/^\/accounting(\/|$)/.test(path)) return await accounting(request, principal, repository, now());
         if (/^\/fi-products(\/|$)/.test(path)) return await fiProducts(request, principal, repository, now());
         if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repository, now());
+        if (/^\/reports\/(technicians|departments|forecasts)([/.]|$)/.test(path)) return await reportsP3(request, repository, now());
         if (/^\/reports\/(turn|fi|custom|saved)([/.]|$)/.test(path)) return await reportsP2(request, principal, repository, now());
         if (/^\/reports(\/|$)/.test(path)) return await reports(request, repository, now(), record);
         if (/^\/(deals|settings)(\/|$)/.test(path)) {

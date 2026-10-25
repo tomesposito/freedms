@@ -126,7 +126,8 @@ hourly rates per skill. Available from the service board.
 ![Technicians and labor grid](docs/screenshots/service-settings.png)
 
 **Repair order** — skill-based dispatch with explicit mismatch acknowledgement,
-grid-prefilled editable labor rates, free-text and stocked parts, inspection
+grid-prefilled editable labor rates, optional flagged hours (hundredths; blank means unknown),
+free-text and stocked parts, inspection
 checklists and photos, and customer recommendations with recorded approvals/declines.
 Completion applies stock once and posts the journal entry shown at the bottom;
 reopening restores the stock and reverses the entry. Negative stock requires an
@@ -208,7 +209,15 @@ nothing is ever deleted automatically.
 
 **Reports** — inventory aging and turn, sales, F&I metrics, fixed operations
 (finalized repair orders and counter sales, with labor and parts gross),
-lead pipeline, and saved custom reports with CSV exports.
+lead pipeline, technician sold/flagged hours and efficiency, GL departmental totals,
+and operational location rollups. Rule-based inventory days-supply, weekday service
+demand, and parts reorder projections show their basis dates, sample sizes, methods,
+and insufficient-history states. The default basis is the last 56 days through today;
+selected dates override it. Technician, department, and location tables support saved
+custom definitions and CSV exports. Forecasts retain their structured basis metadata
+on the Reports page rather than flattening it into saved table definitions.
+The local captures below use ordinary API-created demo records; unavailable history
+is shown honestly.
 
 ![Reports](docs/screenshots/reports.png)
 

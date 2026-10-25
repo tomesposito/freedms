@@ -108,15 +108,7 @@ export async function accounting(request: ApiRequest, principal: Principal, repo
   const period = entries.filter(e => (!range.from || e.date.slice(0, 10) >= range.from) && (!range.to || e.date.slice(0, 10) <= range.to));
   if (section === 'journal') return response(200, {data: period.filter(e => (!q.accountId || e.lines.some(l => l.accountId === q.accountId)) && (!q.dealId || e.dealId === q.dealId) && (!q.repairOrderId || e.repairOrderId === q.repairOrderId) && (!q.partsSaleId || e.partsSaleId === q.partsSaleId))});
   if (section === 'departmental') {
-    const balances = accountBalances(accounts, period).filter(r => ['income', 'expense'].includes(r.type) && (r.debit || r.credit));
-    const groups = departments.map(department => {
-      const rows = balances.filter(r => accountDepartment(r.code) === department);
-      const income = rows.filter(r => r.type === 'income').reduce((s,r) => s+r.balance,0);
-      const expenses = rows.filter(r => r.type === 'expense').reduce((s,r) => s+r.balance,0);
-      return {department, rows, income, expenses, grossProfit: income-expenses};
-    });
-    const totals = groups.reduce((s,g) => ({income:s.income+g.income, expenses:s.expenses+g.expenses, grossProfit:s.grossProfit+g.grossProfit}), {income:0, expenses:0, grossProfit:0});
-    return response(200, {data:{...range, departments:groups, totals}});
+    return response(200, {data: {...range, ...departmentalStatement(accounts, period)}});
   }
   if (section === 'balances' || section === 'trial-balance') {
     const rows = accountBalances(accounts, section === 'balances' ? entries : period).filter(r => section === 'balances' || r.debit || r.credit);
@@ -133,4 +125,16 @@ export async function accounting(request: ApiRequest, principal: Principal, repo
   const vehicle = await repo.get(deal.vehicleId), pencil = deal.pencils.find(p => p.id === deal.workingPencilId); if (!vehicle || !pencil) throw missing();
   const numbers = pencilMath(pencil, deal.trade, deal, vehicle, deal.type);
   return response(200, {data: {dealId: deal.id, entries: deal.status === 'sold' ? entries.filter(e => e.dealId === deal.id) : [], commission: deal.status === 'sold' ? commissionFor(numbers.frontGross, rateBps) : 0, numbers}});
+}
+
+export function departmentalStatement(accounts: GlAccount[], entries: JournalEntry[]) {
+  const balances = accountBalances(accounts, entries).filter(r => ['income', 'expense'].includes(r.type) && (r.debit || r.credit));
+  const groups = departments.map(department => {
+    const rows = balances.filter(r => accountDepartment(r.code) === department);
+    const income = rows.filter(r => r.type === 'income').reduce((s,r) => s+r.balance,0);
+    const expenses = rows.filter(r => r.type === 'expense').reduce((s,r) => s+r.balance,0);
+    return {department, rows, income, expenses, grossProfit: income-expenses};
+  });
+  const totals = groups.reduce((s,g) => ({income:s.income+g.income, expenses:s.expenses+g.expenses, grossProfit:s.grossProfit+g.grossProfit}), {income:0, expenses:0, grossProfit:0});
+  return {departments: groups, totals};
 }

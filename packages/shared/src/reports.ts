@@ -40,6 +40,9 @@ type ColumnType = 'text' | 'number' | 'money';
 const columns = (text: string[], money: string[] = [], numeric: string[] = []): {key: string; label: string; type: ColumnType}[] =>
   [...text.map(key => ({key, label: key, type: 'text' as const})), ...money.map(key => ({key, label: key, type: 'money' as const})), ...numeric.map(key => ({key, label: key, type: 'number' as const}))];
 export const reportDatasets = {
+  technicians: {columns: columns(['technicianId', 'technician', 'flaggedHours', 'efficiencyPercent'], [], ['soldHours', 'missingFlaggedLines', 'roCount']), groupings: []},
+  departments: {columns: columns(['department'], ['income', 'expenses', 'grossProfit']), groupings: []},
+  locations: {columns: columns(['location'], ['laborCents', 'servicePartsCents', 'counterCents'], ['roCount', 'counterSaleCount']), groupings: []},
   inventory: {columns: columns(['stockNumber', 'vehicle', 'status', 'dateStocked', 'bucket'], ['listPrice', 'cost', 'reconTotal', 'totalCost'], ['agingDays']), groupings: ['status', 'bucket']},
   sales: {columns: columns(['soldDate', 'dealId', 'buyer', 'vehicle'], ['price', 'frontGross', 'fiGross']), groupings: ['buyer', 'vehicle']},
   leads: {columns: columns(['leadId', 'customer', 'source', 'stage', 'vehicleDescription', 'createdAt']), groupings: ['source', 'stage']},

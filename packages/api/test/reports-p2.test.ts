@@ -79,6 +79,8 @@ test('F&I totals, penetration, distinct deals and product rows reconcile accepte
 });
 test('every custom dataset and grouping shares exact JSON/CSV cells, including quoted multiline values', async () => {
   const s = await fixture();
+  const ro = await s.json('/service/repair-orders', 'POST', {customerId:s.customer.id, payType:'customer-pay', lineItems:[{id:'labor',kind:'labor',description:'Diagnostic',laborHoursHundredths:150,flaggedHoursHundredths:125,laborRateCents:12000,quantity:null,unitPriceCents:null}]});
+  await s.json(`/service/repair-orders/${ro.id}`, 'PUT', {version:ro.version,status:'completed'});
   for (const [dataset, spec] of Object.entries(reportDatasets)) for (const groupBy of [undefined, ...spec.groupings]) {
     const q = {dataset, columns: [...spec.columns.map(c => c.key), 'count'].join(','), ...(groupBy ? {groupBy} : {})};
     const data = await s.json<CustomReport>('/reports/custom', 'GET', undefined, q);

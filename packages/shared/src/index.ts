@@ -83,3 +83,4 @@ export * from './webhooks.js';
 export * from './users.js';
 
 export * from './ownership.js';
+export * from './reports-p3.js';

@@ -50,3 +50,5 @@ import '../packages/api/test/fixed-ops.test.js';
 
 import '../packages/api/test/onboarding.test.js';
 import '../packages/web/test/onboarding.test.js';
+import '../packages/api/test/reports-p3.test.js';
+import '../packages/web/test/reports-p3.test.js';

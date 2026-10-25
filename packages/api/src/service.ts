@@ -21,16 +21,18 @@ async function lineItems(value: unknown, repo: TenantRepository): Promise<Repair
   const ids = new Set<string>();
   const count = (v: unknown): number => { if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 100000) throw invalid('Hours / quantity must be an integer from 1 to 100000.'); return v; };
   const items = await Promise.all(value.map(async value => {
-    const b = object(value); onlyKeys(b, ['skill','partId','id','kind','description','laborHoursHundredths','laborRateCents','quantity','unitPriceCents']);
+    const b = object(value); onlyKeys(b, ['flaggedHoursHundredths','skill','partId','id','kind','description','laborHoursHundredths','laborRateCents','quantity','unitPriceCents']);
     const id = b.id === undefined ? randomUUID() : text(b.id, 'Line id', 64);
     if (ids.has(id)) throw invalid('Line ids must be unique.'); ids.add(id);
     const kind = choice(b.kind, ['labor','parts'], 'line kind'), description = text(b.description, 'Description', 200);
+    const flagged = b.flaggedHoursHundredths;
+    if (flagged != null && (kind !== 'labor' || typeof flagged !== 'number' || !Number.isInteger(flagged) || flagged < 0 || flagged > 100000)) throw invalid('Flagged hours must be hundredths from 0 to 100000 on labor only.');
     if (kind === 'labor') {
       if (b.partId != null) throw invalid('Labor cannot reference a stocked part.');
       if (b.quantity !== null || b.unitPriceCents !== null) throw invalid('Labor must have null parts fields.');
       const skill = b.skill == null ? null : choice(b.skill,serviceSkills,'skill');
       const rate = b.laborRateCents === undefined && skill ? (await repo.crmGet('labor-rate',skill))?.laborRateCents : b.laborRateCents;
-      return {id, kind, description, skill, laborHoursHundredths: count(b.laborHoursHundredths), laborRateCents: money(rate, 'Labor rate'), quantity: null, unitPriceCents: null};
+      return {id, kind, description, skill, ...(flagged === undefined ? {} : {flaggedHoursHundredths: flagged as number | null}), laborHoursHundredths: count(b.laborHoursHundredths), laborRateCents: money(rate, 'Labor rate'), quantity: null, unitPriceCents: null};
     }
     if (b.laborHoursHundredths !== null || b.laborRateCents !== null) throw invalid('Parts must have null labor fields.');
     return {id, kind, description, partId: b.partId == null ? null : requireId(b.partId), laborHoursHundredths: null, laborRateCents: null, quantity: count(b.quantity), unitPriceCents: money(b.unitPriceCents, 'Unit price')};

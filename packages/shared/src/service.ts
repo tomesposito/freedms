@@ -14,6 +14,7 @@ export interface ServiceAppointment extends CrmRecord, Dispatch {
   scheduledStart: string; scheduledEnd: string; concern: string; status: AppointmentStatus;
 }
 export interface RepairOrderLineItem {
+  flaggedHoursHundredths?: number | null;
   skill?: ServiceSkill | null; partId?: string | null; id: string; kind: 'labor' | 'parts'; description: string;
   laborHoursHundredths: number | null; laborRateCents: number | null;
   quantity: number | null; unitPriceCents: number | null;

@@ -1,3 +1,4 @@
+import { technicianMetrics, departmentReport } from './reports-p3.js';
 import { randomUUID } from 'node:crypto';
 import { inventoryTurn, reportDatasets, pencilMath, type CustomReport, type FiReport, type Principal, type ReportDefinition, type ReportDataset, type SavedReport, type TurnReport } from '@freedms/shared';
 import { requireWrite } from './auth.js';
@@ -59,7 +60,10 @@ export function reportDefinition(b: Record<string, unknown>): ReportDefinition {
 export async function customReport(repo: TenantRepository, now: Date, definition: ReportDefinition): Promise<CustomReport> {
   const {dataset, groupBy} = definition, range = dateRange({from: definition.from, to: definition.to});
   let rows: Record<string, string | number>[];
-  if (dataset === 'inventory') rows = (await inventoryReport(repo, now)).rows.filter(r => inRange(r.dateStocked, range));
+  if (dataset === 'technicians') rows = (await technicianMetrics(repo,range)).rows.map(r => ({technicianId:r.technicianId, technician:r.technician, soldHours:r.soldHoursHundredths/100, flaggedHours:r.flaggedHoursHundredths === null ? '—' : String(r.flaggedHoursHundredths/100), efficiencyPercent:r.efficiencyPercent === null ? '—' : String(r.efficiencyPercent), missingFlaggedLines:r.missingFlaggedLines, roCount:r.roCount}));
+  else if (dataset === 'departments') rows = (await departmentReport(repo,range)).departments.filter(d => d.rows.length).map(({department,income,expenses,grossProfit}) => ({department,income,expenses,grossProfit}));
+  else if (dataset === 'locations') rows = (await departmentReport(repo,range)).locations;
+  else if (dataset === 'inventory') rows = (await inventoryReport(repo, now)).rows.filter(r => inRange(r.dateStocked, range));
   else if (dataset === 'sales') rows = (await salesReport(repo, range)).rows;
   else if (dataset === 'leads') {
     const [leads, customers] = await Promise.all([repo.crmList('lead'), repo.crmList('customer')]);
