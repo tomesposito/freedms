@@ -164,3 +164,21 @@ test('Treasury records and lock use tenant partitions and atomic versioned outbo
     await assert.rejects(repo.crmWrite([treasuryWrite({...record, tenantId: 'B'}, principal)]), /scope/);
   }
 });
+
+test('Audit outbox pagination and privacy reads stay in the authenticated tenant partition', async () => {
+  let pages = 0;
+  const client = {send: async (command: GetCommand | QueryCommand) => {
+    if (command instanceof GetCommand) {
+      assert.deepEqual(command.input.Key, {PK: 'TENANT#A', SK: 'PRIVACY-REQUEST#foreign-id'}); return {};
+    }
+    assert.equal(command.input.KeyConditionExpression, 'PK = :pk AND begins_with(SK, :prefix)');
+    assert.deepEqual(command.input.ExpressionAttributeValues, {':pk': 'TENANT#A', ':prefix': 'EVENT#'});
+    pages++;
+    if (pages === 1) return {Items: [{data: event}], LastEvaluatedKey: {PK: 'TENANT#A', SK: 'EVENT#e'}};
+    assert.deepEqual(command.input.ExclusiveStartKey, {PK: 'TENANT#A', SK: 'EVENT#e'});
+    return {Items: [{data: {...event, id: 'second'}}]};
+  }} as unknown as DynamoDBDocumentClient;
+  const repo = new DynamoRepositories('table', client).forTenant('A');
+  assert.equal(await repo.crmGet('privacy-request', 'foreign-id'), undefined);
+  assert.deepEqual((await repo.events()).map(e => e.id), ['e', 'second']); assert.equal(pages, 2);
+});

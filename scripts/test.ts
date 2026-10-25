@@ -54,3 +54,5 @@ import '../packages/api/test/reports-p3.test.js';
 import '../packages/web/test/reports-p3.test.js';
 
 import '../packages/api/test/signatures.test.js';
+
+import '../packages/api/test/privacy.test.js';

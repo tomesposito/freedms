@@ -1,3 +1,5 @@
+import { anonymizationNotice, privacyStatuses, type PrivacyRequest, type CustomerDataExport, type Customer, type OutboxEvent } from '@freedms/shared';
+import type { CrmWrite } from './repository.js';
 import { randomUUID } from 'node:crypto';
 import { complianceChecklist, complianceCheckResults, newestComplianceChecks, type ComplianceAttestation, type ComplianceRecord, type ComplianceCheck, type Deal, type DealCompliance, type Principal } from '@freedms/shared';
 import { requireWrite } from './auth.js';
@@ -15,6 +17,8 @@ export async function dealCompliance(repo: TenantRepository, deal: Deal): Promis
 }
 export async function compliance(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date) {
   const path = request.path.replace(/\/$/, ''), method = request.method.toUpperCase(), time = now.toISOString();
+  if (path === '/compliance/audit') return audit(request, principal, repo);
+  if (/^\/compliance\/privacy-requests(\/|$)/.test(path)) return privacy(request, principal, repo, now);
   if (path === '/compliance/checks') {
     if (method !== 'GET') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
     onlyKeys(request.query ?? {}, ['search']);
@@ -56,4 +60,81 @@ export async function compliance(request: ApiRequest, principal: Principal, repo
   await repo.crmWrite([{record, expectedVersion: expected, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version,
     type: log ? 'compliance-check.created' : expected ? 'compliance.updated' : 'compliance.created', occurredAt: time, deliveryStatus: 'pending'}}]);
   return response(method === 'POST' ? 201 : 200, {data: record});
+}
+
+
+async function audit(request: ApiRequest, principal: Principal, repo: TenantRepository) {
+  if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can read the audit log.');
+  if (request.method.toUpperCase() !== 'GET') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Audit events are read-only.');
+  const q = request.query ?? {}; onlyKeys(q, ['type', 'actor', 'target', 'search']);
+  const filters = Object.fromEntries(Object.entries(q).map(([k, v]) => [k, text(v, k, 200, true).toLowerCase()]));
+  // Read the tenant partition first. Filters can only narrow that result.
+  const events = (await repo.events()).filter(event =>
+    (!filters.type || event.type.toLowerCase().includes(filters.type) || event.action?.toLowerCase().includes(filters.type)) &&
+    (!filters.actor || event.actorId.toLowerCase() === filters.actor) &&
+    (!filters.target || event.aggregateId.toLowerCase() === filters.target) &&
+    (!filters.search || [event.occurredAt, event.actorId, event.type, event.action ?? '', event.aggregateId].join(' ').toLowerCase().includes(filters.search)));
+  return response(200, {data: events.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || a.id.localeCompare(b.id))});
+}
+async function privacy(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date) {
+  const path = request.path.replace(/\/$/, ''), method = request.method.toUpperCase(), at = now.toISOString();
+  onlyKeys(request.query ?? {}, []);
+  const root = '/compliance/privacy-requests';
+  const match = /^\/compliance\/privacy-requests\/([^/]+)$/.exec(path);
+  if (path !== root && !match) throw missing();
+  const old = match ? await repo.crmGet('privacy-request', requireId(match[1])) : undefined;
+  if (match && !old) throw missing();
+  if (method === 'GET') return response(200, {data: old ?? (await repo.crmList('privacy-request')).sort((a, b) => b.createdAt.localeCompare(a.createdAt))});
+  if (method !== (old ? 'PUT' : 'POST')) throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+  requireWrite(principal, method);
+  const b = parseBody(request.body);
+  const write = (record: PrivacyRequest | Customer, expectedVersion: number, action: string): CrmWrite => ({record, expectedVersion, event: {
+    id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version,
+    type: `${record.kind}.${expectedVersion ? 'updated' : 'created'}`, action, occurredAt: at, deliveryStatus: 'pending'
+  } satisfies OutboxEvent});
+  if (!old) {
+    onlyKeys(b, ['customerId', 'type', 'dueDate']);
+    const customerId = requireId(b.customerId);
+    if (!await repo.crmGet('customer', customerId)) throw missing();
+    const dueDate = text(b.dueDate, 'Due date', 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || !Number.isFinite(Date.parse(dueDate)) || new Date(dueDate).toISOString().slice(0, 10) !== dueDate) throw invalid('Provide a real due date.');
+    const record: PrivacyRequest = {kind: 'privacy-request', id: randomUUID(), tenantId: principal.tenantId, version: 1, createdAt: at, updatedAt: at,
+      customerId, type: choice(b.type, ['access', 'deletion'] as const, 'request type'), status: 'received', dueDate, receivedBy: principal.userId, receivedAt: at,
+      history: [{actor: principal.userId, action: 'received', at, note: 'Request logged'}]};
+    await repo.crmWrite([write(record, 0, 'privacy-request.received')]);
+    return response(201, {data: record});
+  }
+  onlyKeys(b, ['version', 'status', 'denialReason']);
+  if (version(b.version) !== old.version) throw conflict();
+  if (old.status === 'fulfilled' || old.status === 'denied') throw invalid('This request is terminal and cannot change.');
+  const status = choice(b.status, privacyStatuses, 'status');
+  if (status === 'received' || status === old.status) throw invalid('Choose in progress, fulfilled or denied; requests cannot move backwards.');
+  if (status !== 'denied' && b.denialReason !== undefined) throw invalid('A denial reason applies only to denied requests.');
+  const customer = await repo.crmGet('customer', old.customerId); if (!customer) throw missing();
+  const record: PrivacyRequest = {...old, status, version: old.version + 1, updatedAt: at, history: [...old.history]};
+  let note = 'Work started', dataExport: CustomerDataExport | undefined;
+  const writes: CrmWrite[] = [];
+  if (status === 'denied') {
+    record.denialReason = text(b.denialReason, 'Denial reason', 2000);
+    record.deniedBy = principal.userId; record.deniedAt = at; note = record.denialReason;
+  }
+  if (status === 'fulfilled') {
+    record.fulfilledBy = principal.userId; record.fulfilledAt = at;
+    if (old.type === 'access') {
+      const [leads, allDeals, documents] = await Promise.all([repo.crmList('lead'), repo.crmList('deal'), repo.crmList('document')]);
+      const deals = allDeals.filter(d => d.customerId === customer.id), ids = new Set(deals.map(d => d.id));
+      dataExport = {requestId: old.id, generatedAt: at, generatedBy: principal.userId, customer, leads: leads.filter(l => l.customerId === customer.id), deals, documents: documents.filter(d => ids.has(d.dealId))};
+      note = `Data export generated: customer record, ${dataExport.leads.length} leads, ${deals.length} deals, ${dataExport.documents.length} document metadata records (JSON).`;
+    } else {
+      const anonymized: Customer = {...customer, version: customer.version + 1, updatedAt: at, name: 'Anonymized customer', email: '', phone: '', address: '', notes: '', consent: {status: 'unknown', timestamp: null, source: ''}};
+      writes.push(write(anonymized, customer.version, 'customer.anonymized'));
+      note = anonymizationNotice;
+      record.history.push({actor: principal.userId, action: 'anonymized', at, note});
+    }
+  }
+  record.history.push({actor: principal.userId, action: status, at, note});
+  writes.push(write(record, old.version, `privacy-request.${status}`));
+  // Request transition, customer anonymization and their outbox events commit together.
+  await repo.crmWrite(writes);
+  return response(200, {data: {request: record, ...(dataExport ? {export: dataExport} : {})}});
 }

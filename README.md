@@ -175,6 +175,39 @@ by customer, source, initials, or result.
 
 ![Compliance log](docs/screenshots/compliance-log.png)
 
+**Privacy requests** — log access or deletion requests, track due dates and actor
+history, download customer JSON, or anonymize CRM personal fields while preserving
+financial records (deals, GL).
+
+![Privacy requests](docs/screenshots/privacy-requests.png)
+
+**Audit log** — admin-only, read-only workspace events with action, actor, target
+and text/date search filters.
+
+![Audit log](docs/screenshots/audit-log.png)
+
+Privacy requests live under Compliance. Admins and staff can handle them, matching
+existing compliance permissions. Requests progress from received to in progress,
+then fulfilled or denied; direct fulfilment/denial is allowed. Denials require a
+reason and terminal requests cannot change. Access fulfilment downloads JSON with
+the customer's record, leads, deals and document metadata (not attachment bytes).
+Deletion fulfilment replaces the CRM name with “Anonymized customer” and clears
+email, phone, address, notes and consent status/timestamp/source. Deals, jackets,
+documents and GL records are retained; this is not a hard delete or a purge of
+historical records. Both the customer change and request transition commit with
+outbox events in one transaction.
+
+The audit view reads existing tenant-scoped outbox events, including users/invites,
+document disposal, compliance checks/attestations, privacy steps, anonymization,
+and workspace settings. Filters only narrow the authenticated workspace's events;
+staff receive HTTP 403. The log has no edit or delete API.
+
+Local acceptance tour: created a customer, lead, sold deal and attachment through
+the app, fulfilled access and verified the downloaded JSON, then fulfilled deletion.
+CRM list/detail showed the anonymized name; the sold jacket's calculations and GL
+entries were unchanged. Screenshots above use that local workspace.
+
+
 **Accounting** — chart of accounts, account balances, and a trial balance
 for the period that ties to the sales report. Selling a deal posts its
 journal entry automatically; finalizing a repair order and recording a

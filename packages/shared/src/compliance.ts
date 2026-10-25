@@ -33,3 +33,18 @@ export function complianceChecklist(record: ComplianceRecord | null, documents: 
     manual('privacy-notice', 'Privacy notice given', record?.privacyNoticeGiven),
     {key: 'consent-on-file', label: 'Consent on file', present: consent.status === 'granted', source: consent.status === 'granted' ? 'record' : 'missing', ...(consent.status === 'granted' ? {at: consent.timestamp ?? undefined, detail: consent.source} : {})}];
 }
+
+export const privacyStatuses = ['received', 'in_progress', 'fulfilled', 'denied'] as const;
+export interface PrivacyStep { actor: string; action: string; at: string; note: string }
+export interface PrivacyRequest extends CrmRecord {
+  kind: 'privacy-request'; customerId: string; type: 'access' | 'deletion';
+  status: typeof privacyStatuses[number]; dueDate: string; receivedBy: string; receivedAt: string;
+  history: PrivacyStep[]; denialReason?: string; deniedBy?: string; deniedAt?: string;
+  fulfilledBy?: string; fulfilledAt?: string;
+}
+export interface CustomerDataExport {
+  requestId: string; generatedAt: string; generatedBy: string;
+  customer: import('./index.js').Customer; leads: import('./index.js').Lead[];
+  deals: import('./index.js').Deal[]; documents: DealDocument[];
+}
+export const anonymizationNotice = 'Personal fields were anonymized and financial records the dealer must legally keep (deals, GL) were preserved.';
