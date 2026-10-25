@@ -4,6 +4,7 @@ import { appointmentStatuses, lineItemAmountCents, repairOrderTotals, type Repai
 import { MemoryRepositories } from '../src/memory.js';
 import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
+import { MemoryDocumentStore } from '../src/document-store.js';
 import { service } from '../src/service.js';
 const start = '2026-10-24T09:00:00Z', end = '2026-10-24T10:00:00Z';
 const labor: RepairOrderLineItem = {id:'labor',kind:'labor',description:'Diagnose',laborHoursHundredths:255,laborRateCents:12345,quantity:null,unitPriceCents:null};
@@ -12,7 +13,7 @@ async function setup() {
   let now = new Date('2026-10-24T12:00:00Z');
   const repositories = new MemoryRepositories(), tokens = new LocalTokens('service-test-secret-at-least-32-characters', () => now.getTime());
   for (const tenantId of ['A','B']) await repositories.forTenant(tenantId).provision({id:tenantId,name:tenantId,createdAt:now.toISOString()},{id:`user${tenantId}`,name:tenantId},{tenantId,userId:`user${tenantId}`,role:'staff',active:true},{id:'provision',tenantId,actorId:`user${tenantId}`,aggregateId:tenantId,aggregateVersion:1,type:'tenant.created',occurredAt:now.toISOString(),deliveryStatus:'pending'});
-  const handler = createHandler(repositories,{decode:async () => { throw new Error('No network'); }},() => now);
+  const handler = createHandler(repositories,{decode:async () => { throw new Error('No network'); }},() => now,new MemoryDocumentStore());
   const call = async (tenant: string, method: string, path: string, body?: unknown, query?: ApiRequest['query']) => {
     const r = await handler({method,path,body:body === undefined ? undefined:JSON.stringify(body),query,claims:tokens.verify(tokens.issue(`user${tenant}`,tenant))});
     return {status:r.statusCode,...JSON.parse(r.body)};
@@ -120,4 +121,95 @@ test('Service tenant isolation, repository scope, auth, reader writes and route 
   assert.equal((await ro({appointmentId:ap.id},'B')).status,400);
   assert.equal((await call('A','POST','/service/board',{})).status,405); assert.equal((await call('A','GET','/service/unknown')).status,404);
   assert.equal((await call('B','GET','/service/board')).data.repairOrders.length,0);
+});
+
+test('Technician and labor grid CRUD validate, version, emit events and isolate tenants', async()=>{
+  const {call,repositories,handler,now}=await setup();
+  for(const [segment,kind,body,patch] of [
+    ['technicians','technician',{name:'Alex',skills:['brakes','diesel']},{name:'Alex T',skills:['diagnostics']}],
+    ['labor-rates','labor-rate',{skill:'brakes',laborRateCents:15000},{skill:'brakes',laborRateCents:18000}]
+  ] as const){
+    const created=await call('A','POST',`/service/${segment}`,body);assert.equal(created.status,201);const r=created.data,path=`/service/${segment}/${r.id}`;
+    assert.equal((await call('A','GET',path)).data.id,r.id);
+    assert.equal((await call('A','GET',`/service/${segment}`)).data.length,1);
+    assert.deepEqual((await call('B','GET',`/service/${segment}`)).data,[]);
+    for(const method of ['GET','PUT'])assert.equal((await call('B',method,path,{version:1,...patch})).status,404);
+    assert.equal((await call('A','PUT',path,{version:1,...patch})).data.version,2);
+    assert.equal((await call('A','PUT',path,{version:1,...patch})).status,409);
+    assert.equal((await call('A','DELETE',path)).status,405);
+    assert.equal((await handler({method:'GET',path})).statusCode,401);
+    await assert.rejects(service({method:'POST',path:`/service/${segment}`,body:JSON.stringify(body)},{tenantId:'A',userId:'userA',role:'reader'} as unknown as Principal,repositories.forTenant('A'),now()),{status:403});
+    assert.equal(repositories.eventsForTest('A').filter(e=>e.type===`${kind}.created`||e.type===`${kind}.updated`).length,2);
+  }
+  for(const body of [{name:'',skills:[]},{name:'A',skills:['magic']},{name:'A',skills:'brakes'}])assert.equal((await call('A','POST','/service/technicians',body)).status,400);
+  for(const body of [{skill:'bad',laborRateCents:1},{skill:'engine',laborRateCents:-1},{skill:'engine',laborRateCents:1.2}])assert.equal((await call('A','POST','/service/labor-rates',body)).status,400);
+  assert.equal((await call('A','POST','/service/labor-rates',{skill:'brakes',laborRateCents:1})).status,409);
+});
+test('Dispatch requires deliberate mismatch override on appointments and ROs and reports day load',async()=>{
+  const {call,appointment,ro}=await setup();
+  const tech=(await call('A','POST','/service/technicians',{name:'Diesel specialist',skills:['diesel']})).data;
+  for(const create of [appointment,ro]){
+    const assignment={technicianId:tech.id,requiredSkill:'brakes'};
+    const rejected=await create(assignment);assert.equal(rejected.status,400);assert.match(rejected.error.message,/Diesel specialist.*brakes/);
+    const r=(await create({...assignment,acknowledgeSkillMismatch:true})).data;
+    assert.deepEqual(r.skillMismatchWarning,{requiredSkill:'brakes',technicianId:tech.id,acknowledgedBy:'userA',acknowledgedAt:'2026-10-24T12:00:00.000Z'});
+    const path=`/service/${r.kind==='repair-order'?'repair-orders':'appointments'}/${r.id}`;
+    assert.equal((await call('A','PUT',path,{version:1,...assignment})).status,400);
+    assert.equal((await call('A','PUT',path,{version:1,requiredSkill:'engine'})).status,400);
+    assert.equal((await call('A','PUT',path,{version:1,requiredSkill:'diesel'})).status,200);
+    assert.equal((await create({technicianId:'missing'})).status,400);
+  }
+  const board=(await call('A','GET','/service/board')).data;assert.equal(board.technicians[0].dayLoad,2);
+  assert.deepEqual((await call('B','GET','/service/board')).data.technicians,[]);
+  assert.equal((await appointment({technicianId:tech.id},'B')).status,400);
+});
+test('Labor grid supplies omitted rates while manual override remains the stored and posted amount',async()=>{
+  const {call,ro}=await setup();await call('A','POST','/service/labor-rates',{skill:'diagnostics',laborRateCents:15000});
+  const {laborRateCents,...line}=labor;
+  const r=(await ro({lineItems:[{...line,skill:'diagnostics'}]})).data;
+  assert.equal(r.lineItems[0].laborRateCents,15000);
+  const updated=await call('A','PUT',`/service/repair-orders/${r.id}`,{version:1,status:'completed',lineItems:[{...r.lineItems[0],laborRateCents:12300}]});
+  assert.equal(updated.status,200);assert.equal(updated.data.totals.totalCents,31365);
+  const journals=(await call('A','GET','/accounting/journal',undefined,{repairOrderId:r.id})).data;
+  assert.equal(journals[0].lines.find((l:any)=>l.accountCode==='4300').credit,31365);
+});
+test('Photo inspection produces one priced recommendation, persists declines and approves through stock and GL',async()=>{
+  const {call,ro,repositories}=await setup();await call('A','POST','/service/labor-rates',{skill:'brakes',laborRateCents:12000});
+  const part=(await call('A','POST','/parts',{partNumber:'PAD',description:'Brake pads',costCents:2000,retailPriceCents:4000,quantityOnHand:5,reorderPoint:1,binLocation:''})).data;
+  assert.ok(part);
+  const item={id:'brakes-check',label:'Replace pads',status:'needs-attention',skill:'brakes',partId:part.id};
+  let result=await ro({inspection:[item]});assert.equal(result.status,201);let r=result.data;const path=`/service/repair-orders/${r.id}`;
+  const content=Buffer.from('small photo fixture').toString('base64');
+  result=await call('A','POST',`${path}/photos`,{version:r.version,name:'pads.png',type:'image/png',content});assert.equal(result.status,201);r=result.data;
+  assert.equal(r.photos[0].size,19);assert.equal('content' in r.photos[0],false);
+  const photoPath=`${path}/photos/${r.photos[0].id}/content`;
+  assert.equal((await call('A','GET',photoPath)).data.content,content);
+  for(const method of ['GET','PUT'])assert.equal((await call('B',method,path,{version:r.version,inspection:[item]})).status,404);
+  assert.equal((await call('B','GET',photoPath)).status,404);
+  assert.equal((await call('B','POST',`${path}/photos`,{version:r.version,name:'x',type:'image/png',content})).status,404);
+  r=(await call('A','PUT',path,{version:r.version,inspection:[item]})).data;
+  assert.equal(r.recommendations.length,1);assert.equal(r.recommendations[0].estimatedPriceCents,16000);
+  const rec=r.recommendations[0];
+  r=(await call('A','PUT',path,{version:r.version,recommendationDecision:{id:rec.id,status:'declined'}})).data;
+  assert.equal(r.lineItems.length,0);assert.equal(r.recommendations[0].status,'declined');assert.equal(r.recommendations[0].decidedBy,'userA');assert.ok(r.recommendations[0].decidedAt);
+  assert.equal((await call('A','PUT',path,{version:r.version,recommendationDecision:{id:rec.id,status:'approved'}})).status,409);
+  r=(await call('A','PUT',path,{version:r.version,inspection:[item,{...item,id:'second'}]})).data;
+  assert.equal(r.recommendations.length,2);
+  result=await call('A','PUT',path,{version:r.version,status:'completed',recommendationDecision:{id:r.recommendations[1].id,status:'approved'}});assert.equal(result.status,200);r=result.data;
+  assert.equal(r.totals.totalCents,16000);assert.equal(r.lineItems.length,2);assert.deepEqual(r.recommendations[1].lineIds,r.lineItems.map((l:any)=>l.id));assert.equal(r.glPosted,true);assert.equal(r.stockApplied,true);
+  assert.equal((await call('A','GET',`/parts/${part.id}`)).data.quantityOnHand,4);
+  assert.equal((await call('A','GET','/accounting/journal',undefined,{repairOrderId:r.id})).data.length,1);
+  assert.equal((await call('B','PUT',path,{version:r.version,recommendationDecision:{id:rec.id,status:'approved'}})).status,404);
+  assert.equal((await call('A','PUT',path,{version:1,recommendationDecision:{id:rec.id,status:'approved'}})).status,409);
+  const stored=await repositories.forTenant('A').crmGet('repair-order',r.id);assert.equal(stored?.recommendations?.[0].status,'declined');
+});
+test('Photo and inspection validation rejects forged references, oversized uploads and foreign parts',async()=>{
+  const {call,ro,b}=await setup();const r=(await ro()).data,path=`/service/repair-orders/${r.id}`;
+  for(const body of [{photos:[{id:'forged'}]},{recommendations:[]},{inspection:[{label:'X',status:'bad'}]},{inspection:[{label:'X',status:'ok',partId:'missing'}]},{inspection:[{id:'same',label:'A',status:'ok'},{id:'same',label:'B',status:'ok'}]}])assert.equal((await call('A','PUT',path,{version:1,...body})).status,400);
+  for(const body of [{content:'!'}, {content:Buffer.alloc(40961).toString('base64')},{type:'text/html',content:'eA=='},{content:''}])assert.equal((await call('A','POST',`${path}/photos`,{version:1,name:'x.png',type:'image/png',...body})).status,400);
+  assert.equal((await call('A','POST',`${path}/photos`,{version:2,name:'x',type:'image/png',content:'eA=='})).status,409);
+  const foreign=(await call('B','POST','/parts',{partNumber:'FOREIGN',description:'Other',costCents:1,retailPriceCents:2,quantityOnHand:0,reorderPoint:0,binLocation:''})).data;
+  assert.equal((await ro({inspection:[{label:'X',status:'ok',partId:foreign.id}]})).status,400);
+  await call('A','POST','/service/labor-rates',{skill:'brakes',laborRateCents:100});
+  assert.equal((await ro({...b,inspection:[{label:'X',status:'needs-attention',skill:'brakes'}]},'B')).status,400);
 });

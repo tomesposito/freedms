@@ -113,11 +113,18 @@ completeness checklist, and any accepted F&I products.
 ![Deal jacket](docs/screenshots/deal-jacket.png)
 
 **Service board** — the day's appointments grouped by status, with the day's
-repair orders and totals.
+repair orders, totals, assigned technicians, and per-technician day loads.
 
 ![Service board](docs/screenshots/service-board.png)
 
-**Repair order** — labor, free-text parts, and stocked parts with on-hand hints.
+**Technicians and labor grid** — named service staff with skill tags and editable
+hourly rates per skill. Available from the service board.
+
+![Technicians and labor grid](docs/screenshots/service-settings.png)
+
+**Repair order** — skill-based dispatch with explicit mismatch acknowledgement,
+grid-prefilled editable labor rates, free-text and stocked parts, inspection
+checklists and photos, and customer recommendations with recorded approvals/declines.
 Completion applies stock once and posts the journal entry shown at the bottom;
 reopening restores the stock and reverses the entry. Negative stock requires an
 explicit override and leaves a visible warning.
@@ -1028,3 +1035,30 @@ uses `POST /local/session` with `{tenantId, email, code?}`. New workspace creati
 still accepts `{dealership, name}`. Both flows remain loopback-only development
 tools; data is ephemeral and tokens last one hour. Hosted Cognito provisioning and
 invite email delivery are out of scope; no invite is sent.
+
+
+Service depth (#28) is local-only. Technician and labor-rate records are tenant
+scoped under `/service/technicians` and `/service/labor-rates` (list/create and
+get/update by id). Labor rates use the skill as their unique key. Appointment and
+RO writes accept technician/required-skill fields and explicit mismatch acknowledgement.
+The board counts each appointment and RO once toward its assigned technician's UTC day load.
+
+RO PUT accepts `inspection` and `recommendationDecision: {id, status}` where status
+is `approved` or `declined`. Recommendation estimates snapshot the configured labor
+rate and selected part's retail price when first produced (one hour and one part
+by default); an unconfigured skill rate must be configured first. Re-saving an
+inspection never duplicates or rewrites its recommendation or customer decision.
+Approval appends the quoted lines through the existing stock/GL reconciliation
+path; manual edits to actual RO rates remain possible. Declines retain actor/time.
+
+Inspection photos use `/service/repair-orders/:id/photos` (POST with RO version,
+name, image MIME type, base64 content) and `/:photoId/content` (GET). Only references
+live on the RO; bytes reuse the document store and its 40 KiB maximum. JPEG, PNG,
+and WebP are supported. Save checklist edits before attaching photos or deciding
+recommendations; each action uses the persisted RO version and refreshes the page.
+
+Screenshot refresh for the verifier: capture `service-settings.png` at
+`#/service/settings` with real technicians/rates, refresh `service-board.png` at
+`#/service` with assigned work and day loads, and `repair-order.png` at an existing
+`#/service/repair-orders/:id` showing inspection/photos and customer decisions.
+No verification captures are committed by this implementation.

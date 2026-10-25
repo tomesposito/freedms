@@ -70,7 +70,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
       const execute = async (): Promise<ApiResponse> => {
         if (/^\/parts(\/|$)/.test(path)) return await parts(request, principal, repository, now());
-        if (/^\/service(\/|$)/.test(path)) return await service(request, principal, repository, now());
+        if (/^\/service(\/|$)/.test(path)) return await service(request, principal, repository, now(), documents);
         if (/^\/compliance(\/|$)/.test(path) || /^\/deals\/[^/]+\/(compliance|compliance-checks)(\/|$)/.test(path)) return await compliance(request, principal, repository, now());
         if (/^\/documents(\/|$)/.test(path)) return await documentControls(request, principal, repository, now(), documents);
         if (/^\/admin\/invites(\/|$)/.test(path)) return await manageInvites(request, principal, repository, now());

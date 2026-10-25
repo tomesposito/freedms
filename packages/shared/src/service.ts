@@ -8,13 +8,13 @@ export const repairOrderPayTypeLabels: Record<RepairOrderPayType,string> = {'cus
 export const repairOrderStatuses = ['open','in-progress','completed','picked-up'] as const;
 export type RepairOrderStatus = typeof repairOrderStatuses[number];
 export const repairOrderStatusLabels: Record<RepairOrderStatus,string> = {open:'Open','in-progress':'In progress',completed:'Completed','picked-up':'Picked up'};
-export interface ServiceAppointment extends CrmRecord {
+export interface ServiceAppointment extends CrmRecord, Dispatch {
   kind: 'service-appointment'; customerId: string; customerName: string;
   vehicleId: string | null; vehicleDescription: string; advisorId: string | null;
   scheduledStart: string; scheduledEnd: string; concern: string; status: AppointmentStatus;
 }
 export interface RepairOrderLineItem {
-  partId?: string | null; id: string; kind: 'labor' | 'parts'; description: string;
+  skill?: ServiceSkill | null; partId?: string | null; id: string; kind: 'labor' | 'parts'; description: string;
   laborHoursHundredths: number | null; laborRateCents: number | null;
   quantity: number | null; unitPriceCents: number | null;
 }
@@ -27,7 +27,8 @@ export function repairOrderTotals(items: RepairOrderLineItem[]): RepairOrderTota
   const partsCents = items.filter(i => i.kind === 'parts').reduce((s, i) => s + lineItemAmountCents(i), 0);
   return {laborCents, partsCents, totalCents: laborCents + partsCents};
 }
-export interface RepairOrder extends CrmRecord {
+export interface RepairOrder extends CrmRecord, Dispatch {
+  inspection?: InspectionItem[]; photos?: InspectionPhoto[]; recommendations?: Recommendation[];
   glPosted?: boolean; glPostingEntryId?: string | null;
   stockApplied?: boolean; stockWarning?: string | null;
   kind: 'repair-order'; appointmentId: string | null; customerId: string; customerName: string;
@@ -36,6 +37,16 @@ export interface RepairOrder extends CrmRecord {
 }
 export interface RepairOrderView extends RepairOrder { totals: RepairOrderTotals }
 export interface ServiceBoardDay {
+  technicians?: (Technician & {dayLoad: number})[];
   date: string; appointments: ServiceAppointment[];
   byStatus: Record<AppointmentStatus, ServiceAppointment[]>; repairOrders: RepairOrderView[];
 }
+
+export const serviceSkills = ['brakes','diesel','electrical','diagnostics','engine','transmission','suspension','hvac','tires','general'] as const;
+export type ServiceSkill = typeof serviceSkills[number];
+export interface Technician extends CrmRecord { kind: 'technician'; name: string; skills: ServiceSkill[] }
+export interface LaborRate extends CrmRecord { kind: 'labor-rate'; skill: ServiceSkill; laborRateCents: number }
+export interface Dispatch { technicianId?: string | null; requiredSkill?: ServiceSkill | null; skillMismatchWarning?: {requiredSkill: ServiceSkill; technicianId: string; acknowledgedBy: string; acknowledgedAt: string} | null }
+export interface InspectionItem { id: string; label: string; status: 'ok' | 'monitor' | 'needs-attention'; skill: ServiceSkill; laborHoursHundredths: number; partId: string | null }
+export interface InspectionPhoto { id: string; name: string; type: 'image/jpeg' | 'image/png' | 'image/webp'; size: number }
+export interface Recommendation { id: string; inspectionItemId: string; description: string; estimatedPriceCents: number; status: 'pending' | 'approved' | 'declined'; lines: RepairOrderLineItem[]; lineIds: string[]; decidedBy?: string; decidedAt?: string }

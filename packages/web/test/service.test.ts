@@ -32,3 +32,12 @@ test('Service navigation, history sections and form route are wired into vehicle
   for (const [source,scope] of [[main,'vehicleId'],[crm,'customerId']]) { assert.ok(source.includes(`/service/repair-orders?${scope}=`)); assert.match(source,/<h2>Service history<\/h2>\$\{serviceHistoryHtml\(serviceHistory\)\}/); }
   assert.match(main,/serviceRoute\(parts/); assert.match(service,/repair-orders\/new\/\$\{encodeURIComponent\(a.id\)\}/); assert.doesNotMatch(service,/disabled/);
 });
+
+test('Service depth shows honest inspection empty states and escaped durable decisions', async()=>{
+  const {inspectionHtml,inspectionResults}=await import('../src/service-depth.js');
+  assert.match(inspectionHtml(undefined,[]),/No inspection items yet/);
+  assert.match(inspectionResults(ro),/No inspection photos yet/);
+  assert.match(inspectionResults(ro),/No recommendations yet/);
+  const html=inspectionResults({...ro,photos:[{id:'photo',name:'<img>',type:'image/png',size:12}],recommendations:[{id:'rec',inspectionItemId:'item',description:'<script>',estimatedPriceCents:100,status:'declined',lines:[],lineIds:[],decidedBy:'<actor>',decidedAt:'2026-10-24'}]});
+  assert.match(html,/declined/);assert.match(html,/&lt;actor&gt;/);assert.match(html,/&lt;script&gt;/);assert.doesNotMatch(html,/<img>|<script>|data-decision/);
+});
