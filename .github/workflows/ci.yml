@@ -1,0 +1,84 @@
+name: freeDMS CI and release
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      VITE_API_URL: /api
+      VITE_COGNITO_DOMAIN: ${{ vars.VITE_COGNITO_DOMAIN }}
+      VITE_COGNITO_CLIENT_ID: ${{ vars.VITE_COGNITO_CLIENT_ID }}
+    outputs:
+      artifact-id: ${{ steps.bundle.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: python3 -m unittest discover -s ops/releases -p 'test_*.py' -v
+      - name: Package the tested application
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        run: node ops/releases/package.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        id: bundle
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        with:
+          name: release-${{ github.sha }}
+          path: release/
+          retention-days: 1
+          if-no-files-found: error
+  publish:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      actions: write
+    steps:
+      - name: Acquire pinned GitHub CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz --output /tmp/gh.tar.gz
+          printf '%s  %s\n' bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386 /tmp/gh.tar.gz | sha256sum --check
+          tar -xzf /tmp/gh.tar.gz -C /tmp
+          echo /tmp/gh_2.102.0_linux_amd64/bin >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: release
+          merge-multiple: true
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
+        id: attestation
+        with:
+          subject-path: release/release.json
+      - name: Publish verified build (does not deploy)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          ARTIFACT: ${{ needs.build.outputs.artifact-id }}
+          PROVENANCE: ${{ steps.attestation.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$PROVENANCE" release/provenance.jsonl
+          gh release create "build-$SOURCE" release/* --repo "$REPOSITORY" --target "$SOURCE" --title "Application build $SOURCE" --notes 'Tested application artifacts and attested manifest. Deployment requires separate operator approval.'
+          gh api --method DELETE "repos/$REPOSITORY/actions/artifacts/$ARTIFACT"

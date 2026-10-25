@@ -173,3 +173,90 @@ previous frontend index; keep hashed assets immutable. To withdraw the pilot,
 remove public DNS with `PublishSite=false`; CloudFront remains reachable by its
 service hostname, so revoke memberships or disable the distribution as well if
 access itself must stop. Do not delete retained data as a rollback step.
+
+## GitHub Actions releases
+
+`freeDMS CI and release` tests every pull request. Pushes to `master` and manual
+runs on `master` also publish `build-<full-source-sha>` with `api.zip`,
+`web.tar.gz`, a manifest binding every file, and GitHub build provenance.
+Publishing does not deploy. The public repository has no AWS trust or access keys.
+The build uses repository variables `VITE_COGNITO_DOMAIN` and
+`VITE_COGNITO_CLIENT_ID`; these are public browser configuration, not credentials.
+The marketing source in `site/` is not part of the application release; the apex
+continues to redirect to the invite-only app.
+
+The private `tomesposito/freedms-deploy` repository contains a manual
+`Deploy approved freeDMS release` workflow. Its reusable controller is pinned to a
+reviewed commit, and AWS OIDC trust binds that commit, the private repository's
+numeric identity, owner identity, `master`, and the dispatch event. Credentials
+last 15 minutes. The deployment role can update only this application's Lambda
+code, frontend index/assets, and private release records. It cannot write its own
+approvals/configuration, change IAM, deploy infrastructure, provision users, or
+access the database/document bucket directly. Deploying code can exercise the
+application's runtime permissions, so source review remains required.
+
+### Release an application change
+
+1. Merge the reviewed change into `master` and wait for the public build to pass.
+2. Download `release.json` from `build-<full-source-sha>` and calculate its SHA-256.
+   Review backward compatibility, especially stored records, authorization, and
+   request/response contracts. The release path supports compatible application
+   changes only. It rejects changes to `infra/template.yaml` or hosted frontend
+   configuration; infrastructure and data migrations require a separate operator
+   deployment and explicit baseline update.
+3. From an independently authenticated AWS operator session, approve the exact
+   source and manifest. Use GitHub CLI authenticated for public artifact/provenance
+   reads (`FREEDMS_GH_BINARY` can select its installed path):
+
+   ```sh
+   python3 ops/releases/operator.py approve /private/release-operator.json \
+     --source FULL_SOURCE_SHA --manifest MANIFEST_SHA256
+   ```
+
+   The private operator JSON contains `accountId`, `operatorArn`, and
+   `operationsBucket`. Approval verifies the trusted master-build provenance,
+   archive/file digests, live application, and current deployment record. It
+   expires after four hours and is bound to the exact current state/configuration.
+4. Run the private workflow from `master` with `mode=preflight`, that source, and
+   that manifest digest. Then run it with `mode=deploy` and the same values.
+   `mode=probe` checks OIDC access and the current application without changing it.
+5. A successful deployment checks the actual Lambda code digest, S3 index, every
+   public frontend file, anonymous API rejection, and invalid-share rejection.
+   The private current-release record is updated only after those checks pass.
+   `operator.py status /private/release-operator.json` reads that record and checks
+   the live Lambda/index again. These are public smoke checks, not a fresh
+   authenticated end-to-end business transaction.
+
+The controller downloads data artifacts only; it never checks out or executes the
+requested public source with AWS credentials. Existing frontend assets are kept
+and never overwritten with different bytes. The previous Lambda ZIP/index are
+saved before promotion. Ordinary failures attempt recovery and verify it; failed
+recovery or a lost runner leaves a durable lock that blocks further deployments.
+
+### Interrupted releases and rollback
+
+To return to an earlier compatible published build, independently approve that
+build and deploy it through the same workflow. Approval cannot be replayed after
+the current release changes. A recovered failed release also changes the current
+record, requiring a fresh approval before retrying.
+
+If a job disappears or recovery fails, **do not simply rerun or delete the lock**.
+Using independent operator credentials, read `state/lock.json`, its matching
+`history/<operation>/snapshot.json`, and the actual Lambda/index. Confirm no job
+is running. Restore the snapshot's `api.zip` with Lambda's current `RevisionId`,
+wait for the update, restore its `index.html` with `Cache-Control: no-store`, and
+verify both hashes against `snapshot.previous`. Write a new current record based
+on `snapshot.previous` with a recovery timestamp, then conditionally delete the
+observed lock. The snapshot and lock survive cancellation; there is no unattended
+watchdog that can guarantee recovery after the runner is lost.
+
+Release access is managed by the separate `infra/release-access.yaml` stack.
+Changing the controller requires a new reviewed private commit, updated wrapper
+pin, and an independently applied AWS trust change. For emergency shutoff, an
+operator can attach an explicit deny-all inline policy to the dedicated deploy
+role to block existing sessions, then remove its OIDC trust to block new sessions.
+This does not disable runtime roles or alter the shared OpenSight OIDC provider.
+
+GitHub-hosted public builds and the account's included private Actions allowance
+avoid an always-on runner. Private minutes, artifact/release retention, S3 release
+snapshots, and normal AWS requests remain subject to account quotas and charges.
