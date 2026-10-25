@@ -16,6 +16,10 @@ export function negativeOverride(value: unknown): boolean {
   if (value !== undefined && typeof value !== 'boolean') throw invalid('allowNegativeStock must be a boolean.');
   return value === true;
 }
+export function reservedOverride(value: unknown): boolean {
+  if (value !== undefined && typeof value !== 'boolean') throw invalid('acknowledgeReservedStock must be a boolean.');
+  return value === true;
+}
 export function stockEvent(principal: Principal, time: string, record: Part | PartsSale, causeId?: string): OutboxEvent {
   return {id:randomUUID(),tenantId:principal.tenantId,actorId:principal.userId,aggregateId:record.id,aggregateVersion:record.version,type:record.kind === 'parts-sale' ? 'parts-sale.created' : record.version === 1 ? 'part.created' : 'part.updated',occurredAt:time,deliveryStatus:'pending',...(causeId ? {causeId} : {})};
 }
@@ -25,7 +29,7 @@ function stockChange(part: Part, delta: number, override: boolean, time: string)
   if (delta < 0 && quantityOnHand < 0 && !override) throw invalid(`Insufficient stock for ${part.partNumber}. Explicit negative-stock override required.`);
   return {...part,quantityOnHand,version:part.version+1,updatedAt:time};
 }
-export async function reconcileStock(repo: TenantRepository, principal: Principal, time: string, old: RepairOrder | undefined, record: RepairOrder, override: boolean): Promise<CrmWrite[]> {
+export async function reconcileStock(repo: TenantRepository, principal: Principal, time: string, old: RepairOrder | undefined, record: RepairOrder, override: boolean, acknowledgeReservedStock: boolean): Promise<CrmWrite[]> {
   const finalized = ['completed','picked-up'].includes(record.status);
   const delta = new Map<string,number>();
   for (const line of record.lineItems) if (line.partId && !(await repo.crmGet('part',line.partId))) throw invalid('Part must belong to this workspace.');
@@ -36,12 +40,24 @@ export async function reconcileStock(repo: TenantRepository, principal: Principa
   if (changes.length > 9) throw invalid('Stock save exceeds transaction limit: at most 9 affected stocked parts per repair-order save.');
   record.stockApplied = finalized;
   record.stockWarning = finalized && old?.stockApplied ? old.stockWarning ?? null : null;
+  record.reservedStockWarning = finalized && old?.stockApplied ? old.reservedStockWarning ?? null : null;
+  const reservedParts: NonNullable<RepairOrder['reservedStockWarning']>['parts'] = [];
+  const orders = changes.some(([,amount])=>amount<0) ? await repo.crmList('parts-po') : [];
   const writes: CrmWrite[] = [];
   for (const [id,amount] of changes) {
     const part = await repo.crmGet('part',id); if (!part) throw invalid('Part must belong to this workspace.');
     const updated = stockChange(part,amount,override,time);
+    if (amount < 0) {
+      const reservedForThisRo = orders.flatMap(po=>po.lines).filter(line=>line.partId===part.id && line.specialOrder?.repairOrderId===record.id).reduce((sum,line)=>sum+line.quantityReserved,0);
+      const reservedForOthers = Math.max(0,(part.quantityReserved ?? 0)-reservedForThisRo);
+      if (reservedForOthers > 0 && updated.quantityOnHand < reservedForOthers) reservedParts.push({partId:part.id,partNumber:part.partNumber,quantityReserved:reservedForOthers});
+    }
     if (amount < 0 && updated.quantityOnHand < 0) record.stockWarning = `Negative stock explicitly allowed for ${part.partNumber}.` + (record.stockWarning ? ` ${record.stockWarning}` : '');
     writes.push({record:updated,expectedVersion:part.version,event:stockEvent(principal,time,updated,record.id)});
+  }
+  if (reservedParts.length) {
+    if (!acknowledgeReservedStock) throw invalid(`Stock is reserved for other special orders: ${reservedParts.map(p=>`${p.partNumber} (${p.quantityReserved} reserved)`).join(', ')}. Explicit reserved-stock acknowledgement required.`);
+    record.reservedStockWarning = {parts:reservedParts,acknowledgedBy:principal.userId,acknowledgedAt:time};
   }
   return writes;
 }

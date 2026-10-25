@@ -41,3 +41,17 @@ test('Service depth shows honest inspection empty states and escaped durable dec
   const html=inspectionResults({...ro,photos:[{id:'photo',name:'<img>',type:'image/png',size:12}],recommendations:[{id:'rec',inspectionItemId:'item',description:'<script>',estimatedPriceCents:100,status:'declined',lines:[],lineIds:[],decidedBy:'<actor>',decidedAt:'2026-10-24'}]});
   assert.match(html,/declined/);assert.match(html,/&lt;actor&gt;/);assert.match(html,/&lt;script&gt;/);assert.doesNotMatch(html,/<img>|<script>|data-decision/);
 });
+
+test('RO reserved-stock acknowledgement renders escaped durable details and follows finalizing status',async()=>{
+  const {reservedStockWarningHtml}=await import('../src/service.js');
+  assert.equal(reservedStockWarningHtml(), '');assert.equal(reservedStockWarningHtml(ro),'');
+  const html=reservedStockWarningHtml({...ro,reservedStockWarning:{parts:[{partId:'p',partNumber:'<part>',quantityReserved:3}],acknowledgedBy:'<actor>',acknowledgedAt:'<time>'}});
+  assert.match(html,/Recorded override: &lt;part&gt; \(3 reserved\)/);assert.match(html,/&lt;actor&gt;/);assert.match(html,/&lt;time&gt;/);assert.doesNotMatch(html,/<part>|<actor>|<time>/);
+  const source=readFileSync(new URL('../src/service.ts',import.meta.url),'utf8');
+  assert.match(source,/type="checkbox" name="acknowledgeReservedStock"/);
+  assert.match(source,/#stock-override, #reserved-stock-override/);
+  assert.match(source,/override.hidden = !\['completed','picked-up'\].includes/);
+  assert.match(source,/if\(override.hidden\) override.querySelector<HTMLInputElement>\('input'\)!.checked=false/);
+  assert.match(source,/if\(ro && \['completed','picked-up'\].includes\(String\(body.status\)\) && data.has\('acknowledgeReservedStock'\)\) body.acknowledgeReservedStock=true/);
+  assert.match(source,/\$\{reservedStockWarningHtml\(ro\)\}/);
+});

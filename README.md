@@ -136,7 +136,9 @@ free-text and stocked parts, inspection
 checklists and photos, and customer recommendations with recorded approvals/declines.
 Completion applies stock once and posts the journal entry shown at the bottom;
 reopening restores the stock and reverses the entry. Negative stock requires an
-explicit override and leaves a visible warning. The customer authorization
+explicit override and leaves a visible warning. Using stock reserved for
+another repair order's special order also requires an explicit acknowledgement,
+recorded on the repair order and in the audit log. The customer authorization
 below the form is signed in store against the $180.00 estimate.
 
 ![Repair order](docs/screenshots/repair-order.png)

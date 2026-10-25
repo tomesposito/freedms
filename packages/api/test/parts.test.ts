@@ -256,3 +256,65 @@ test('Dynamo generic writes persist depth kinds with tenant keys, version condit
   assert.equal((await call('PUT',`/parts/${created.id}`,{version:1,costCents:200,retailPriceCents:876})).data.retailPriceCents,876);
   assert.equal((await part({partNumber:'NULL',location:null})).status,400);
 });
+
+async function reserve(ctx: Awaited<ReturnType<typeof setup>>, partId:string, quantity:number, repairOrderId:string|null=null, tenant='A') {
+  const po=await ctx.call('POST','/parts/purchase-orders',{vendorName:'Vendor',lines:[{partId,quantityOrdered:quantity,costCents:501,specialOrder:{customerId:ctx.customers[tenant],repairOrderId}}]},tenant);
+  assert.equal(po.status,201,JSON.stringify(po));
+  const received=await ctx.call('POST',`/parts/purchase-orders/${po.data.id}/receive`,{version:1,lines:[{lineId:po.data.lines[0].id,quantity}]},tenant);
+  assert.equal(received.status,200,JSON.stringify(received));
+}
+test('RO completion protects other reservations atomically, records acknowledgements once, preserves and replaces warnings, and reverses exactly',async()=>{
+  const ctx=await setup(),{part,ro,call,stock,repositories,setTime}=ctx,p=(await part({quantityOnHand:2})).data,q=(await part({partNumber:'SECOND',quantityOnHand:1})).data,owner=(await ro([])).data;
+  await reserve(ctx,p.id,3,owner.id); await reserve(ctx,q.id,2);
+  let r=(await ro([line(p.id,3),line(q.id,2,'second')])).data;const path=`/service/repair-orders/${r.id}`,before=repositories.eventsForTest('A').length;
+  const denied=await call('PUT',path,{version:1,status:'completed'});
+  assert.equal(denied.status,400);assert.match(denied.error.message,/FILTER-1 \(3 reserved\)/);assert.match(denied.error.message,/SECOND \(2 reserved\)/);
+  assert.equal(await stock(p.id),5);assert.equal(await stock(q.id),3);assert.deepEqual((await call('GET',path)).data,r);assert.equal(repositories.eventsForTest('A').length,before);
+  assert.equal((await call('PUT',path,{version:1,status:'completed',acknowledgeReservedStock:true},'B')).status,404);
+  setTime('2026-10-25T12:00:00Z');
+  const done=await call('PUT',path,{version:1,status:'completed',acknowledgeReservedStock:true});assert.equal(done.status,200);r=done.data;
+  const warning={parts:[{partId:p.id,partNumber:'FILTER-1',quantityReserved:3},{partId:q.id,partNumber:'SECOND',quantityReserved:2}],acknowledgedBy:'userA',acknowledgedAt:'2026-10-25T12:00:00.000Z'};
+  assert.deepEqual(r.reservedStockWarning,warning);assert.equal(await stock(p.id),2);assert.equal(await stock(q.id),1);
+  assert.equal((await call('GET',`/parts/${p.id}`)).data.quantityReserved,3);assert.equal((await call('GET',`/parts/${q.id}`)).data.quantityReserved,2);
+  assert.equal(repositories.eventsForTest('A').find(e=>e.aggregateId===r.id&&e.aggregateVersion===2)?.action,'repair-order.reserved-stock-acknowledged: FILTER-1, SECOND');
+  const same=await call('PUT',path,{version:2,status:'picked-up',acknowledgeReservedStock:true});assert.equal(same.status,200);assert.deepEqual(same.data.reservedStockWarning,warning);
+  assert.equal(repositories.eventsForTest('A').find(e=>e.aggregateId===r.id&&e.aggregateVersion===3)?.action,undefined);
+  setTime('2026-10-26T12:00:00Z');
+  assert.equal((await call('PUT',path,{version:3,lineItems:[line(p.id,4),line(q.id,2,'second')]})).status,400);
+  const edited=await call('PUT',path,{version:3,lineItems:[line(p.id,4),line(q.id,2,'second')],acknowledgeReservedStock:true});assert.equal(edited.status,200);
+  assert.deepEqual(edited.data.reservedStockWarning,{...warning,parts:warning.parts.slice(0,1),acknowledgedAt:'2026-10-26T12:00:00.000Z'});
+  assert.equal(repositories.eventsForTest('A').find(e=>e.aggregateId===r.id&&e.aggregateVersion===4)?.action,'repair-order.reserved-stock-acknowledged: FILTER-1');
+  const reopened=await call('PUT',path,{version:4,status:'open'});assert.equal(reopened.status,200);assert.equal(reopened.data.reservedStockWarning,null);
+  assert.equal(await stock(p.id),5);assert.equal(await stock(q.id),3);assert.equal((await call('GET',`/parts/${p.id}`)).data.quantityReserved,3);assert.equal((await call('GET',`/parts/${q.id}`)).data.quantityReserved,2);
+});
+test('RO completion uses unreserved stock and sums its own reservations across POs without acknowledgement',async()=>{
+  const ctx=await setup(),{part,ro,call,stock}=ctx,p=(await part({quantityOnHand:2})).data;
+  const owner=(await ro([line(p.id,3)])).data;
+  await reserve(ctx,p.id,1,owner.id);await reserve(ctx,p.id,2,owner.id);await reserve(ctx,p.id,2);
+  const other=(await ro([line(p.id,2)])).data;
+  const done=await call('PUT',`/service/repair-orders/${other.id}`,{version:1,status:'completed'});
+  assert.equal(done.status,200);assert.equal(done.data.reservedStockWarning,null);assert.equal(await stock(p.id),5);
+  const own=await call('PUT',`/service/repair-orders/${owner.id}`,{version:1,status:'completed'});
+  assert.equal(own.status,200);assert.equal(own.data.reservedStockWarning,null);assert.equal(await stock(p.id),2);assert.equal((await call('GET',`/parts/${p.id}`)).data.quantityReserved,5);
+  const foreign=(await part({quantityOnHand:0},'B')).data;await reserve(ctx,foreign.id,4,null,'B');
+  const foreignRo=(await ro([line(foreign.id,1)],'B')).data;
+  assert.equal((await call('PUT',`/service/repair-orders/${foreignRo.id}`,{version:1,status:'completed'},'B')).status,400);
+  assert.equal((await call('GET',`/parts/${foreign.id}`,undefined,'B')).data.quantityOnHand,4);
+});
+test('Reserved-stock flags are strictly scoped, server warnings cannot be forged, and negative stock requires both overrides',async()=>{
+  const ctx=await setup(),{part,ro,call,stock,repositories,customers}=ctx,p=(await part({quantityOnHand:0})).data;
+  await reserve(ctx,p.id,3);
+  const r=(await ro([line(p.id,4)])).data,path=`/service/repair-orders/${r.id}`,before=repositories.eventsForTest('A').length;
+  for(const patch of [{acknowledgeReservedStock:'true'},{reservedStockWarning:{parts:[],acknowledgedBy:'fake',acknowledgedAt:'fake'}},{acknowledgeReservedStock:true},{allowNegativeStock:true},{allowNegativeStock:true,acknowledgeReservedStock:false}]) {
+    assert.equal((await call('PUT',path,{version:1,status:'completed',...patch})).status,400,JSON.stringify(patch));
+    assert.equal(await stock(p.id),3);assert.deepEqual((await call('GET',path)).data,r);assert.equal(repositories.eventsForTest('A').length,before);
+  }
+  for(const patch of [{acknowledgeReservedStock:true},{reservedStockWarning:null}]) {
+    assert.equal((await call('POST','/service/repair-orders',{customerId:customers.A,payType:'customer-pay',...patch})).status,400);
+    assert.equal((await call('POST','/service/appointments',{customerId:customers.A,...patch})).status,400);
+  }
+  const appt=(await call('POST','/service/appointments',{customerId:customers.A,scheduledStart:'2026-10-25T12:00:00Z',scheduledEnd:'2026-10-25T13:00:00Z'})).data;
+  assert.equal((await call('PUT',`/service/appointments/${appt.id}`,{version:1,acknowledgeReservedStock:true})).status,400);
+  const done=await call('PUT',path,{version:1,status:'completed',allowNegativeStock:true,acknowledgeReservedStock:true});
+  assert.equal(done.status,200);assert.match(done.data.stockWarning,/FILTER-1/);assert.equal(done.data.reservedStockWarning.parts[0].quantityReserved,3);assert.equal(await stock(p.id),-1);assert.equal((await call('GET',`/parts/${p.id}`)).data.quantityReserved,3);
+});

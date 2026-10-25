@@ -2,7 +2,7 @@ import { repairOrderSignatureView } from './signature-targets.js';
 import { serviceCatalog, dispatch, inspect } from './service-depth.js';
 import type { DocumentStore } from './document-store.js';
 import { reconcilePosting } from './fixed-ops.js';
-import { reconcileStock, negativeOverride } from './parts.js';
+import { reconcileStock, negativeOverride, reservedOverride } from './parts.js';
 import { randomUUID } from 'node:crypto';
 import { serviceSkills, maxDocumentBytes, appointmentStatuses, repairOrderPayTypes, repairOrderStatuses, repairOrderTotals, type ServiceAppointment, type RepairOrder, type RepairOrderLineItem, type Principal, type ServiceBoardDay } from '@freedms/shared';
 import { requireWrite } from './auth.js';
@@ -113,7 +113,7 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
   }
   requireWrite(principal, method);
   const b = parseBody(request.body);
-  onlyKeys(b, ['technicianId','requiredSkill','acknowledgeSkillMismatch','vehicleId','vehicleDescription','advisorId','concern', ...(appt ? ['scheduledStart','scheduledEnd', 'status'] : ['inspection','recommendationDecision','payType','lineItems', ...(old ? ['status','allowNegativeStock'] : ['appointmentId'])]), ...(old ? ['version'] : ['customerId'])]);
+  onlyKeys(b, ['technicianId','requiredSkill','acknowledgeSkillMismatch','vehicleId','vehicleDescription','advisorId','concern', ...(appt ? ['scheduledStart','scheduledEnd', 'status'] : ['inspection','recommendationDecision','payType','lineItems', ...(old ? ['status','allowNegativeStock','acknowledgeReservedStock'] : ['appointmentId'])]), ...(old ? ['version'] : ['customerId'])]);
   const expected = old ? version(b.version) : 0; if (old && expected !== old.version) throw conflict();
   let appointment: ServiceAppointment | undefined;
   if (!appt && !old && b.appointmentId != null) {
@@ -151,9 +151,10 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
       }
     }
   }
-  const stockWrites = record.kind === 'repair-order' ? await reconcileStock(repo, principal, time, old?.kind === 'repair-order' ? old : undefined, record, negativeOverride(b.allowNegativeStock)) : [];
+  const stockWrites = record.kind === 'repair-order' ? await reconcileStock(repo, principal, time, old?.kind === 'repair-order' ? old : undefined, record, negativeOverride(b.allowNegativeStock), reservedOverride(b.acknowledgeReservedStock)) : [];
+  const reservedWarning = record.kind === 'repair-order' && record.reservedStockWarning && record.reservedStockWarning !== (old?.kind === 'repair-order' ? old.reservedStockWarning : undefined) ? record.reservedStockWarning : null;
   const journalWrites = record.kind === 'repair-order' ? await reconcilePosting(repo, principal, now, old?.kind === 'repair-order' ? old : undefined, record) : [];
-  await repo.crmWrite([...stockWrites, {record, expectedVersion: expected, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: `${record.kind}.${old ? 'updated' : 'created'}`, occurredAt: time, deliveryStatus: 'pending'}}]);
+  await repo.crmWrite([...stockWrites, {record, expectedVersion: expected, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: `${record.kind}.${old ? 'updated' : 'created'}`, ...(reservedWarning ? {action:`repair-order.reserved-stock-acknowledged: ${reservedWarning.parts.map(p=>p.partNumber).join(', ')}`} : {}), occurredAt: time, deliveryStatus: 'pending'}}]);
   // RO + stock can consume all ten writes; validated journal entries follow immediately.
   if (journalWrites.length) await repo.crmWrite(journalWrites);
   return response(old ? 200 : 201, {data: record.kind === 'repair-order' ? view(record) : record});

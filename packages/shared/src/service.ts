@@ -31,6 +31,7 @@ export function repairOrderTotals(items: RepairOrderLineItem[]): RepairOrderTota
 export interface RepairOrder extends CrmRecord, Dispatch {
   inspection?: InspectionItem[]; photos?: InspectionPhoto[]; recommendations?: Recommendation[];
   glPosted?: boolean; glPostingEntryId?: string | null;
+  reservedStockWarning?: { parts: { partId: string; partNumber: string; quantityReserved: number }[]; acknowledgedBy: string; acknowledgedAt: string } | null;
   stockApplied?: boolean; stockWarning?: string | null;
   kind: 'repair-order'; appointmentId: string | null; customerId: string; customerName: string;
   vehicleId: string | null; vehicleDescription: string; payType: RepairOrderPayType;
