@@ -47,3 +47,6 @@ import '../packages/web/test/parts.test.js';
 import '../packages/web/test/sidebar.test.js';
 
 import '../packages/api/test/fixed-ops.test.js';
+
+import '../packages/api/test/onboarding.test.js';
+import '../packages/web/test/onboarding.test.js';

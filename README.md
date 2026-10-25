@@ -43,6 +43,28 @@ Real captures from the local app on the current build — the same screens the
 verification tours use. The sample dealership data is local-only; the app itself
 always starts empty.
 
+**Local onboarding** — four steps collect account, dealership, and optional team
+invites. Nothing is created until Finish; the workspace starts empty.
+
+![Onboarding account step](docs/screenshots/onboarding-wizard.png)
+
+**Review and finish** — check the dealership and team before creating the workspace.
+
+![Onboarding review](docs/screenshots/onboarding-review.png)
+
+**Invite links** — copy and share links yourself. No email is sent.
+
+![Onboarding finish and invite links](docs/screenshots/onboarding-finish.png)
+
+**Invite landing** — public links show the dealership and role. Acceptance and
+profile setup follow in issue #34.
+
+![Pending invite landing](docs/screenshots/invite-landing.png)
+
+**Unavailable invites** — expired, revoked, or replaced links show a clear message.
+
+![Invalid invite landing](docs/screenshots/invite-invalid.png)
+
 **Inventory** — every vehicle with aging, cost, and status.
 
 ![Inventory list](docs/screenshots/inventory-list.png)
@@ -197,7 +219,8 @@ has MFA on and can reset it.
 
 **Workspace users** — admin-only membership management with role, active status,
 and MFA status. Fresh workspaces contain only their admin. Local sign-in only;
-hosted invite emails are out of scope and no invite is sent.
+admins create invites during onboarding and share copyable links themselves. No
+email is sent. Reissue replaces the old link; revocation is final.
 
 ![Workspace user management](docs/screenshots/user-management.png)
 

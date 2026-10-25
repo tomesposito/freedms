@@ -1,3 +1,7 @@
+import { mountOnboarding } from './onboarding';
+import { inviteLandingHtml, type InviteView } from './invites';
+import { publicApi } from './retail';
+import type { Invite } from '@freedms/shared';
 import { icon, sidebarToggleIcon, sidebarNavigation, readSidebarPreference, writeSidebarPreference } from './sidebar';
 import { partsRoute } from './parts';
 import { serviceRoute, serviceHistoryHtml } from './service';
@@ -92,9 +96,16 @@ function shell(content: string): void {
 }
 function badge(value: string): string { return `<span class="badge ${value.replace(' ', '-')}">${e(value)}</span>`; }
 async function login(): Promise<void> {
-  app.innerHTML = `<main class="login"><a class="brand" href="#/">free<span>DMS</span></a><h1>Your inventory, in one place.</h1><p>${localMode ? 'Create an empty local workspace to start stocking vehicles. This development session lasts one hour; data is cleared when the API restarts.' : 'Sign in to your dealership workspace.'}</p><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${localMode ? '<form id="login"><label>Dealership name<input name="dealership" required maxlength="120" autocomplete="organization"></label><label>Your name<input name="name" required maxlength="120" autocomplete="name"></label><button class="primary">Create local workspace</button></form><h2>Join an existing local workspace</h2><form id="join"><label>Workspace ID<input name="tenantId" required maxlength="128"></label><label>Email<input name="email" type="email" required maxlength="254"></label><label>Authenticator or recovery code (if MFA enabled)<input name="code" autocomplete="one-time-code" maxlength="32"></label><button>Sign in locally</button></form>' : '<button id="cognito" class="primary">Sign in</button>'}</main>`;
+  app.innerHTML = `<main class="login"><a class="brand" href="#/">free<span>DMS</span></a><h1>Your inventory, in one place.</h1><p>${localMode ? 'Create an empty local workspace to start stocking vehicles. This development session lasts one hour; data is cleared when the API restarts.' : 'Sign in to your dealership workspace.'}</p><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${localMode ? '<section id="onboarding"></section><h2>Join an existing local workspace</h2><form id="join"><label>Workspace ID<input name="tenantId" required maxlength="128"></label><label>Email<input name="email" type="email" required maxlength="254"></label><label>Authenticator or recovery code (if MFA enabled)<input name="code" autocomplete="one-time-code" maxlength="32"></label><button>Sign in locally</button></form>' : '<button id="cognito" class="primary">Sign in</button>'}</main>`;
+  if (localMode) mountOnboarding(document.querySelector<HTMLElement>('#onboarding')!, async data => {
+    const result = await api<{token: string; invites: Invite[]}>('/local/session', 'POST', data);
+    setToken(result.token);
+    document.querySelector('#join')?.remove();
+    document.querySelector('.login > h2')?.remove();
+    return result;
+  }, () => { void start(); });
   document.querySelector('#cognito')?.addEventListener('click', () => { void signIn().catch(flash); });
-  document.querySelectorAll<HTMLFormElement>('#login, #join').forEach(form => form.addEventListener('submit', async event => {
+  document.querySelectorAll<HTMLFormElement>('#join').forEach(form => form.addEventListener('submit', async event => {
     event.preventDefault(); const form = event.currentTarget as HTMLFormElement; const button = form.querySelector('button')!; button.disabled = true;
     try { const data = Object.fromEntries(new FormData(form)); const result = await api<{token: string}>('/local/session', 'POST', data); setToken(result.token); await start(); }
     catch (error) { flash(error); button.disabled = false; }
@@ -173,6 +184,17 @@ async function form(id: string | undefined, sequence: number): Promise<void> {
   });
 }
 async function route(): Promise<void> {
+  if (location.hash.startsWith('#/invite/')) {
+    const sequence = ++routeSequence;
+    app.innerHTML = '<main class="login"><p>Loading invite…</p></main>';
+    try {
+      const view = await publicApi<InviteView>(`/invite/${encodeURIComponent(location.hash.slice(9))}`);
+      if (sequence === routeSequence) app.innerHTML = inviteLandingHtml(view);
+    } catch {
+      if (sequence === routeSequence) app.innerHTML = '<main class="login"><h1>Unable to check this invite</h1><p>Please reload to try again.</p></main>';
+    }
+    return;
+  }
   if (location.hash.startsWith('#/share/')) { ++routeSequence; await buyerRoute(location.hash.slice(8)); return; }
   if (!session) return; const sequence = ++routeSequence;
   try {
@@ -203,7 +225,7 @@ async function route(): Promise<void> {
   } catch (error) { if (sequence === routeSequence) { if (!getToken()) await login(); flash(error); } }
 }
 async function start(): Promise<void> {
-  if (location.hash.startsWith('#/share/')) { await route(); return; }
+  if (location.hash.startsWith('#/share/') || location.hash.startsWith('#/invite/')) { await route(); return; }
   try { await finishSignIn(); if (!getToken()) { await login(); return; } session = await api('/session'); await route(); }
   catch (error) { await login(); flash(error); }
 }

@@ -1,3 +1,4 @@
+import { manageInvites, publicInvite } from './invites.js';
 import { parts } from './parts.js';
 import { service } from './service.js';
 import { compliance } from './compliance.js';
@@ -63,6 +64,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         }
         return result;
       }
+      if (request.path.startsWith('/invite/')) return await publicInvite(request, repositories, now());
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
@@ -71,6 +73,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (/^\/service(\/|$)/.test(path)) return await service(request, principal, repository, now());
         if (/^\/compliance(\/|$)/.test(path) || /^\/deals\/[^/]+\/(compliance|compliance-checks)(\/|$)/.test(path)) return await compliance(request, principal, repository, now());
         if (/^\/documents(\/|$)/.test(path)) return await documentControls(request, principal, repository, now(), documents);
+        if (/^\/admin\/invites(\/|$)/.test(path)) return await manageInvites(request, principal, repository, now());
         if (/^\/admin\/users(\/|$)/.test(path)) return await manageUsers(request, principal, repository, now());
         if (/^\/(account|admin)\/mfa(\/|$)/.test(path)) return await mfa(request, principal, repository, now());
         if (/^\/webhooks(\/|$)/.test(path)) return await webhooks(request, principal, repository, now(), webhookSender);

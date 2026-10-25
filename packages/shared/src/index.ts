@@ -19,7 +19,7 @@ export * from './jacket.js';
 import type { Deal, WorkspaceSettings } from './desking.js';
 export * from './desking.js';
 export type Role = 'admin' | 'staff';
-export interface Tenant { id: string; name: string; createdAt: string }
+export interface Tenant { id: string; name: string; createdAt: string; address?: string; phone?: string; dealerType?: 'independent' | 'franchise' | 'other' }
 export interface User { id: string; name: string; email?: string }
 export interface Membership { tenantId: string; userId: string; role: Role; active: boolean; version?: number }
 export interface Principal { tenantId: string; userId: string; role: Role }
@@ -38,7 +38,7 @@ export interface Vehicle extends VehicleInput {
 export interface VehicleView extends Vehicle { agingDays: number; reconTotal: number }
 export interface OutboxEvent {
   id: string; tenantId: string; actorId: string; aggregateId: string; aggregateVersion: number;
-  type: 'part.created' | 'part.updated' | 'parts-sale.created' | 'service-appointment.created' | 'service-appointment.updated' | 'repair-order.created' | 'repair-order.updated' | 'compliance.created' | 'compliance.updated' | 'compliance-check.created' | 'saved-report.created' | 'saved-report.updated' | 'deal-share.created' | 'deal-share.updated' | 'share-response.created' | 'user.added' | 'user.role_changed' | 'user.deactivated' | 'user.reactivated' | 'accounting-lock.created' | 'accounting-lock.updated' | 'bank-reconciliation.created' | 'bank-reconciliation.updated' | 'credit-application.created' | 'credit-application.updated' | 'payoff-quote.created' | 'gl-account.created' | 'gl-account.updated' | 'journal-entry.created' | 'fi-product.created' | 'fi-product.updated' | 'retention.created' | 'retention.updated' | 'document.disposed' | 'mfa.setup' | 'mfa.enabled' | 'mfa.disabled' | 'mfa.reset' | 'mfa.recovery_regenerated' | 'mfa.verified' | 'webhook.created' | 'webhook.updated' | 'feed.configured' | 'feed.generated' | 'vehicle.imported' | 'document.created' | 'document.updated' | 'deal.created' | 'deal.updated' | 'settings.created' | 'settings.updated' | 'vehicle.created' | 'vehicle.updated' | 'vehicle.deleted' | 'tenant.created' | 'customer.created' | 'customer.updated' | 'lead.created' | 'lead.updated' | 'intake.created' | 'intake.updated';
+  type: 'invite.created' | 'invite.updated' | 'part.created' | 'part.updated' | 'parts-sale.created' | 'service-appointment.created' | 'service-appointment.updated' | 'repair-order.created' | 'repair-order.updated' | 'compliance.created' | 'compliance.updated' | 'compliance-check.created' | 'saved-report.created' | 'saved-report.updated' | 'deal-share.created' | 'deal-share.updated' | 'share-response.created' | 'user.added' | 'user.role_changed' | 'user.deactivated' | 'user.reactivated' | 'accounting-lock.created' | 'accounting-lock.updated' | 'bank-reconciliation.created' | 'bank-reconciliation.updated' | 'credit-application.created' | 'credit-application.updated' | 'payoff-quote.created' | 'gl-account.created' | 'gl-account.updated' | 'journal-entry.created' | 'fi-product.created' | 'fi-product.updated' | 'retention.created' | 'retention.updated' | 'document.disposed' | 'mfa.setup' | 'mfa.enabled' | 'mfa.disabled' | 'mfa.reset' | 'mfa.recovery_regenerated' | 'mfa.verified' | 'webhook.created' | 'webhook.updated' | 'feed.configured' | 'feed.generated' | 'vehicle.imported' | 'document.created' | 'document.updated' | 'deal.created' | 'deal.updated' | 'settings.created' | 'settings.updated' | 'vehicle.created' | 'vehicle.updated' | 'vehicle.deleted' | 'tenant.created' | 'customer.created' | 'customer.updated' | 'lead.created' | 'lead.updated' | 'intake.created' | 'intake.updated';
   causeId?: string;
   disposal?: {documentId: string; name: string; type: DealDocument['type']; dealId: string; disposedBy: string; disposedAt: string};
   occurredAt: string; deliveryStatus: 'pending';
@@ -65,7 +65,8 @@ export interface Lead extends CrmRecord {
 export interface IntakeCredential extends CrmRecord { kind: 'intake'; hash: string }
 export * from './fi.js';
 import type { FiProduct } from './fi.js';
-export type CrmEntity = Part | PartsSale | ServiceAppointment | RepairOrder | ComplianceRecord | ComplianceCheck | SavedReport | DealShare | ShareResponse | AccountingLock | BankReconciliation | CreditApplication | PayoffQuote | GlAccount | JournalEntry | FiProduct | Customer | Lead | IntakeCredential | Deal | WorkspaceSettings | DealDocument | DocumentRetention;
+export interface Invite extends CrmRecord { kind: 'invite'; name: string; email: string; role: Role; token: string; tokenHash: string; expiresAt: string; status: 'pending' | 'revoked' }
+export type CrmEntity = Invite | Part | PartsSale | ServiceAppointment | RepairOrder | ComplianceRecord | ComplianceCheck | SavedReport | DealShare | ShareResponse | AccountingLock | BankReconciliation | CreditApplication | PayoffQuote | GlAccount | JournalEntry | FiProduct | Customer | Lead | IntakeCredential | Deal | WorkspaceSettings | DealDocument | DocumentRetention;
 export interface LeadView extends Lead { customer: Customer; overdue: boolean }
 export function isOverdue(task: FollowUp, now: Date): boolean { return !task.done && !task.dismissed && Date.parse(task.dueAt) < now.getTime(); }
 export * from './reports.js';

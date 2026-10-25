@@ -1,4 +1,5 @@
 /** Loopback development only. Never imported by Lambda. */
+import { validateOnboarding, newInvite, inviteWrite } from './invites.js';
 import { randomUUID } from 'node:crypto';
 import type { RepositoryFactory } from './repository.js';
 import { LocalTokens, authorize } from './auth.js';
@@ -19,10 +20,14 @@ export async function localSession(body: string, repositories: RepositoryFactory
     if ((await repo.mfa(row.user.id))?.enabled) await mfa({path: '/account/mfa/verify', method: 'POST', body: JSON.stringify({code: input.code})}, principal, repo, now);
     return response(200, {data: {token: tokens.issue(row.user.id, tenantId)}});
   }
-  onlyKeys(input, ['dealership', 'name']);
+  const wizard = input.onboarding === true;
+  const details = wizard ? validateOnboarding(input) : undefined;
+  if (!wizard) onlyKeys(input, ['dealership', 'name']);
   const name = text(input.name, 'Your name'), dealership = text(input.dealership, 'Dealership');
   const tenantId = randomUUID(), userId = randomUUID(), createdAt = now.toISOString();
-  await repositories.forTenant(tenantId).provision({id: tenantId, name: dealership, createdAt}, {id: userId, name},
+  await repositories.forTenant(tenantId).provision({id: tenantId, name: dealership, createdAt, ...details?.profile}, {id: userId, name, ...(details ? {email: details.email} : {})},
     {tenantId, userId, role: 'admin', active: true}, {id: randomUUID(), tenantId, actorId: userId, aggregateId: tenantId, aggregateVersion: 1, type: 'tenant.created', occurredAt: createdAt, deliveryStatus: 'pending'});
-  return response(201, {data: {token: tokens.issue(userId, tenantId)}});
+  const invites = (details?.invites ?? []).map(row => newInvite(tenantId, row, now));
+  if (invites.length) await repositories.forTenant(tenantId).crmWrite(invites.map(row => inviteWrite(row, userId)));
+  return response(201, {data: {token: tokens.issue(userId, tenantId), invites}});
 }
