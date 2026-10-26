@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 180" role="img" aria-labelledby="title desc">
+<title id="title">freeDMS logo</title><desc id="desc">Orange vehicle price-tag icon with freeDMS wordmark</desc>
+<path d="M77 8 Q71 8 66 13 L12 67 Q8 71 8 78 V157 Q8 169 20 169 H134 Q146 169 146 157 V78 Q146 72 142 68 L88 13 Q83 8 77 8 Z" fill="#FF6A00"/>
+<circle cx="77" cy="40" r="9" fill="#FFFFFF"/>
+<g fill="none" stroke="#FFFFFF" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round">
+<path d="M39 111 L49 91 Q52 85 59 85 H95 Q102 85 105 91 L115 111"/>
+<path d="M31 112 Q32 106 40 106 H114 Q122 106 123 112 L126 132 Q126 138 120 138 H34 Q28 138 28 132 Z"/>
+<path d="M29 106 L19 102 M125 106 L135 102"/>
+<path d="M42 124 H55 M99 124 H112"/>
+</g>
+<g fill="#FFFFFF"><rect x="35" y="135" width="13" height="12" rx="3"/><rect x="106" y="135" width="13" height="12" rx="3"/></g>
+<text x="169" y="126" font-family="Inter,Arial,Helvetica,sans-serif" font-size="105" font-weight="800" letter-spacing="-5" fill="#0B1F2C">free</text>
+<text x="382" y="126" font-family="Inter,Arial,Helvetica,sans-serif" font-size="105" font-weight="800" letter-spacing="-5" fill="#FF6A00">DMS</text>
+</svg>

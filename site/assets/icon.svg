@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 180" role="img" aria-label="freeDMS orange vehicle tag icon">
+<path d="M80 8 Q74 8 69 13 L15 67 Q11 71 11 78 V157 Q11 169 23 169 H137 Q149 169 149 157 V78 Q149 72 145 68 L91 13 Q86 8 80 8 Z" fill="#FF6A00"/>
+<circle cx="80" cy="40" r="9" fill="white"/>
+<g fill="none" stroke="white" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"><path d="M42 111 L52 91 Q55 85 62 85 H98 Q105 85 108 91 L118 111"/><path d="M34 112 Q35 106 43 106 H117 Q125 106 126 112 L129 132 Q129 138 123 138 H37 Q31 138 31 132 Z"/><path d="M32 106 L22 102 M128 106 L138 102"/><path d="M45 124 H58 M102 124 H115"/></g><g fill="white"><rect x="38" y="135" width="13" height="12" rx="3"/><rect x="109" y="135" width="13" height="12" rx="3"/></g>
+</svg>

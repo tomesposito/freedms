@@ -5,20 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>freeDMS — The dealer management system that's actually free</title>
 <meta name="description" content="freeDMS is a free, open-source dealer management system for independent dealers: inventory, leads, desking, F&I, accounting, service, and parts. No per-rooftop fees. No tolls on your own data.">
+<link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+<meta name="theme-color" content="#0B1F2C">
 <style>
 :root{
-  --ink:#182631; --ink-2:#22333f; --accent:#216b56; --accent-dark:#185343;
-  --line:#dce3e7; --muted:#5b6d78; --paper:#ffffff; --wash:#f4f7f8;
+  --ink:#0B1F2C; --ink-2:#334155; --accent:#FF6A00; --accent-dark:#D95A00;
+  --line:#dce3e7; --muted:#5b6d78; --paper:#ffffff; --wash:#f8fafc;
   --radius:12px; --maxw:1160px;
 }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;color:var(--ink);background:var(--paper);line-height:1.55;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+body{margin:0;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;color:var(--ink);background:var(--paper);line-height:1.55;-webkit-font-smoothing:antialiased;overflow-x:hidden}
 @supports (overflow:clip){body{overflow-x:clip}}
 img{max-width:100%;height:auto;display:block}
 .grid>*,.price-grid>*,.steps>*,.stats-in>*,.split>*{min-width:0}
 .shot{min-width:0}
-a{color:var(--accent)}
+a{color:var(--accent-dark)}
 .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
 h1,h2,h3{line-height:1.15;letter-spacing:-.01em;margin:0}
 h2{font-size:2rem;margin-bottom:12px}
@@ -27,14 +29,17 @@ section{padding:84px 0}
 section.wash{background:var(--wash)}
 section.ink{background:var(--ink);color:#e7eef2}
 section.ink .lede{color:#a9bac5}
-.eyebrow{font-size:.78rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin:0 0 14px}
-section.ink .eyebrow{color:#7fc8ae}
+.eyebrow{font-size:.78rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-dark);margin:0 0 14px}
+section.ink .eyebrow{color:#FFA25E}
 
 /* nav */
 .nav{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.96);border-bottom:1px solid var(--line);backdrop-filter:blur(6px)}
 .nav-in{display:flex;align-items:center;gap:28px;height:64px}
 .brand{font-size:1.3rem;font-weight:800;color:var(--ink);text-decoration:none;letter-spacing:-.02em}
 .brand span{color:var(--accent)}
+.brand img{height:34px;width:auto}
+footer .brand img{height:30px}
+.foot-tag{margin:12px 0 0;font-size:.8rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#FFA25E}
 .nav-links{display:flex;gap:24px;margin-left:auto;align-items:center}
 .nav-links a{color:var(--ink);text-decoration:none;font-weight:550;font-size:.95rem}
 .nav-links a:hover{color:var(--accent)}
@@ -91,7 +96,7 @@ section.ink .shot{border-color:#2c414f}
 ul.ticks{list-style:none;padding:0;margin:22px 0 0}
 ul.ticks li{padding:7px 0 7px 30px;position:relative}
 ul.ticks li::before{content:"";position:absolute;left:2px;top:14px;width:9px;height:9px;border-radius:50%;background:var(--accent)}
-section.ink ul.ticks li::before{background:#7fc8ae}
+section.ink ul.ticks li::before{background:#FF8A3D}
 ul.ticks b{font-weight:650}
 
 /* pricing */
@@ -156,7 +161,7 @@ footer a:hover{color:#fff}
 
 <header class="nav">
   <div class="wrap nav-in">
-    <a class="brand" href="#top">free<span>DMS</span></a>
+    <a class="brand" href="#top"><img src="assets/logo.svg" alt="freeDMS"></a>
     <button class="nav-toggle" id="navToggle" aria-label="Menu" aria-expanded="false">&#9776;</button>
     <nav class="nav-links" id="navLinks" aria-label="Main">
       <a href="#features">Features</a>
@@ -382,11 +387,12 @@ footer a:hover{color:#fff}
 <!-- FINAL CTA -->
 <section class="ink" style="text-align:center">
   <div class="wrap">
+    <p class="eyebrow">Inventory. Deals. Growth. Yours.</p>
     <h2 style="font-size:2.2rem">Your next DMS costs $0.</h2>
     <p class="lede" style="margin:14px auto 0">Join the dealers who stopped paying rent on their own business.</p>
     <div class="ctas">
       <a class="btn light" href="#signup">Pilot access</a>
-      <a class="btn ghost" style="color:#fff;border-color:#47616f" href="https://github.com/tomesposito/freedms">GitHub</a>
+      <a class="btn ghost" style="color:#fff;border-color:#46657A" href="https://github.com/tomesposito/freedms">GitHub</a>
     </div>
   </div>
 </section>
@@ -397,7 +403,8 @@ footer a:hover{color:#fff}
   <div class="wrap">
     <div class="foot-in">
       <div>
-        <a class="brand" href="#top">free<span>DMS</span></a>
+        <a class="brand" href="#top"><img src="assets/logo-reversed.svg" alt="freeDMS"></a>
+        <p class="foot-tag">Inventory. Deals. Growth. Yours.</p>
         <p style="margin:10px 0 0;max-width:22rem">The free, open-source dealer management system for independent dealers.</p>
       </div>
       <nav class="foot-links" aria-label="Footer">
