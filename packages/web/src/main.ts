@@ -59,7 +59,7 @@ function shell(content: string): void {
   const active = ['', 'new', 'import', 'vehicles'].includes(section) ? '' : section;
   const slim = readSidebarPreference();
   app.innerHTML = `<aside class="sidebar${slim ? ' is-slim' : ''}">
-    <div class="sidebar-heading"><a class="brand" href="#/" aria-label="freeDMS" title="freeDMS"><span class="brand-mark" aria-hidden="true">f</span><span class="brand-name">free<span>DMS</span></span></a><button type="button" class="menu-toggle" aria-expanded="false" aria-controls="nav-panel">Menu</button></div>
+    <div class="sidebar-heading"><a class="brand" href="#/" aria-label="freeDMS" title="freeDMS"><img class="brand-mark" src="/icon.svg" alt="freeDMS"><img class="brand-name" src="/logo-reversed.svg" alt="freeDMS"></a><button type="button" class="menu-toggle" aria-expanded="false" aria-controls="nav-panel">Menu</button></div>
     <div id="nav-panel" class="nav-panel">
       <div class="workspace">${e(session?.tenant?.name || 'Your dealership')}</div>
       <nav aria-label="Main navigation">
@@ -96,7 +96,7 @@ function shell(content: string): void {
 }
 function badge(value: string): string { return `<span class="badge ${value.replace(' ', '-')}">${e(value)}</span>`; }
 async function login(): Promise<void> {
-  app.innerHTML = `<main class="login"><a class="brand" href="#/">free<span>DMS</span></a><h1>Your inventory, in one place.</h1><p>${localMode ? 'Create an empty local workspace to start stocking vehicles. This development session lasts one hour; data is cleared when the API restarts.' : 'Invite-only pilot. Sign in with the account provided by your pilot operator.'}</p><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${localMode ? '<section id="onboarding"></section><h2>Join an existing local workspace</h2><form id="join"><label>Workspace ID<input name="tenantId" required maxlength="128"></label><label>Email<input name="email" type="email" required maxlength="254"></label><label>Authenticator or recovery code (if MFA enabled)<input name="code" autocomplete="one-time-code" maxlength="32"></label><button>Sign in locally</button></form>' : '<button id="cognito" class="primary">Sign in</button>'}</main>`;
+  app.innerHTML = `<main class="login"><a class="brand" href="#/"><img src="/logo.svg" alt="freeDMS"></a><h1>Your inventory, in one place.</h1><p>${localMode ? 'Create an empty local workspace to start stocking vehicles. This development session lasts one hour; data is cleared when the API restarts.' : 'Invite-only pilot. Sign in with the account provided by your pilot operator.'}</p><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${localMode ? '<section id="onboarding"></section><h2>Join an existing local workspace</h2><form id="join"><label>Workspace ID<input name="tenantId" required maxlength="128"></label><label>Email<input name="email" type="email" required maxlength="254"></label><label>Authenticator or recovery code (if MFA enabled)<input name="code" autocomplete="one-time-code" maxlength="32"></label><button>Sign in locally</button></form>' : '<button id="cognito" class="primary">Sign in</button>'}</main>`;
   if (localMode) mountOnboarding(document.querySelector<HTMLElement>('#onboarding')!, async data => {
     const result = await api<{token: string; invites: Invite[]}>('/local/session', 'POST', data);
     setToken(result.token);
