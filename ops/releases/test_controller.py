@@ -24,7 +24,7 @@ def package(directory):
     code = io.BytesIO()
     with zipfile.ZipFile(code, 'w') as archive:
         archive.writestr('lambda.cjs', 'exports.handler = async () => 1;')
-    files = {'index.html': b'<html>test</html>', 'assets/main-12345678.js': b'console.log(1)', 'marketing/index.html': b'<html>marketing</html>', 'marketing/assets/hero-12345678.png': b'image'}
+    files = {'index.html': b'<html>test</html>', 'assets/main-12345678.js': b'console.log(1)', 'logo.svg': b'<svg/>', 'marketing/index.html': b'<html>marketing</html>', 'marketing/assets/hero-12345678.png': b'image'}
     web = io.BytesIO()
     with tarfile.open(fileobj=web, mode='w:gz') as archive:
         for name, content in files.items():

@@ -94,7 +94,7 @@ def frontend_files(archive, entries):
     expected = {}
     for entry in entries:
         path = entry['path']
-        require(re.fullmatch(r'(marketing/)?index\.html', path) or re.fullmatch(r'(marketing/)?assets/[A-Za-z0-9_-]+\.(js|css|woff2|png|svg)', path), 'Unsafe frontend path')
+        require(re.fullmatch(r'(marketing/)?index\.html', path) or re.fullmatch(r'(marketing/)?assets/[A-Za-z0-9_-]+\.(js|css|woff2|png|svg)', path) or re.fullmatch(r'[A-Za-z0-9_-]+\.svg', path), 'Unsafe frontend path')
         require(path not in expected and 0 < entry['size'] <= 20_000_000, 'Invalid frontend entry')
         expected[path] = entry
     require(sum(entry['size'] for entry in entries) <= 50_000_000, 'Frontend exceeds release limit')

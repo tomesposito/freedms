@@ -15,7 +15,7 @@ test('marketing image references match immutable packaged assets and pilot links
     assert.ok(references.length >= 10);
     for (const path of references) {
       const hash = createHash('sha256').update(readFileSync(`${destination}/${path}`)).digest('hex').slice(0, 20);
-      assert.ok(path.endsWith(`-${hash}.png`));
+      assert.ok(path.endsWith(`-${hash}.${path.slice(path.lastIndexOf('.') + 1)}`));
     }
     assert.equal(readdirSync(`${destination}/assets`).length, readdirSync('site/assets').length);
     assert.ok(html.includes('https://app.freedms.co/'));
