@@ -24,7 +24,7 @@ def package(directory):
     code = io.BytesIO()
     with zipfile.ZipFile(code, 'w') as archive:
         archive.writestr('lambda.cjs', 'exports.handler = async () => 1;')
-    files = {'index.html': b'<html>test</html>', 'assets/main-12345678.js': b'console.log(1)', 'logo.svg': b'<svg/>', 'marketing/index.html': b'<html>marketing</html>', 'marketing/assets/hero-12345678.png': b'image'}
+    files = {'index.html': b'<html>test</html>', 'assets/main-12345678.js': b'console.log(1)', 'assets/logo-12345678.svg': b'<svg/>', 'marketing/index.html': b'<html>marketing</html>', 'marketing/assets/hero-12345678.png': b'image'}
     web = io.BytesIO()
     with tarfile.open(fileobj=web, mode='w:gz') as archive:
         for name, content in files.items():
@@ -53,6 +53,12 @@ class PackageTests(unittest.TestCase):
             aws.asset('assets/a.js', b'original', 'frontend', 'application/javascript')
             with self.assertRaisesRegex(RuntimeError, 'overwrite'):
                 aws.asset('assets/a.js', b'different', 'frontend', 'application/javascript')
+
+    def test_root_assets_are_rejected_before_deployment(self):
+        entries = [{'path': path, 'size': 1, 'sha256': c.digest(b'x')}
+                   for path in ['index.html', 'marketing/index.html', 'logo.svg']]
+        with self.assertRaisesRegex(RuntimeError, 'Unsafe frontend path'):
+            c.frontend_files(b'', entries)
 
     def test_configuration_fingerprint_ignores_release_metadata_but_detects_authority_changes(self):
         original = {'Runtime': 'nodejs24.x', 'Role': 'original', 'Environment': {'Variables': {'TABLE_NAME': 'one'}}}
