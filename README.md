@@ -294,7 +294,7 @@ has MFA on and can reset it.
 
 **Workspace users** — admin-only membership management with role, active status,
 and MFA status. Fresh workspaces contain only their admin. Local sign-in only;
-admins create invites during onboarding and share copyable links themselves. No
+admins create invites during onboarding or any time after from this page, and share copyable links themselves. No
 email is sent. Accepted invites record when and as whom; reissue replaces pending links.
 
 ![Workspace user management](docs/screenshots/user-management.png)
