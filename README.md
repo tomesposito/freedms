@@ -93,9 +93,10 @@ workspace before any customer has owned long enough to qualify.
 
 ![Equity mining](docs/screenshots/equity-mining.png)
 
-**The pencil** — lease worksheet with capitalized costs, payment-based tax,
-drive-off split, and saved pencils. Cash/finance worksheets include live totals
-and a finance payment grid; all deal types support the F&I menu.
+**The pencil** — finance worksheet with live totals, a payment grid, and saved
+finance/cash alternatives that retain their own deal types and terms. Lease
+worksheets include capitalized costs, payment-based tax, and a drive-off split;
+all deal types support the F&I menu.
 
 ![Deal worksheet](docs/screenshots/deal-worksheet.png)
 

@@ -14,7 +14,7 @@ export async function packetInputs(repo: TenantRepository, deal: Deal) {
   const [vehicle, customer] = await Promise.all([repo.get(deal.vehicleId), repo.crmGet('customer', deal.customerId)]);
   const pencil = deal.pencils.find(p => p.id === deal.workingPencilId);
   if (!vehicle || !customer || !pencil) throw missing();
-  return {deal: {...deal, vehicle, customer}, pencil, numbers: pencilMath(pencil, deal.trade, deal, vehicle, deal.type), fiProducts: pencil.fiSelections.filter(s => s.status === 'accepted').map(({name, category, retailPrice, termNotes}) => ({name, category, retailPrice, termNotes}))};
+  return {deal: {...deal, vehicle, customer}, pencil, numbers: pencilMath(pencil, deal.trade, deal, vehicle, pencil.type ?? deal.type), fiProducts: pencil.fiSelections.filter(s => s.status === 'accepted').map(({name, category, retailPrice, termNotes}) => ({name, category, retailPrice, termNotes}))};
 }
 export function packetHash(packet: Awaited<ReturnType<typeof packetInputs>>) {
   const {deal: d, pencil, numbers, fiProducts} = packet, c = d.customer, v = d.vehicle;

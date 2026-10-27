@@ -42,7 +42,7 @@ export async function salesReport(repo: TenantRepository, range: ReturnType<type
     if ((range.from && date < range.from) || (range.to && date > range.to)) continue;
     const vehicle = vehicleMap.get(deal.vehicleId), customer = customerMap.get(deal.customerId), pencil = deal.pencils.find(p => p.id === deal.workingPencilId);
     if (!vehicle || !customer || !pencil) throw missing();
-    const numbers = pencilMath(pencil, deal.trade, deal, vehicle, deal.type);
+    const numbers = pencilMath(pencil, deal.trade, deal, vehicle, pencil.type ?? deal.type);
     rows.push({soldDate: date, dealId: deal.id, buyer: customer.name, vehicle: `${description(vehicle)} (${vehicle.stockNumber})`, price: pencil.price, frontGross: numbers.frontGross, fiGross: numbers.fiGross, fiRetail: numbers.fiRetailTotal,
       cost: vehicle.cost, recon: vehicle.reconCosts.reduce((sum, r) => sum + r.amount, 0), tax: numbers.salesTax, fees: deal.docFee});
   }

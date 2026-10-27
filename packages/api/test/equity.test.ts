@@ -18,7 +18,7 @@ async function setup() {
   const lead = await makeLead();
   const vehicle = (await call('A', 'POST', '/vehicles', {stockNumber: 'S1', vin: '1HGCM82633A004352', year: 2016, make: 'Honda', model: 'Civic', trim: '', status: 'available', listPrice: 1200000, cost: 500000, reconCosts: [], dateStocked: '2020-01-01', location: '', notes: ''})).data;
   const deal = async (id: string, overrides: Partial<Deal> = {}) => {
-    const record: Deal = {id, tenantId: 'A', version: 1, createdAt: now.toISOString(), updatedAt: '2023-01-31T12:00:00.000Z', kind: 'deal', vehicleId: vehicle.id, customerId: lead.customerId, leadId: lead.id, type: 'finance', trade: null, pencils: [{id: 'p', name: 'Working', price: 1200000, down: 0, term: 60, aprBps: 0, lease: null, fiSelections: []}], workingPencilId: 'p', status: 'sold', history: [{status: 'sold', actorId: 'userA', timestamp: '2023-01-31T12:00:00.000Z'}], ...defaultSettings, ...overrides};
+    const record: Deal = {id, tenantId: 'A', version: 1, createdAt: now.toISOString(), updatedAt: '2023-01-31T12:00:00.000Z', kind: 'deal', vehicleId: vehicle.id, customerId: lead.customerId, leadId: lead.id, type: 'finance', trade: null, pencils: [{type: 'finance' as const, id: 'p', name: 'Working', price: 1200000, down: 0, term: 60, aprBps: 0, lease: null, fiSelections: []}], workingPencilId: 'p', status: 'sold', history: [{status: 'sold', actorId: 'userA', timestamp: '2023-01-31T12:00:00.000Z'}], ...defaultSettings, ...overrides};
     await save(record); return record;
   };
   return {call, repositories, save, lead, makeLead, deal};
@@ -51,7 +51,7 @@ test('finance interest amortizes in cents; ended terms clear rounding, lease ret
   // One month does not meet any flag rule, even though a loan exists.
   assert.equal((await call()).data.some((r: EquityMiningEntry) => r.dealId === 'interest'), false);
   await deal('ended', {pencils: [{...base.pencils[0], term: 36, aprBps: 600}]});
-  await deal('lease', {type: 'lease', pencils: [{...base.pencils[0], term: 36, lease: {...defaultLeaseTerms(1200000), residualAmount: 600000, residualPercentBps: 5000}}]});
+  await deal('lease', {type: 'lease', pencils: [{...base.pencils[0], type: 'lease', term: 36, lease: {...defaultLeaseTerms(1200000), residualAmount: 600000, residualPercentBps: 5000}}]});
   const rows: EquityMiningEntry[] = (await call()).data;
   assert.equal(rows.find(r => r.dealId === 'ended')!.estimatedPayoffCents, 0);
   const lease = rows.find(r => r.dealId === 'lease')!; assert.equal(lease.estimatedPayoffCents, 600000); assert.match(lease.payoffBasis, /purchase option/); assert.match(lease.reasons[1], /Lease term of 36/);

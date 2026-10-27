@@ -49,7 +49,7 @@ async function buyerView(repo: TenantRepository, deal: Deal, share: DealShare, s
   const [vehicle, customer, tenant] = await Promise.all([repo.get(deal.vehicleId), repo.crmGet('customer', deal.customerId), repo.tenant()]);
   const p = deal.pencils.find(p => p.id === deal.workingPencilId);
   if (!vehicle || !customer || !tenant || !p) throw unavailable();
-  const m = pencilMath(p, deal.trade, deal, vehicle, deal.type), l = deal.type === 'lease' ? leaseMath(p, deal.trade, deal, vehicle) : null;
+  const m = pencilMath(p, deal.trade, deal, vehicle, p.type ?? deal.type), l = deal.type === 'lease' ? leaseMath(p, deal.trade, deal, vehicle) : null;
   const signatures = await repo.crmList('signature');
   const buyersOrderSignature = signatureStatusFor(signatures, 'buyers-order', deal.id, packetHash(await packetInputs(repo, deal)));
   const docs = (await repo.crmList('document')).filter(d => d.dealId === deal.id && !d.status);

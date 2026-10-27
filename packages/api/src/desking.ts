@@ -19,12 +19,14 @@ function tradeInput(value: unknown): Trade | null {
   const b = object(value); onlyKeys(b, ['year', 'make', 'model', 'vin', 'allowance', 'payoff', 'actualCashValue']);
   return {year: text(b.year, 'Trade year', 20), make: text(b.make, 'Trade make'), model: text(b.model, 'Trade model'), vin: text(b.vin, 'Trade VIN', 100, true), allowance: money(b.allowance, 'Allowance'), payoff: money(b.payoff, 'Payoff'), actualCashValue: money(b.actualCashValue, 'Actual cash value')};
 }
-async function pencilInput(value: unknown, repo: TenantRepository, old: Deal, type: Deal['type']): Promise<Pencil> {
-  const b = object(value); onlyKeys(b, ['id', 'name', 'price', 'down', 'term', 'aprBps', 'fiSelections', 'sourcePencilId', 'lease']);
+async function pencilInput(value: unknown, repo: TenantRepository, old: Deal, effectiveType: Deal['type']): Promise<Pencil> {
+  const b = object(value); onlyKeys(b, ['type', 'id', 'name', 'price', 'down', 'term', 'aprBps', 'fiSelections', 'sourcePencilId', 'lease']);
   // Pencils are full replacements: an omitted menu is empty.
   const selections = b.fiSelections === undefined ? [] : b.fiSelections;
   if (!Array.isArray(selections) || selections.length > 50) throw invalid('Choose at most 50 F&I products.');
   const existing = old.pencils.find(p => p.id === b.id);
+  // Preserve typed snapshots for older clients; new/legacy pencils use the effective deal type.
+  const type = b.type === undefined ? existing?.type ?? effectiveType : choice(b.type, ['cash', 'finance', 'lease'] as const, 'pencil type');
   const sourceId = b.sourcePencilId === undefined ? undefined : requireId(b.sourcePencilId);
   const source = sourceId ? old.pencils.find(p => p.id === sourceId) : existing;
   if (sourceId && (!source || existing)) throw invalid('Copy source must be a saved pencil and the copy must have a new ID.');
@@ -51,12 +53,12 @@ async function pencilInput(value: unknown, repo: TenantRepository, old: Deal, ty
     const residualPercentBps = percent ? Number(l.residualPercentBps) : residualPercentFromAmount(msrp, residualAmount);
     lease = {msrp, residualAmount, residualPercentBps, moneyFactorMicro: integer(l.moneyFactorMicro, 10000, 'money factor'), acquisitionFee: money(l.acquisitionFee, 'Acquisition fee'), securityDeposit: money(l.securityDeposit, 'Security deposit'), milesPerYear: integer(l.milesPerYear, 100000, 'miles per year')};
   }
-  return {lease, fiSelections, id: requireId(b.id), name: text(b.name, 'Pencil name', 80), price: money(b.price, 'Price'), down: money(b.down, 'Down payment'), term: integer(b.term, 120, 'term', 1), aprBps: lease ? moneyFactorToAprBps(lease.moneyFactorMicro) : integer(b.aprBps, 10000, 'APR')};
+  return {type, lease, fiSelections, id: requireId(b.id), name: text(b.name, 'Pencil name', 80), price: money(b.price, 'Price'), down: money(b.down, 'Down payment'), term: integer(b.term, 120, 'term', 1), aprBps: lease ? moneyFactorToAprBps(lease.moneyFactorMicro) : integer(b.aprBps, 10000, 'APR')};
 }
 async function view(repo: TenantRepository, d: Deal): Promise<DealView> {
   const [vehicle, customer] = await Promise.all([repo.get(d.vehicleId), repo.crmGet('customer', d.customerId)]);
   if (!vehicle || !customer) throw missing();
-  return {...d, vehicle, customer};
+  return {...d, pencils: d.pencils.map(p => ({...p, type: p.type ?? d.type})), vehicle, customer};
 }
 export async function desking(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date) {
   const method = request.method.toUpperCase(), path = request.path.replace(/\/$/, ''), query = request.query ?? {};
@@ -93,7 +95,7 @@ export async function desking(request: ApiRequest, principal: Principal, repo: T
     if (leadId) { const lead = await repo.crmGet('lead', leadId); if (!lead || lead.customerId !== customerId || (lead.vehicleId && lead.vehicleId !== vehicleId)) throw invalid('Originating lead must match the buyer and vehicle.'); }
     const settings = await repo.crmGet('settings', 'workspace') ?? defaultSettings;
     const type = choice(b.type, ['cash', 'finance', 'lease'] as const, 'deal type');
-    const pencil: Pencil = {lease: type === 'lease' ? defaultLeaseTerms(vehicle.listPrice) : null, id: randomUUID(), name: 'Initial pencil', fiSelections: [], price: vehicle.listPrice, down: 0, term: 36, aprBps: 0};
+    const pencil: Pencil = {type, lease: type === 'lease' ? defaultLeaseTerms(vehicle.listPrice) : null, id: randomUUID(), name: 'Initial pencil', fiSelections: [], price: vehicle.listPrice, down: 0, term: 36, aprBps: 0};
     const deal: Deal = {...base(), kind: 'deal', vehicleId, customerId, leadId, type, trade: null,
       taxRateBps: settings.taxRateBps, taxTradeDifference: settings.taxTradeDifference, docFee: settings.docFee,
       pencils: [pencil], workingPencilId: pencil.id, status: 'working', history: [{status: 'working', actorId: principal.userId, timestamp: date}]};
@@ -107,19 +109,23 @@ export async function desking(request: ApiRequest, principal: Principal, repo: T
   const status = b.status === undefined ? old.status : choice(b.status, dealStatuses, 'status');
   if (status !== old.status && !(old.status === 'working' ? ['approved', 'dead'] : ['sold', 'dead']).includes(status)) throw invalid('Invalid deal status transition.');
   const type = b.type === undefined ? old.type : choice(b.type, ['cash', 'finance', 'lease'] as const, 'deal type');
-  let pencils = old.pencils.map(p => ({...p, lease: type === 'lease' ? p.lease : null}));
+  let pencils = old.pencils.map(p => ({...p, type: p.type ?? old.type, lease: (p.type ?? old.type) === 'lease' ? p.lease : null}));
   if (b.pencils !== undefined) {
     if (!Array.isArray(b.pencils) || !b.pencils.length || b.pencils.length > 20) throw invalid('Save between 1 and 20 pencils.');
     pencils = await Promise.all(b.pencils.map(p => pencilInput(p, repo, old, type))); if (new Set(pencils.map(p => p.id)).size !== pencils.length) throw invalid('Pencil IDs must be unique.');
   }
   const workingPencilId = b.workingPencilId === undefined ? old.workingPencilId : requireId(b.workingPencilId);
   if (!pencils.some(p => p.id === workingPencilId)) throw invalid('Choose a saved working pencil.');
+  if (b.pencils === undefined && b.type !== undefined) {
+    const vehicle = await repo.get(old.vehicleId); if (!vehicle) throw missing();
+    pencils = pencils.map(p => p.id === workingPencilId ? {...p, type, lease: type === 'lease' ? p.lease ?? defaultLeaseTerms(vehicle.listPrice) : null} : p);
+  }
   const deal: Deal = {...old, version: expected + 1, updatedAt: date, pencils, workingPencilId, status,
-    type,
+    type: pencils.find(p => p.id === workingPencilId)!.type,
     trade: b.trade === undefined ? old.trade : tradeInput(b.trade), docFee: b.docFee === undefined ? old.docFee : money(b.docFee, 'Doc fee'),
     history: status === old.status ? old.history : [...old.history, {status, actorId: principal.userId, timestamp: date}]};
   const result = await view(repo, deal);
-  try { for (const p of pencils) pencilMath(p, deal.trade, deal, result.vehicle, deal.type); }
+  try { for (const p of pencils) pencilMath(p, deal.trade, deal, result.vehicle, p.type); }
   catch (error) { throw invalid(error instanceof Error ? error.message : 'Invalid pencil.'); }
   const writes = [write(deal, expected)]; const vehicles: VehicleWrite[] = [];
   if (status === 'sold') {

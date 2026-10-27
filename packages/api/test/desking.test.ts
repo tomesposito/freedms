@@ -4,7 +4,7 @@ import { monthlyPayment, pencilMath, paymentGrid, defaultSettings, type DealView
 import { MemoryRepositories } from '../src/memory.js';
 import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
-const p: Pencil = {id: 'p', name: 'Test', fiSelections: [], lease: null, price: 1000000, down: 0, term: 36, aprBps: 600};
+const p: Pencil = {type: 'finance', id: 'p', name: 'Test', fiSelections: [], lease: null, price: 1000000, down: 0, term: 36, aprBps: 600};
 const vehicle = {cost: 700000, reconCosts: [{description: 'Repair', amount: 50000}]};
 const trade: Trade = {year: '2010', make: 'Test', model: 'Trade', vin: '', allowance: 200000, payoff: 250000, actualCashValue: 150000};
 test('exact amortization: known cases, zero APR, half-cent edges, small rates and invalid inputs', () => {
@@ -134,7 +134,7 @@ test('stale lead in mixed sold transaction rolls back the vehicle and deal too',
   assert.equal((await repo.get(v.id))?.version, 1); assert.equal((await repo.crmGet('deal', d.id))?.version, 1); assert.deepEqual(repositories.eventsForTest('A'), before);
 });
 
-const leasePencil: Pencil = {...p, price: 3800000, down: 200000, aprBps: 300, term: 36,
+const leasePencil: Pencil = {...p, type: 'lease', price: 3800000, down: 200000, aprBps: 300, term: 36,
   lease: {msrp: 4000000, residualPercentBps: 5500, residualAmount: 2200000, moneyFactorMicro: 1250, acquisitionFee: 65000, securityDeposit: 50000, milesPerYear: 12000}};
 const leaseTax = {...defaultSettings, docFee: 20000, taxRateBps: 625};
 test('lease hand calculation reconciles every step to the cent with payment-based tax', () => {
@@ -203,4 +203,77 @@ test('effective type is resolved before pencil validation and nonlease pencils c
   assert.equal(r.status, 200); d = r.data; assert.equal(d.pencils[0].lease!.residualAmount, 2200000);
   r = await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, type: 'finance'});
   assert.equal(r.status, 200); assert.equal(r.data.pencils[0].lease, null);
+});
+
+test('cash copy and switching restore the finance snapshot and totals on every read', async () => {
+  const {call, create} = await setup(); let d = await create();
+  const finance = {...d.pencils[0], name: 'Finance 60', price: 2899500, down: 300000, aprBps: 750, term: 60};
+  const put = async (body: object) => {
+    const r = await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, ...body});
+    assert.equal(r.status, 200); d = r.data;
+    assert.deepEqual((await call('A', 'GET', `/deals/${d.id}`)).data, d);
+  };
+  await put({pencils: [finance]});
+  const cash = {...finance, id: 'cash-copy', type: 'cash', name: 'Cash', down: 0};
+  await put({type: 'finance', pencils: [finance, {...cash, sourcePencilId: finance.id}], workingPencilId: cash.id});
+  assert.equal(d.type, 'cash'); assert.deepEqual(d.pencils, [finance, cash]);
+  assert.equal(pencilMath(d.pencils[1], d.trade, d, d.vehicle, d.type).cashDue, 2899500);
+  await put({workingPencilId: finance.id});
+  assert.equal(d.type, 'finance'); assert.deepEqual(d.pencils, [finance, cash]);
+  assert.equal(pencilMath(d.pencils[0], d.trade, d, d.vehicle, d.type).payment, 52089);
+  await put({workingPencilId: cash.id});
+  assert.equal(d.type, 'cash'); assert.deepEqual(d.pencils, [finance, cash]);
+});
+
+test('lease and finance coexist and bare type changes affect only the working pencil', async () => {
+  const {call, create} = await setup(); let d = await create();
+  const finance = d.pencils[0];
+  const lease = {...leasePencil, id: 'lease'};
+  const put = async (body: object) => {
+    const r = await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, ...body});
+    assert.equal(r.status, 200); d = r.data;
+    assert.deepEqual((await call('A', 'GET', `/deals/${d.id}`)).data, d);
+  };
+  await put({pencils: [finance, {...lease, lease: {...lease.lease!, residualAmount: null}}]});
+  assert.equal(d.type, 'finance'); assert.deepEqual(d.pencils, [finance, lease]);
+  assert.ok(pencilMath(d.pencils[1], null, d, d.vehicle, d.pencils[1].type).lease);
+  await put({workingPencilId: lease.id}); assert.equal(d.type, 'lease');
+  await put({workingPencilId: finance.id, type: 'cash'});
+  assert.equal(d.type, 'cash'); assert.deepEqual(d.pencils[1], lease);
+  await put({type: 'lease'});
+  assert.equal(d.pencils[0].type, 'lease'); assert.equal(d.pencils[0].lease!.msrp, d.vehicle.listPrice);
+  assert.deepEqual(d.pencils[1], lease);
+  await put({type: 'finance'});
+  assert.deepEqual(d.pencils, [finance, lease]);
+});
+
+test('omitted types use saved snapshots then effective deal type; invalid types are atomic', async () => {
+  const {call, create, repositories} = await setup(); let d = await create();
+  const {type: _type, ...untyped} = d.pencils[0];
+  let r = await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, type: 'cash', pencils: [untyped, {...untyped, id: 'new'}], workingPencilId: 'new'});
+  assert.equal(r.status, 200); d = r.data;
+  assert.deepEqual(d.pencils.map(p => p.type), ['finance', 'cash']); assert.equal(d.type, 'cash');
+  const count = repositories.eventsForTest('A').length;
+  for (const type of ['invalid', null, 1]) {
+    r = await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, pencils: d.pencils.map(p => ({...p, type}))});
+    assert.equal(r.status, 400);
+    assert.deepEqual((await call('A', 'GET', `/deals/${d.id}`)).data, d);
+  }
+  assert.equal(repositories.eventsForTest('A').length, count);
+});
+
+test('legacy untyped pencils read safely and normalize on the next write', async () => {
+  const {call, create, repositories} = await setup(); let d = await create();
+  const repo = repositories.forTenant('A');
+  const record = (await repo.crmGet('deal', d.id))!;
+  // Simulate a snapshot persisted before pencil types existed.
+  for (const p of record.pencils) delete (p as Partial<Pencil>).type;
+  await repo.crmWrite([{record: {...record, version: 2}, expectedVersion: 1, event: {id: 'legacy', tenantId: 'A', actorId: 'userA', aggregateId: d.id, aggregateVersion: 2, type: 'deal.updated', occurredAt: now.toISOString(), deliveryStatus: 'pending'}}]);
+  d = (await call('A', 'GET', `/deals/${d.id}`)).data;
+  assert.equal(d.pencils[0].type, 'finance');
+  const input = {...leasePencil, type: undefined, id: d.workingPencilId, lease: {...leasePencil.lease!, residualAmount: null}};
+  const r = await call('A', 'PUT', `/deals/${d.id}`, {version: d.version, type: 'lease', pencils: [input]});
+  assert.equal(r.status, 200); assert.equal(r.data.type, 'lease');
+  assert.deepEqual(r.data.pencils[0].lease, leasePencil.lease);
+  assert.equal((await repo.crmGet('deal', d.id))!.pencils[0].type, 'lease');
 });

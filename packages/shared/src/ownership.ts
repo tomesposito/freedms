@@ -37,7 +37,7 @@ export function ownershipSignals(deal: Deal, vehicle: Vehicle | undefined, now: 
   let estimatedPayoffCents: number | null = null;
   let payoffBasis = deal.type === 'cash' ? 'Cash sale; no loan balance estimated.' : 'Working pencil unavailable; balance unknown.';
   if (p && deal.type !== 'cash') {
-    const math = pencilMath(p, deal.trade, deal, vehicle ?? {cost: 0, reconCosts: []}, deal.type);
+    const math = pencilMath(p, deal.trade, deal, vehicle ?? {cost: 0, reconCosts: []}, p.type ?? deal.type);
     if (deal.type === 'finance') {
       // B0 = pencilMath.amountFinanced. Each on-time month: B = max(0, B + round(B*APR/120000) - payment).
       // Round interest half up to cents; final contractual payment clears any rounding residual.

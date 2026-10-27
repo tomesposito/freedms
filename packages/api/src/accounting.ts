@@ -38,7 +38,7 @@ export function assertBalanced(lines: JournalLine[]): void {
 }
 export function dealPosting(deal: DealView, accounts: GlAccount[], now: Date): JournalEntry {
   const p = deal.pencils.find(p => p.id === deal.workingPencilId)!;
-  const m = pencilMath(p, deal.trade, deal, deal.vehicle, deal.type);
+  const m = pencilMath(p, deal.trade, deal, deal.vehicle, p.type ?? deal.type);
   const vc = deal.vehicle.cost + deal.vehicle.reconCosts.reduce((s, r) => s + r.amount, 0);
   const lines: JournalLine[] = [];
   const line = (code: string, side: 'debit' | 'credit', amount: number, explanation: string) => {
@@ -123,7 +123,7 @@ export async function accounting(request: ApiRequest, principal: Principal, repo
   }
   const deal = await repo.crmGet('deal', id!); if (!deal) throw missing();
   const vehicle = await repo.get(deal.vehicleId), pencil = deal.pencils.find(p => p.id === deal.workingPencilId); if (!vehicle || !pencil) throw missing();
-  const numbers = pencilMath(pencil, deal.trade, deal, vehicle, deal.type);
+  const numbers = pencilMath(pencil, deal.trade, deal, vehicle, pencil.type ?? deal.type);
   return response(200, {data: {dealId: deal.id, entries: deal.status === 'sold' ? entries.filter(e => e.dealId === deal.id) : [], commission: deal.status === 'sold' ? commissionFor(numbers.frontGross, rateBps) : 0, numbers}});
 }
 

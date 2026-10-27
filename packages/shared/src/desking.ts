@@ -9,7 +9,7 @@ export interface Trade { year: string; make: string; model: string; vin: string;
 export interface FiSelection { productId: string; name: string; category: import('./fi.js').FiCategory; cost: number; retailPrice: number; termNotes: string; status: 'accepted' | 'declined' }
 export interface LeaseTerms { msrp: number; residualPercentBps: number; residualAmount: number; moneyFactorMicro: number; acquisitionFee: number; securityDeposit: number; milesPerYear: number }
 export const defaultLeaseTerms = (msrp: number): LeaseTerms => ({msrp, residualPercentBps: 0, residualAmount: 0, moneyFactorMicro: 0, acquisitionFee: 0, securityDeposit: 0, milesPerYear: 12000});
-export interface Pencil { lease: LeaseTerms | null; fiSelections: FiSelection[]; id: string; name: string; price: number; down: number; term: number; aprBps: number }
+export interface Pencil { type: Deal['type']; lease: LeaseTerms | null; fiSelections: FiSelection[]; id: string; name: string; price: number; down: number; term: number; aprBps: number }
 export interface Deal extends CrmRecord, TaxSettings {
   kind: 'deal'; vehicleId: string; customerId: string; leadId: string | null; type: 'cash' | 'finance' | 'lease';
   trade: Trade | null; pencils: Pencil[]; workingPencilId: string; status: DealStatus;

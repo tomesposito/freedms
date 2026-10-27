@@ -31,7 +31,7 @@ export async function fiReport(repo: TenantRepository, range: ReturnType<typeof 
   for (const {deal, vehicle, pencil} of sold) {
     const selections = (pencil.fiSelections ?? []).filter(s => s.status === 'accepted');
     if (selections.length) data.dealsWithFi++;
-    const math = pencilMath(pencil, deal.trade, deal, vehicle, deal.type);
+    const math = pencilMath(pencil, deal.trade, deal, vehicle, pencil.type ?? deal.type);
     data.totalFiGross += math.fiGross; data.totalFiRetail += math.fiRetailTotal; data.totalFiCost += math.fiCostTotal;
     const seen = new Set<string>();
     for (const s of selections) {
