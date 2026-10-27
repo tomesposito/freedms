@@ -6,7 +6,7 @@ import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens, validateClaims } from '../src/auth.js';
 const now = new Date('2026-10-19T12:00:00Z');
 // Synthetic test fixtures only; never imported by runtime code or seeded into local storage.
-const input: VehicleInput = {stockNumber: 'test-stock', vin: '1HGCM82633A004352', year: 2003, make: 'Test make', model: 'Test model', trim: '', status: 'available', listPrice: 129999, cost: 100000, reconCosts: [{description: 'Test work', amount: 1999}, {description: 'Test labor', amount: 5000}], dateStocked: '2026-10-01', location: '', notes: ''};
+const input: VehicleInput = {mileage: null, stockNumber: 'test-stock', vin: '1HGCM82633A004352', year: 2003, make: 'Test make', model: 'Test model', trim: '', status: 'available', listPrice: 129999, cost: 100000, reconCosts: [{description: 'Test work', amount: 1999}, {description: 'Test labor', amount: 5000}], dateStocked: '2026-10-01', location: '', notes: ''};
 async function setup(role: 'admin' | 'staff' = 'admin', active = true) {
   const repositories = new MemoryRepositories();
   const tokens = new LocalTokens('test-secret-must-be-at-least-32-characters', () => now.getTime());
@@ -109,4 +109,43 @@ test('invalid writes create neither vehicles nor events', async () => {
   for (const bad of [{cost: -1}, {cost: 1.25}, {year: 12}, {status: 'fake'}, {vin: 'I'.repeat(17)}, {dateStocked: '2026-02-30'}, {dateStocked: '2027-01-01'}, {reconCosts: [{description: '', amount: 1}]}, {stockNumber: ' '}, {id: 'client-id'}, {notes: 'x'.repeat(10001)}]) assert.equal((await call('A', 'POST', '/vehicles', {...input, ...bad})).status, 400, JSON.stringify(bad).slice(0, 50));
   assert.equal((await handler({method: 'POST', path: '/vehicles', body: '{bad', claims: claims('A')})).statusCode, 400);
   assert.deepEqual((await call('A')).data, []); assert.equal(repositories.eventsForTest('A').length, 1);
+});
+
+test('mileage persists through create, update, list and detail, including zero and clearing', async () => {
+  const {call} = await setup();
+  const created = await call('A', 'POST', '/vehicles', {...input, mileage: 62400});
+  assert.equal(created.status, 201); assert.equal(created.data.mileage, 62400);
+  const path = `/vehicles/${created.data.id}`;
+  assert.equal((await call('A', 'GET', path)).data.mileage, 62400);
+  assert.equal((await call('A')).data[0].mileage, 62400);
+  for (const [index, mileage] of [62500, 0, 10000000, null].entries()) {
+    const updated = await call('A', 'PUT', path, {...input, mileage, version: index + 1});
+    assert.equal(updated.status, 200); assert.equal(updated.data.mileage, mileage);
+    assert.equal((await call('A', 'GET', path)).data.mileage, mileage);
+    assert.equal((await call('A')).data[0].mileage, mileage);
+  }
+});
+test('omitted mileage defaults to null and old stored vehicles render as null', async () => {
+  const {call, repositories} = await setup();
+  const {mileage, ...olderInput} = input;
+  const created = await call('A', 'POST', '/vehicles', olderInput);
+  assert.equal(created.status, 201); assert.equal(created.data.mileage, null);
+  const {mileage: storedMileage, ...olderRecord} = created.data;
+  const legacy = {...olderRecord, id: 'legacy'};
+  await repositories.forTenant('A').create(legacy, {id: 'legacy-event', tenantId: 'A', actorId: 'user', aggregateId: 'legacy', aggregateVersion: 1, type: 'vehicle.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'});
+  assert.equal((await call('A', 'GET', '/vehicles/legacy')).data.mileage, null);
+  assert.ok((await call('A')).data.every((v: VehicleView) => v.mileage === null));
+});
+test('invalid mileage rejects creates and updates without writes or events', async () => {
+  const {call, repositories} = await setup();
+  const created = await call('A', 'POST', '/vehicles', {...input, mileage: 18500});
+  for (const mileage of [-1, 1.5, 10000001, Number.MAX_SAFE_INTEGER + 1, '18500', '', true, {}, []]) {
+    for (const method of ['POST', 'PUT']) {
+      const result = await call('A', method, method === 'POST' ? '/vehicles' : `/vehicles/${created.data.id}`, {...input, mileage, ...(method === 'PUT' ? {version: 1} : {})});
+      assert.equal(result.status, 400); assert.equal(result.error.code, 'VALIDATION');
+    }
+  }
+  assert.equal((await call('A')).data.length, 1);
+  assert.equal((await call('A', 'GET', `/vehicles/${created.data.id}`)).data.mileage, 18500);
+  assert.equal(repositories.eventsForTest('A').length, 2);
 });

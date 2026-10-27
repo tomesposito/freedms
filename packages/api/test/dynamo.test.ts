@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import type { OutboxEvent, Vehicle } from '@freedms/shared';
 import { DynamoRepositories } from '../src/dynamo.js';
-const vehicle: Vehicle = {id: 'v', tenantId: 'A', version: 1, stockNumber: 'test', vin: '1HGCM82633A004352', year: 2003, make: 'Test', model: 'Test', trim: '', status: 'available', listPrice: 0, cost: 0, reconCosts: [], dateStocked: '2026-10-19', location: '', notes: '', createdAt: '2026-10-19T00:00:00Z', updatedAt: '2026-10-19T00:00:00Z'};
+const vehicle: Vehicle = {id: 'v', tenantId: 'A', version: 1, mileage: null, stockNumber: 'test', vin: '1HGCM82633A004352', year: 2003, make: 'Test', model: 'Test', trim: '', status: 'available', listPrice: 0, cost: 0, reconCosts: [], dateStocked: '2026-10-19', location: '', notes: '', createdAt: '2026-10-19T00:00:00Z', updatedAt: '2026-10-19T00:00:00Z'};
 const event: OutboxEvent = {id: 'e', tenantId: 'A', actorId: 'user', aggregateId: 'v', aggregateVersion: 1, type: 'vehicle.created', occurredAt: vehicle.createdAt, deliveryStatus: 'pending'};
 test('Dynamo uses tenant partition keys for every read and follows all list pages', async () => {
   let pages = 0;

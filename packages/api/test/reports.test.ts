@@ -28,7 +28,7 @@ async function setup() {
     const r = await request(path, query, tenant, method, body); assert.ok(r.statusCode < 300, r.body); return JSON.parse(r.body).data;
   };
   const {customer} = await json('/customers', 'POST', {name: 'Buyer, "Pat"', phone: '', email: '', address: '', notes: '', consent: {status: 'unknown', timestamp: null, source: ''}});
-  const vehicle = async (stockNumber: string, days = 0, cost = 700000, recon = 50000) => json('/vehicles', 'POST', {stockNumber, vin: '1HGCM82633A004352', year: 2019, make: 'Honda, "Special"', model: 'Accord', trim: 'EX', status: 'available', listPrice: 1000000, cost, reconCosts: [{description: 'Repair', amount: recon}], dateStocked: new Date(clock.getTime() - days * 86400000).toISOString().slice(0, 10), location: '', notes: ''});
+  const vehicle = async (stockNumber: string, days = 0, cost = 700000, recon = 50000) => json('/vehicles', 'POST', {mileage: null, stockNumber, vin: '1HGCM82633A004352', year: 2019, make: 'Honda, "Special"', model: 'Accord', trim: 'EX', status: 'available', listPrice: 1000000, cost, reconCosts: [{description: 'Repair', amount: recon}], dateStocked: new Date(clock.getTime() - days * 86400000).toISOString().slice(0, 10), location: '', notes: ''});
   const sell = async (date: string, index: number) => {
     clock = new Date(`${date}T23:59:59Z`);
     const v = await vehicle(`S${index}`);

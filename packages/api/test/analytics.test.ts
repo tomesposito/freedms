@@ -100,7 +100,7 @@ test('real workflow projects funnel with timestamps, matching sold events and sh
   let f = await s.json('/analytics/funnel') as Funnel;
   assert.equal(f.tenantProvisioned.count, 1); assert.equal(f.vehicleStocked.firstAt, null);
   s.tick(1);
-  const v = await s.json('/vehicles', 'POST', {stockNumber: 'test', vin: '1HGCM82633A004352', year: 2003, make: 'Test', model: 'Test', trim: '', status: 'available', listPrice: 1000000, cost: 700000, reconCosts: [], dateStocked: '2026-10-21', location: '', notes: ''});
+  const v = await s.json('/vehicles', 'POST', {mileage: null, stockNumber: 'test', vin: '1HGCM82633A004352', year: 2003, make: 'Test', model: 'Test', trim: '', status: 'available', listPrice: 1000000, cost: 700000, reconCosts: [], dateStocked: '2026-10-21', location: '', notes: ''});
   s.tick(2);
   const lead = (await s.json('/leads', 'POST', {customer: {name: 'Private Buyer', phone: '', email: '', address: '', notes: '', consent: {status: 'unknown', timestamp: null, source: ''}}, source: 'walk-in', vehicleId: v.id})).lead;
   s.tick(3);

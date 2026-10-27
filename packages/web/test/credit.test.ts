@@ -28,7 +28,7 @@ test('Printed packet includes the adverse action article only for declined decis
   const {renderPacket} = await import('../src/jacket.js');
   const {pencilMath} = await import('@freedms/shared');
   const base = {id: 'id', tenantId: 'A', version: 1, createdAt: '', updatedAt: ''};
-  const vehicle: import('@freedms/shared').Vehicle = {...base, stockNumber: 'stock', vin: '1HGCM82633A004352', year: 2003, make: 'Test', model: 'Car', trim: '', status: 'available', cost: 100000, listPrice: 200000, reconCosts: [], dateStocked: '2026-10-23', location: '', notes: '', priceHistory: []};
+  const vehicle: import('@freedms/shared').Vehicle = {...base, mileage: null, stockNumber: 'stock', vin: '1HGCM82633A004352', year: 2003, make: 'Test', model: 'Car', trim: '', status: 'available', cost: 100000, listPrice: 200000, reconCosts: [], dateStocked: '2026-10-23', location: '', notes: '', priceHistory: []};
   const customer: import('@freedms/shared').Customer = {...base, kind: 'customer', name: 'Buyer', phone: '', email: '', address: '', notes: '', consent: {status: 'unknown', timestamp: null, source: ''}};
   const pencil = {type: 'cash' as const, id: 'p', name: 'Pencil', fiSelections: [], lease: null, price: 200000, down: 0, term: 36, aprBps: 0};
   const deal: import('@freedms/shared').DealView = {...base, kind: 'deal', vehicleId: vehicle.id, customerId: customer.id, leadId: null, type: 'cash', trade: null, pencils: [pencil], workingPencilId: pencil.id, status: 'approved', history: [], taxRateBps: 0, taxTradeDifference: false, docFee: 0, vehicle, customer};

@@ -31,6 +31,7 @@ export interface ReconItem { description: string; amount: number }
 /** All money is integer USD cents. Dates stocked are UTC calendar dates. */
 export interface VehicleInput {
   stockNumber: string; vin: string; year: number; make: string; model: string; trim: string;
+  mileage: number | null;
   status: VehicleStatus; listPrice: number; cost: number; reconCosts: ReconItem[];
   dateStocked: string; location: string; notes: string;
 }

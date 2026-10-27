@@ -37,7 +37,7 @@ test('quick entry returns vehicle and lead drafts, meters once, and never silent
   const {call, usage, empty} = await setup();
   const result = await call('/quick-entry/vehicle', {text: 'stock a Silverado'});
   assert.equal(result.status, 200); assert.equal(result.data.draft.cost, 1850000); assert.equal(result.data.draft.listPrice, 2499529);
-  assert.equal(result.data.draft.notes, '88,000 miles'); assert.equal(result.data.draft.tenantId, undefined); assert.equal(result.data.draft.status, undefined);
+  assert.equal(result.data.draft.mileage, 88000); assert.equal(result.data.draft.notes, undefined); assert.equal(result.data.draft.tenantId, undefined); assert.equal(result.data.draft.status, undefined);
   let rows = await usage(); assert.equal(rows.length, 1);
   assert.deepEqual({...rows[0], id: 'id'}, {id: 'id', tenantId: 'A', actorId: 'userA', kind: 'vehicle-text', occurredAt: now.toISOString()});
   const lead = await call('/quick-entry/lead', {text: 'new lead John'});
@@ -90,8 +90,8 @@ test('sanitizers keep only valid extracted facts, preserve notes, and never extr
   for (const raw of [-1, '1,23', '1e4', '2.345', 100000001, {}, null, 'garbage']) assert.equal(dollarCents(raw), undefined);
   assert.deepEqual(sanitizeVehicle({}, now), {}); assert.deepEqual(sanitizeLead({}), {});
   assert.deepEqual(sanitizeVehicle({year: 3000, cost: -1, vin: 'invalid', unknown: 'value'}, now), {});
-  assert.deepEqual(sanitizeVehicle({year: '2019', mileage: '88k', notes: 'Clean'}, now), {year: 2019, notes: 'Clean\n88,000 miles'});
-  assert.deepEqual(sanitizeVehicle({mileage: '88,000 miles'}, now), {notes: '88,000 miles'});
+  assert.deepEqual(sanitizeVehicle({year: '2019', mileage: '88k', notes: 'Clean'}, now), {year: 2019, notes: 'Clean', mileage: 88000});
+  assert.deepEqual(sanitizeVehicle({mileage: '88,000 miles'}, now), {mileage: 88000});
   assert.deepEqual(sanitizeVehicle({mileage: '-1', year: null}, now), {});
   assert.deepEqual(sanitizeLead({customer: {phone: 'garbage1234567', email: 'bad', consent: {status: 'granted'}}, source: 'invalid'}), {});
   const lead = sanitizeLead({...rawLead, source: 'website', sourceDetail: 'site', customer: {...rawLead.customer, email: 'A@EXAMPLE.TEST', notes: 'Call tomorrow'}});
@@ -112,8 +112,8 @@ test('photo-only body allowance is bounded; invalid input never reaches provider
 test('normal create endpoints still validate and save only the reviewed draft', async () => {
   const {call} = await setup(); const draft = (await call('/quick-entry/vehicle', {text: 'stock'})).data.draft;
   assert.equal((await call('/vehicles', draft)).status, 400);
-  const saved = await call('/vehicles', {...draft, stockNumber: 'S1', vin: '1HGCM82633A004352', status: 'available', dateStocked: '2026-10-20', reconCosts: [], location: '', listPrice: 2500000});
-  assert.equal(saved.status, 201); assert.equal(saved.data.listPrice, 2500000); assert.equal((await call('/vehicles')).data.length, 1);
+  const saved = await call('/vehicles', {...draft, notes: '', stockNumber: 'S1', vin: '1HGCM82633A004352', status: 'available', dateStocked: '2026-10-20', reconCosts: [], location: '', listPrice: 2500000});
+  assert.equal(saved.status, 201); assert.equal(saved.data.listPrice, 2500000); assert.equal(saved.data.mileage, 88000); assert.equal((await call('/vehicles')).data.length, 1);
   const lead = (await call('/quick-entry/lead', {text: 'lead'})).data.draft;
   assert.equal((await call('/leads', {...lead, source: 'walk-in', customer: {address: '', email: '', ...lead.customer}})).status, 201);
 });

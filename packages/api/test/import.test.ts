@@ -27,7 +27,9 @@ async function setup(failDecode = false) {
 }
 test('import preview classifies all errors and duplicates without writing; confirm records exactly the valid rows', async () => {
   const {call, repositories} = await setup();
-  await call({csv: csv()}, '/vehicles/import');
+  const initial = await call({csv: csv()}, '/vehicles/import');
+  const imported = await repositories.forTenant('A').get(initial.data.importedVehicleIds[0]);
+  assert.equal(imported!.notes, 'Dealer note'); assert.equal(imported!.mileage, 88000);
   const repo = repositories.forTenant('A'); const before = await repo.events();
   const mixed = csv([
     row({3: '1HGCM82633A004353', 4: 'S2', 8: 'Quoted "note", with\nnewline'}),
@@ -53,7 +55,7 @@ test('import preview classifies all errors and duplicates without writing; confi
   assert.ok(result.skipped.every(r => r.errors?.length || r.duplicate?.reason));
   const v = (await repo.get(result.importedVehicleIds[0]))!;
   assert.equal(v.cost, 1299900); assert.equal(v.listPrice, 1500000); assert.equal(v.status, 'available'); assert.equal(v.dateStocked, '2026-10-22');
-  assert.equal(v.notes, 'Quoted "note", with\nnewline\n88,000 miles'); assert.deepEqual(v.reconCosts, []); assert.equal(v.version, 1);
+  assert.equal(v.notes, 'Quoted "note", with\nnewline'); assert.equal(v.mileage, 88000); assert.deepEqual(v.reconCosts, []); assert.equal(v.version, 1);
   assert.deepEqual((await repo.events()).slice(before.length).map(e => e.type), ['vehicle.created', 'vehicle.imported']);
   assert.deepEqual((await repo.imports()).find(r => r.id === result.importId), {id: result.importId, tenantId: 'A', actorId: 'user', createdAt: now.toISOString(), totalRows: 6, importedCount: 1, duplicateCount: 4, errorCount: 1});
   for (const event of await repo.events()) assert.deepEqual(Object.keys(event).sort(), ['id', 'tenantId', 'actorId', 'aggregateId', 'aggregateVersion', 'type', 'occurredAt', 'deliveryStatus'].sort());

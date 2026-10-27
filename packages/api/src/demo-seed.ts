@@ -29,7 +29,7 @@ export async function seedDemo(repositories: RepositoryFactory, tenantId: string
   ] as const;
   const vehicles: VehicleView[] = [];
   for (const [i, [year, make, model, trim, listPrice, cost, age]] of inventory.entries()) {
-    vehicles.push(await call<VehicleView>('POST', '/vehicles', {stockNumber: `DEMO-${101 + i}`,
+    vehicles.push(await call<VehicleView>('POST', '/vehicles', {mileage: null, stockNumber: `DEMO-${101 + i}`,
       vin: `DEMAA00A0AA0000${i + 10}`, year, make, model, trim, status: i === 4 ? 'in recon' : 'available', listPrice, cost,
       reconCosts: [{description: 'Demo inspection and detailing', amount: 27500}], dateStocked: daysAgo(age), location: 'Demo lot',
       notes: 'FICTIONAL DEMO RECORD. VIN is synthetic; do not submit to lenders, listing feeds, or external services.'}));

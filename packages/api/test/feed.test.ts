@@ -8,7 +8,7 @@ import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
 import { FEED_BODY_LIMIT, feeds } from '../src/feed.js';
 const start = new Date('2026-10-22T12:00:00Z');
-const input: VehicleInput = {stockNumber: 'S2', vin: '1HGCM82633A004352', year: 2003, make: 'Honda', model: 'Accord', trim: 'EX', status: 'available', listPrice: 1234567, cost: 990000, reconCosts: [{description: 'Internal', amount: 100}], notes: 'Private note', dateStocked: '2026-10-01', location: 'Lot, "A"'};
+const input: VehicleInput = {mileage: null, stockNumber: 'S2', vin: '1HGCM82633A004352', year: 2003, make: 'Honda', model: 'Accord', trim: 'EX', status: 'available', listPrice: 1234567, cost: 990000, reconCosts: [{description: 'Internal', amount: 100}], notes: 'Private note', dateStocked: '2026-10-01', location: 'Lot, "A"'};
 async function setup() {
   const repositories = new MemoryRepositories(); let now = start;
   const tokens = new LocalTokens('test-secret-must-be-at-least-32-characters', () => start.getTime());

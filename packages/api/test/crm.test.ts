@@ -95,7 +95,7 @@ test('ADF fixture parsing preserves contact, address, notes, vehicle and provide
 });
 test('intake authenticates independently, resolves only token tenant, links inventory, and rotates credentials', async () => {
   const {call, intake, repositories} = await setup();
-  const v = (await call('A', 'POST', '/vehicles', {stockNumber: 'H123', vin: '1HGCM82633A004352', year: 2003, make: 'Honda', model: 'Accord', trim: '', status: 'available', listPrice: 0, cost: 0, reconCosts: [], dateStocked: '2026-10-19', location: '', notes: ''})).data;
+  const v = (await call('A', 'POST', '/vehicles', {mileage: null, stockNumber: 'H123', vin: '1HGCM82633A004352', year: 2003, make: 'Honda', model: 'Accord', trim: '', status: 'available', listPrice: 0, cost: 0, reconCosts: [], dateStocked: '2026-10-19', location: '', notes: ''})).data;
   const tokenA = (await call('A', 'POST', '/intake-token', {})).data.token; const tokenB = (await call('B', 'POST', '/intake-token', {})).data.token;
   const first = await intake(tokenA, fixture('website')); assert.equal(first.status, 201); assert.equal(first.data.lead.vehicleId, v.id); assert.equal(first.data.lead.tenantId, 'A');
   assert.ok(repositories.eventsForTest('A').slice(-2).every(e => e.actorId === 'intake'));

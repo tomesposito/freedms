@@ -31,8 +31,7 @@ export function sanitizeVehicle(raw: Record<string, unknown>, now: Date): Vehicl
   if (mileage) {
     const miles = Number(mileage[1].replace(/,/g, '')) * (mileage[2] ? 1000 : 1);
     if (Number.isSafeInteger(miles) && miles >= 0 && miles <= 10_000_000) {
-      const note = `${miles.toLocaleString('en-US')} miles`;
-      draft.notes = [draft.notes?.slice(0, 10000 - note.length - 1), note].filter(Boolean).join('\n');
+      draft.mileage = miles;
     }
   }
   return draft;

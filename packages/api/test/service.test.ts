@@ -19,7 +19,7 @@ async function setup() {
     return {status:r.statusCode,...JSON.parse(r.body)};
   };
   const refs = async (tenant: string) => {
-    const vehicle = (await call(tenant,'POST','/vehicles',{stockNumber:'test',vin:'1HGCM82633A004352',year:2003,make:'Honda',model:'Accord',trim:'',status:'available',listPrice:100000,cost:70000,reconCosts:[],dateStocked:'2026-10-19',location:'',notes:''})).data;
+    const vehicle = (await call(tenant,'POST','/vehicles',{mileage: null, stockNumber:'test',vin:'1HGCM82633A004352',year:2003,make:'Honda',model:'Accord',trim:'',status:'available',listPrice:100000,cost:70000,reconCosts:[],dateStocked:'2026-10-19',location:'',notes:''})).data;
     const lead = (await call(tenant,'POST','/leads',{customer:{name:`Buyer ${tenant}`,phone:'',email:'',address:'',notes:'',consent:{status:'unknown',timestamp:null,source:''}},source:'walk-in',vehicleId:vehicle.id})).data.lead;
     return {customerId:lead.customerId,vehicleId:vehicle.id,advisorId:`user${tenant}`};
   };

@@ -33,7 +33,7 @@ async function preview(csv: string, enrich: boolean, repo: TenantRepository, now
       try { const decoded = await decoder.decode(validVin); for (const key of ['year', 'make', 'model', 'trim'] as const) if (!raw[key]) raw[key] = String(decoded[key] ?? ''); }
       catch { /* Decoder failure leaves normal row validation in charge. */ }
     }
-    const value: Record<string, unknown> = {vin: validVin, reconCosts: []};
+    const value: Record<string, unknown> = {vin: validVin, reconCosts: [], mileage: null};
     for (const [key, max, optional] of [['stockNumber', 50, false], ['make', 120, false], ['model', 120, false], ['trim', 120, true], ['location', 200, true], ['notes', 10000, true]] as const) value[key] = check(key, () => text(raw[key] ?? '', key, max, optional));
     value.year = check('year', () => { const year = Number(raw.year); if (!/^\d+$/.test(raw.year) || !Number.isInteger(year) || year < 1886 || year > now.getUTCFullYear() + 2) throw invalid('Invalid model year.'); return year; });
     for (const key of ['cost', 'listPrice']) value[key] = check(key, () => { const cents = dollarCents(raw[key]); if (cents === undefined) throw invalid('Use a dollar amount from 0 to $100,000,000 with at most two decimal places.'); return cents; });
@@ -45,8 +45,7 @@ async function preview(csv: string, enrich: boolean, repo: TenantRepository, now
     if (raw.mileage) check('mileage', () => {
       const miles = Number(raw.mileage.replace(/,/g, ''));
       if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(raw.mileage) || !Number.isSafeInteger(miles) || miles > 10_000_000) throw invalid('Mileage must be an integer from 0 to 10,000,000.');
-      const suffix = `${miles.toLocaleString('en-US')} miles`;
-      value.notes = [String(value.notes ?? '').slice(0, 10000 - suffix.length - 1), suffix].filter(Boolean).join('\n');
+      value.mileage = miles;
     });
     if (result.errors.length) result.status = 'error';
     else {

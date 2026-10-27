@@ -13,7 +13,7 @@ import { LocalTokens } from '../src/auth.js';
 import { dispatchWebhooks, fetchWebhookSender, type WebhookSender } from '../src/webhooks.js';
 const now = new Date('2026-10-22T12:00:00Z');
 const date = now.toISOString();
-const input = {stockNumber: 'S2', vin: '1HGCM82633A004352', year: 2003, make: 'Honda', model: 'Accord', trim: 'EX', status: 'available', listPrice: 1234567, cost: 990000, reconCosts: [], notes: 'Private note', dateStocked: '2026-10-01', location: 'Lot'};
+const input = {mileage: null, stockNumber: 'S2', vin: '1HGCM82633A004352', year: 2003, make: 'Honda', model: 'Accord', trim: 'EX', status: 'available', listPrice: 1234567, cost: 990000, reconCosts: [], notes: 'Private note', dateStocked: '2026-10-01', location: 'Lot'};
 const event = (tenantId: string, id: string, type: OutboxEvent['type'], aggregateId = id, aggregateVersion = 1): OutboxEvent => ({id, tenantId, actorId: 'user', aggregateId, aggregateVersion, type, occurredAt: date, deliveryStatus: 'pending'});
 async function setup(sender: WebhookSender = async () => ({status: 204})) {
   const repositories = new MemoryRepositories();
