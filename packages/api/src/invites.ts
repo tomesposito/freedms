@@ -41,6 +41,18 @@ export async function manageInvites(request: ApiRequest, principal: Principal, r
   const path = request.path.replace(/\/$/, ''), method = request.method.toUpperCase();
   onlyKeys(request.query ?? {}, []);
   if (path === '/admin/invites' && method === 'GET') return response(200, {data: await repo.crmList('invite')});
+  if (path === '/admin/invites' && method === 'POST') {
+    const body = parseBody(request.body); onlyKeys(body, ['name', 'email', 'role']);
+    const name = text(body.name, 'Name'), email = emailAddress(body.email);
+    if (body.role !== 'admin' && body.role !== 'staff') throw invalid('Role must be admin or staff.');
+    if ((await repo.workspaceUsers()).some(row => row.user.email?.toLowerCase() === email))
+      throw new ApiError(409, 'CONFLICT', 'This person is already in the workspace. Manage their access in Users.');
+    if ((await repo.crmList('invite')).some(invite => invite.email.toLowerCase() === email && invite.status === 'pending' && invite.expiresAt > now.toISOString()))
+      throw new ApiError(409, 'CONFLICT', 'Reissue or revoke the existing invitation in Users before creating another.');
+    const record = newInvite(principal.tenantId, {name, email, role: body.role}, now);
+    await repo.crmWrite([inviteWrite(record, principal.userId)]);
+    return response(201, {data: record});
+  }
   const match = /^\/admin\/invites\/([^/]+)\/(reissue|revoke)$/.exec(path);
   if (!match) throw missing();
   if (method !== 'POST') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');

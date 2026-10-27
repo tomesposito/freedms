@@ -13,8 +13,8 @@ async function setup() {
   const repositories = new MemoryRepositories(), tokens = new LocalTokens('local-test-secret-at-least-32-characters', () => now.getTime());
   let clock = now;
   const handler = createHandler(repositories, {decode: async () => { throw Error('Offline only'); }}, () => clock);
-  const create = async () => {
-    const result = await localSession(JSON.stringify(payload()), repositories, tokens, now);
+  const create = async (invites = payload().invites) => {
+    const result = await localSession(JSON.stringify({...payload(), invites}), repositories, tokens, now);
     assert.equal(result.statusCode, 201);
     return JSON.parse(result.body).data as {token: string; invites: Invite[]};
   };
@@ -146,4 +146,61 @@ test('Dynamo acceptance conditions invite and membership guard in the same trans
   assert.deepEqual(items.slice(4).map(i => i.Put?.Item?.data.type), ['invite.accepted', 'user.added']);
   await assert.rejects(repo.acceptInvite({...invite, tenantId: 'other'}, user, now));
   invite.status = 'revoked'; await assert.rejects(repo.acceptInvite(invite, user, now));
+});
+
+test('post-signup invitations are tenant-scoped, seven-day, single-use and role-locked', async () => {
+  const s = await setup(), a = await s.create([]), b = await s.create([]);
+  const tenantId = s.tokens.verify(a.token)['custom:tenant_id'], repo = s.repositories.forTenant(tenantId);
+  assert.deepEqual((await s.call('/admin/invites', a.token)).data, []);
+  const input = {name: 'New colleague', email: ' NEW@example.test ', role: 'staff'};
+  const created = await s.call('/admin/invites', a.token, 'POST', input);
+  assert.equal(created.status, 201);
+  const invite: Invite = created.data;
+  assert.equal(invite.name, input.name); assert.equal(invite.email, 'new@example.test');
+  assert.equal(invite.tenantId, tenantId); assert.equal(invite.status, 'pending');
+  assert.equal(invite.expiresAt, new Date(now.getTime() + 7 * 86400000).toISOString());
+  assert.equal(invite.tokenHash, createHash('sha256').update(invite.token).digest('hex'));
+  assert.deepEqual((await s.call('/admin/invites', a.token)).data, [invite]);
+  assert.deepEqual((await s.call('/admin/invites', b.token)).data, []);
+  for (const action of ['reissue', 'revoke']) assert.equal((await s.call(`/admin/invites/${invite.id}/${action}`, b.token, 'POST', {version: 1})).status, 404);
+  // The same address in another workspace must not block creation.
+  assert.equal((await s.call('/admin/invites', b.token, 'POST', input)).status, 201);
+  assert.deepEqual((await s.call(`/invite/${invite.token}`)).data, {valid: true, dealership: 'Test Motors', inviter: 'Owner', name: invite.name, email: invite.email, role: 'staff'});
+  const path = `/invite/${invite.token}/accept`, profile = {name: invite.name, email: invite.email};
+  assert.equal((await s.call(path, '', 'POST', {...profile, role: 'admin'})).status, 400);
+  assert.equal((await repo.workspaceUsers()).length, 1);
+  assert.equal((await s.call(path, '', 'POST', profile)).data.outcome, 'accepted');
+  assert.equal((await s.call(path, '', 'POST', profile)).data.outcome, 'refused');
+  const members = await repo.workspaceUsers(); assert.equal(members.length, 2);
+  const member = members.find(row => row.user.email === invite.email)!;
+  assert.equal(member.membership.role, 'staff'); assert.equal(member.membership.active, true);
+  const staffToken = s.tokens.issue(member.user.id, tenantId);
+  assert.equal((await s.call('/admin/invites', staffToken, 'POST', {...input, email: 'another@example.test'})).status, 403);
+  assert.equal((await s.call('/admin/invites', a.token, 'POST', input)).status, 409);
+  const events = (await repo.events()).filter(event => event.aggregateId === invite.id);
+  assert.deepEqual(events.map(event => event.type), ['invite.created', 'invite.accepted']);
+  assert.equal(events[0].actorId, s.tokens.verify(a.token).sub);
+  assert.ok(!JSON.stringify(events).includes('token')); assert.ok(!JSON.stringify(events).includes(invite.token));
+  assert.ok(!JSON.stringify(events).includes('@'));
+});
+test('post-signup invitation validation and duplicate checks include inactive users and allow revoked or expired invites', async () => {
+  const s = await setup(), a = await s.create([]);
+  const input = {name: 'Colleague', email: 'colleague@example.test', role: 'admin'};
+  const create = (patch: Record<string, unknown> = {}) => s.call('/admin/invites', a.token, 'POST', {...input, ...patch});
+  for (const patch of [{name: ''}, {name: 42}, {name: 'x'.repeat(121)}, {email: 'bad'}, {email: null}, {role: 'owner'}, {role: null}, {tenantId: 'other'}, {token: 'supplied'}])
+    assert.equal((await create(patch)).status, 400);
+  const repo = s.repositories.forTenant(s.tokens.verify(a.token)['custom:tenant_id']);
+  assert.deepEqual(await repo.crmList('invite'), []);
+  assert.equal((await create({email: ' OWNER@example.test '})).status, 409);
+  const user = (await s.call('/admin/users', a.token, 'POST', {...input, email: 'inactive@example.test'})).data;
+  assert.equal((await s.call(`/admin/users/${user.userId}/deactivate`, a.token, 'POST', {version: user.version})).status, 200);
+  const inactive = await create({email: 'INACTIVE@example.test'}); assert.equal(inactive.status, 409);
+  assert.match(inactive.error.message, /already in the workspace.*Users/);
+  const first = await create(); assert.equal(first.status, 201); assert.equal(first.data.role, 'admin');
+  const duplicate = await create({email: ' COLLEAGUE@example.test '}); assert.equal(duplicate.status, 409);
+  assert.match(duplicate.error.message, /Reissue or revoke/);
+  assert.equal((await s.call(`/admin/invites/${first.data.id}/revoke`, a.token, 'POST', {version: 1})).status, 200);
+  const second = await create(); assert.equal(second.status, 201); assert.notEqual(second.data.id, first.data.id);
+  s.advance(new Date(second.data.expiresAt));
+  assert.equal((await create()).status, 201);
 });

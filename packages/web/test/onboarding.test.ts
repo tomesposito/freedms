@@ -50,3 +50,18 @@ test('accepted invite audit shows when and as whom without copy or mutation acti
   assert.match(html, /Accepted 2026-10-25 as &lt;New Name&gt; \(team@example.test\)/);
   assert.doesNotMatch(html, /data-copy|data-invite="used"/);
 });
+
+test('local admins can create invitations from an empty Users page separately from adding users', () => {
+  const html = usersHtml([], true);
+  const forms = [...html.matchAll(/<form[^>]*id="([^"]+)"[^>]*>([\s\S]*?)<\/form>/g)];
+  assert.deepEqual(forms.map(match => match[1]), ['add-user', 'create-invite']);
+  const inviteForm = forms[1][2];
+  for (const name of ['name', 'email', 'role']) assert.ok(inviteForm.includes(`name="${name}"`));
+  assert.match(inviteForm, /<select name="role"><option value="staff">Staff<\/option><option value="admin">Admin/);
+  assert.match(inviteForm, />Create invitation<\/button>/);
+  assert.match(html, /No invites/); assert.match(html, /share copyable invite links themselves; no email is sent/);
+  const hosted = usersHtml([], true, [], undefined, true);
+  assert.doesNotMatch(hosted, /id="create-invite"|id="add-user"/);
+  assert.match(hosted, /Pilot accounts are created by your pilot operator/);
+  for (const hosted of [false, true]) assert.equal(usersHtml([], false, [], undefined, hosted), '<h1>Users</h1><p>Only administrators can manage workspace users.</p>');
+});
