@@ -30,7 +30,7 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: python3 -m unittest discover -s ops/releases -p 'test_*.py' -v
-      - run: node --test ops/releases/test_marketing.mjs
+      - run: node --test ops/releases/test_*.mjs
       - name: Package the tested application and marketing site
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         run: node ops/releases/package.mjs

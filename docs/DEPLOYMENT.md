@@ -195,6 +195,13 @@ marketing page describes the invite-only pilot and links sign-in to the app;
 legacy apex `/signup` links point to the pilot information section and `/login`
 redirects to the app. Unknown apex paths (including `/api/*`) return 404.
 
+Application branding lives in `packages/web/src/assets/` and is referenced through
+`src/brand.ts` or the HTML favicon link. Vite emits versioned SVG files under
+`assets/`; marketing branding uses the same immutable naming convention under
+`marketing/assets/`. Keep static assets out of the web public directory: root-level
+files are rejected by the packager and controller and are outside the deployment
+role's S3 permissions. Changed logos get new URLs so old releases remain recoverable.
+
 The one-time marketing cutover updates only the CloudFront viewer function in the
 pilot stack, using its existing packaged template to preserve the Lambda artifact.
 An operator must stage the marketing files first, inspect the change set, verify
