@@ -1,0 +1,23 @@
+# freeDMS
+
+> freeDMS is a free, open-source dealer management system (DMS) for independent car dealers. It covers inventory, leads and CRM, desking, F&I, accounting, service, parts, compliance, and reporting in one web app. It costs $0 per rooftop per month, with no per-user fees and no charge to export your own data.
+
+## Who it is for
+
+Independent and upstart car dealers who need a complete DMS (including a real general ledger, service, and parts) without franchise-system pricing. Franchise OEM-certified integrations are a later phase.
+
+## How it is free
+
+The software is MIT-licensed open source, developed in public. The business model is (1) anonymized, aggregated data benchmarks on the free tier, with a paid tier that restricts data sharing, and (2) optional pay-as-you-go AI features with dealer-set spending caps. Identifiable dealer or consumer data is never sold.
+
+## Status
+
+The hosted service at app.freedms.co is in an invite-only pilot. The code is public and can be self-hosted under the MIT license.
+
+## Links
+
+- Homepage: https://freedms.co/
+- What dealer management software costs: https://freedms.co/dms-cost.html
+- Free dealer management software for independent dealers: https://freedms.co/free-dealer-management-software.html
+- Source code (GitHub): https://github.com/tomesposito/freedms
+- Pilot sign-in: https://app.freedms.co/

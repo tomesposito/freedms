@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Free Dealer Management Software for Independent Dealers | freeDMS</title>
+<meta name="description" content="freeDMS is free dealer management software for independent dealers: inventory, CRM, desking, F&I, accounting, service, and parts for $0 per rooftop per month. Open source, no per-user fees.">
+<link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+<meta name="theme-color" content="#0B1F2C">
+<link rel="canonical" href="https://freedms.co/free-dealer-management-software.html">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="freeDMS">
+<meta property="og:title" content="Free Dealer Management Software for Independent Dealers | freeDMS">
+<meta property="og:description" content="freeDMS is free dealer management software for independent dealers: inventory, CRM, desking, F&I, accounting, service, and parts for $0 per rooftop per month. Open source, no per-user fees.">
+<meta property="og:url" content="https://freedms.co/free-dealer-management-software.html">
+<meta property="og:image" content="https://freedms.co/assets/hero-inventory.png">
+<meta property="og:image:width" content="1440">
+<meta property="og:image:height" content="900">
+<meta property="og:image:alt" content="freeDMS inventory screen">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Free Dealer Management Software for Independent Dealers | freeDMS">
+<meta name="twitter:description" content="freeDMS is free dealer management software for independent dealers: inventory, CRM, desking, F&I, accounting, service, and parts for $0 per rooftop per month. Open source, no per-user fees.">
+<meta name="twitter:image" content="https://freedms.co/assets/hero-inventory.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Is freeDMS really free for my whole dealership?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Every department &mdash; inventory, CRM, desking, F&amp;I, accounting, service, parts, compliance, reporting &mdash; for unlimited users, at $0 per rooftop per month. There is no trial clock and no seat cap."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What's the catch?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "The business model, stated plainly: free-tier data contributes to anonymized, aggregated benchmarks (never identifiable, and a paid tier restricts sharing), and AI features are pay-as-you-go because they cost real money to run. If neither ever earns a cent from you, you still keep the whole system."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does freeDMS include service and parts?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes &mdash; appointment board, repair orders, technician dispatch, labor grids, photo inspections, parts catalog and bins, purchase and special orders, vendor returns, and counter sales. Service and parts post to the same general ledger as deals."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can I self-host freeDMS?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. freeDMS is MIT-licensed open source, developed in public on GitHub. Read the code, fork it, or run your own copy. The hosted service at freeDMS.co runs the same code; hosted access is invite-only during the pilot."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "I'm a franchise dealer. Is freeDMS for me?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Not yet. freeDMS is built for independent and upstart dealers first. OEM-certified integrations and franchise programs are a later phase, after the independent core is proven with real dealers."
+      }
+    }
+  ]
+}
+</script>
+<style>
+:root{
+  --ink:#0B1F2C; --ink-2:#334155; --accent:#FF6A00; --accent-dark:#D95A00;
+  --line:#dce3e7; --muted:#5b6d78; --paper:#ffffff; --wash:#f8fafc;
+  --radius:12px; --maxw:1160px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;color:var(--ink);background:var(--paper);line-height:1.55;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+@supports (overflow:clip){body{overflow-x:clip}}
+img{max-width:100%;height:auto;display:block}
+.grid>*,.price-grid>*,.steps>*,.stats-in>*,.split>*{min-width:0}
+.shot{min-width:0}
+a{color:var(--accent-dark)}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+h1,h2,h3{line-height:1.15;letter-spacing:-.01em;margin:0}
+h2{font-size:2rem;margin-bottom:12px}
+.lede{color:var(--muted);font-size:1.13rem;max-width:44rem}
+section{padding:84px 0}
+section.wash{background:var(--wash)}
+section.ink{background:var(--ink);color:#e7eef2}
+section.ink .lede{color:#a9bac5}
+.eyebrow{font-size:.78rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-dark);margin:0 0 14px}
+section.ink .eyebrow{color:#FFA25E}
+
+/* nav */
+.nav{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.96);border-bottom:1px solid var(--line);backdrop-filter:blur(6px)}
+.nav-in{display:flex;align-items:center;gap:28px;height:64px}
+.brand{font-size:1.3rem;font-weight:800;color:var(--ink);text-decoration:none;letter-spacing:-.02em}
+.brand span{color:var(--accent)}
+.brand img{height:34px;width:auto}
+footer .brand img{height:30px}
+.foot-tag{margin:12px 0 0;font-size:.8rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#FFA25E}
+.nav-links{display:flex;gap:24px;margin-left:auto;align-items:center}
+.nav-links a{color:var(--ink);text-decoration:none;font-weight:550;font-size:.95rem}
+.nav-links a:hover{color:var(--accent)}
+.nav-toggle{display:none;margin-left:auto;background:none;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:1rem;cursor:pointer}
+.btn{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;font-weight:650;padding:11px 22px;border-radius:9px;border:1px solid var(--accent)}
+.btn:hover{background:var(--accent-dark)}
+.btn.ghost{background:transparent;color:var(--ink);border-color:#bcc9cf}
+.btn.ghost:hover{border-color:var(--ink);color:var(--ink)}
+.btn.light{background:#fff;color:var(--ink);border-color:#fff}
+.btn.small{padding:8px 16px;font-size:.92rem}
+
+/* hero */
+.hero{padding:76px 0 0;text-align:center}
+.hero h1{font-size:clamp(2.4rem,5.4vw,4rem);font-weight:850;max-width:20ch;margin:0 auto}
+.hero h1 em{font-style:normal;color:var(--accent)}
+.hero .lede{margin:20px auto 0}
+.ctas{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:30px}
+.fineprint{color:var(--muted);font-size:.9rem;margin-top:14px}
+.frame{margin:52px auto 0;max-width:1020px;border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 30px 60px -18px rgba(24,38,49,.28);background:#fff;text-align:left}
+.frame-bar{display:flex;gap:7px;align-items:center;padding:10px 14px;background:#eef2f4;border-bottom:1px solid var(--line)}
+.frame-bar i{width:11px;height:11px;border-radius:50%;background:#c3ced4;display:inline-block}
+.frame-bar .url{margin-left:10px;font-size:.8rem;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:6px;padding:2px 10px}
+.stats{border-top:1px solid var(--line);margin-top:0}
+.stats-in{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;padding:30px 0}
+.stat b{display:block;font-size:1.35rem;letter-spacing:-.01em}
+.stat span{color:var(--muted);font-size:.92rem}
+
+/* problem strip */
+.problem{padding:54px 0;border-bottom:1px solid var(--line)}
+.problem p{font-size:1.35rem;line-height:1.45;max-width:56rem;margin:0}
+.problem strong{color:var(--accent)}
+
+/* features */
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:36px}
+.card{border:1px solid var(--line);border-radius:var(--radius);padding:24px;background:#fff}
+.card h3{font-size:1.06rem;margin-bottom:6px}
+.card p{margin:0;color:var(--muted);font-size:.96rem}
+.card .tag{display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);margin-bottom:10px}
+
+/* tour */
+.tour-main{border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 22px 44px -16px rgba(24,38,49,.25);margin-top:34px;background:#fff}
+.tour-main img{width:100%;aspect-ratio:16/10;object-fit:cover;object-position:top}
+.split .shot img{width:100%;aspect-ratio:4/3;object-fit:cover;object-position:top}
+.nav-links a.btn{color:#fff}
+.tour-thumbs{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+.tour-thumbs button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:8px 16px;font-size:.92rem;font-weight:600;cursor:pointer;color:var(--ink)}
+.tour-thumbs button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+.tour-cap{color:var(--muted);margin-top:12px;font-size:.95rem;min-height:1.5em}
+
+/* split sections */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center}
+.split .shot{border-radius:14px;overflow:hidden;border:1px solid var(--line);box-shadow:0 22px 44px -16px rgba(24,38,49,.25)}
+section.ink .shot{border-color:#2c414f}
+ul.ticks{list-style:none;padding:0;margin:22px 0 0}
+ul.ticks li{padding:7px 0 7px 30px;position:relative}
+ul.ticks li::before{content:"";position:absolute;left:2px;top:14px;width:9px;height:9px;border-radius:50%;background:var(--accent)}
+section.ink ul.ticks li::before{background:#FF8A3D}
+ul.ticks b{font-weight:650}
+
+/* pricing */
+.price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:36px}
+.price{border:1px solid var(--line);border-radius:var(--radius);padding:28px;background:#fff;display:flex;flex-direction:column}
+.price.hero-card{border:2px solid var(--accent);position:relative}
+.price .amount{font-size:2.1rem;font-weight:850;letter-spacing:-.02em;margin:8px 0 4px}
+.price .per{color:var(--muted);font-size:.92rem}
+.price ul{list-style:none;padding:0;margin:18px 0 24px;color:var(--muted);font-size:.95rem}
+.price ul li{padding:5px 0 5px 22px;position:relative}
+.price ul li::before{content:"";position:absolute;left:2px;top:13px;width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.price .btn{margin-top:auto;text-align:center}
+.badge{position:absolute;top:-13px;left:24px;background:var(--accent);color:#fff;font-size:.74rem;font-weight:700;letter-spacing:.06em;padding:4px 12px;border-radius:999px;text-transform:uppercase}
+
+/* faq */
+.faq{max-width:46rem}
+.faq details{border-bottom:1px solid var(--line);padding:18px 0}
+.faq summary{font-weight:650;font-size:1.05rem;cursor:pointer}
+.faq p{color:var(--muted);margin:10px 0 0}
+
+/* signup steps */
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:36px}
+.step{border:1px solid var(--line);border-radius:var(--radius);padding:24px;background:#fff}
+.step .n{width:34px;height:34px;border-radius:50%;background:var(--accent);color:#fff;font-weight:750;display:flex;align-items:center;justify-content:center;margin-bottom:14px}
+.step h3{font-size:1.02rem;margin-bottom:6px}
+.step p{margin:0;color:var(--muted);font-size:.95rem}
+
+footer{background:var(--ink);color:#a9bac5;padding:48px 0}
+footer .brand{color:#f5faf8}
+.foot-in{display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start;justify-content:space-between}
+footer a{color:#d9e3e9;text-decoration:none}
+footer a:hover{color:#fff}
+.foot-links{display:flex;gap:22px;flex-wrap:wrap}
+.foot-note{margin-top:26px;font-size:.88rem;color:#7e939f}
+
+@media (max-width:900px){
+  .grid,.price-grid,.steps{grid-template-columns:1fr 1fr}
+  .stats-in{grid-template-columns:1fr 1fr}
+  .split{grid-template-columns:1fr;gap:30px}
+}
+@media (max-width:640px){
+  section{padding:56px 0}
+  .wrap{padding:0 18px}
+  .stats-in{gap:14px;padding:24px 0}
+  .stat b{font-size:1.12rem}
+  .stat span{font-size:.86rem}
+  .frame{margin-top:36px}
+  .frame-bar .url{font-size:.7rem;margin-left:6px}
+  .problem p{font-size:1.15rem}
+  .price .amount{font-size:1.75rem}
+  .card,.price,.step{padding:20px}
+  .tour-thumbs button{padding:7px 13px;font-size:.88rem}
+  .grid,.price-grid,.steps{grid-template-columns:1fr}
+  .nav-links{display:none;position:absolute;top:64px;left:0;right:0;background:#fff;flex-direction:column;align-items:flex-start;padding:16px 24px 22px;border-bottom:1px solid var(--line);gap:16px}
+  .nav-links.open{display:flex}
+  .nav-toggle{display:block}
+  .hero{padding-top:52px}
+}
+
+.page-head{padding:64px 0 4px}
+.article{max-width:47rem}
+.article h2{font-size:1.5rem;margin:2.1em 0 .45em}
+.article p{color:var(--ink-2);margin:.7em 0}
+.article ul{color:var(--ink-2);margin:.7em 0;padding-left:1.3em}
+.article li{margin:.35em 0}
+.answer{border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;background:var(--wash);padding:18px 22px;margin:28px 0}
+.answer p{margin:0;font-size:1.08rem;color:var(--ink)}
+table.cost{width:100%;border-collapse:collapse;margin:20px 0;font-size:.97rem}
+table.cost th,table.cost td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+table.cost th{background:var(--wash)}
+.updated{color:var(--muted);font-size:.9rem;margin-top:36px}
+
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="index.html"><img src="assets/logo.svg" alt="freeDMS"></a>
+    <button class="nav-toggle" id="navToggle" aria-label="Menu" aria-expanded="false">&#9776;</button>
+    <nav class="nav-links" id="navLinks" aria-label="Main">
+      <a href="index.html#features">Features</a>
+      <a href="index.html#tour">Tour</a>
+      <a href="index.html#pricing">Pricing</a>
+      <a href="index.html#faq">FAQ</a>
+      <a href="https://github.com/tomesposito/freedms">GitHub</a>
+      <a class="btn small" href="index.html#signup">Pilot access</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="page-head wrap">
+  <p class="eyebrow">Guide</p>
+  <h1 style="font-size:clamp(2rem,4.4vw,3.1rem);font-weight:850;max-width:24ch">Free dealer management software for independent dealers</h1>
+  <div class="article">
+    <div class="answer"><p>freeDMS is a complete dealer management system &mdash; inventory, leads and CRM, desking, F&amp;I, a real general ledger, service, and parts &mdash; that costs <b>$0 per rooftop per month</b>, for unlimited users. It is open source under the MIT license and built specifically for independent and upstart dealers. It is free because of how the business makes money (anonymized aggregate benchmarks and optional AI), not because departments are missing.</p></div>
+
+    <h2>What is included, free</h2>
+    <ul>
+      <li><b>Inventory</b> &mdash; stocking, VIN decode, recon costs, aging, CSV import with preview, listing-feed exports.</li>
+      <li><b>Leads &amp; CRM</b> &mdash; ADF/XML intake, pipeline, follow-ups, consent tracking, equity mining, unified customer timeline.</li>
+      <li><b>Desking</b> &mdash; cash, finance, and lease pencils with cents-exact math, trades, and a buyer-readable grid.</li>
+      <li><b>F&amp;I</b> &mdash; product menus with accept/decline records, credit applications, deal jackets, signatures with an audit trail.</li>
+      <li><b>Accounting</b> &mdash; a real general ledger: deals, service, and parts post automatically; AP/AR, bank reconciliation, commissions, departmental statements.</li>
+      <li><b>Service</b> &mdash; appointment board, repair orders, technician dispatch with skills, labor grids, photo inspections.</li>
+      <li><b>Parts</b> &mdash; catalog and bins, purchase and special orders, vendor returns, matrix pricing, counter sales.</li>
+      <li><b>Reporting &amp; compliance</b> &mdash; KPIs, inventory turn, F&amp;I and technician metrics, custom reports, Red Flags / OFAC records, privacy-request handling.</li>
+      <li><b>AI quick entry</b> &mdash; describe a car or photograph a window sticker and get a filled draft; nothing saves until you confirm it. AI is pay-as-you-go and off by default; the DMS never requires it.</li>
+    </ul>
+
+    <h2>Free, trial, and freemium are different things</h2>
+    <p>A trial is the full product with a clock on it. Freemium usually means the useful parts are paywalled. freeDMS is neither: the whole system is free, permanently, because the revenue comes from elsewhere &mdash; anonymized, aggregated data benchmarks on the free tier, and metered AI. The honest limits are stated up front: hosted access is invite-only during the pilot, franchise OEM programs are a later phase, and live connections to lender and bureau networks roll out partner by partner.</p>
+
+    <h2>Who it is built for</h2>
+    <p>Independent and upstart dealers who run every department themselves and cannot justify franchise-system rent. If you stock it, sell it, finance it, and fix it under one roof, freeDMS is shaped like your store. How the pricing compares to what dealers pay today is laid out in <a href="dms-cost.html">What dealer management software costs</a>.</p>
+
+    <h2>Getting started</h2>
+    <p>The hosted pilot is invite-only: invited dealers receive access privately, set up their workspace, and explore with fictional demo data. Everyone else can read or run the code today &mdash; it is MIT-licensed and developed in the open on GitHub. <a href="index.html#signup">How pilot access works</a>.</p>
+    <p class="updated">Last updated October 27, 2026.</p>
+  </div>
+</div>
+
+<section class="wash">
+  <div class="wrap faq">
+    <p class="eyebrow">Questions</p>
+    <h2>Straight answers</h2>
+    <details>
+      <summary>Is freeDMS really free for my whole dealership?</summary>
+      <p>Yes. Every department &mdash; inventory, CRM, desking, F&amp;I, accounting, service, parts, compliance, reporting &mdash; for unlimited users, at $0 per rooftop per month. There is no trial clock and no seat cap.</p>
+    </details>
+    <details>
+      <summary>What's the catch?</summary>
+      <p>The business model, stated plainly: free-tier data contributes to anonymized, aggregated benchmarks (never identifiable, and a paid tier restricts sharing), and AI features are pay-as-you-go because they cost real money to run. If neither ever earns a cent from you, you still keep the whole system.</p>
+    </details>
+    <details>
+      <summary>Does freeDMS include service and parts?</summary>
+      <p>Yes &mdash; appointment board, repair orders, technician dispatch, labor grids, photo inspections, parts catalog and bins, purchase and special orders, vendor returns, and counter sales. Service and parts post to the same general ledger as deals.</p>
+    </details>
+    <details>
+      <summary>Can I self-host freeDMS?</summary>
+      <p>Yes. freeDMS is MIT-licensed open source, developed in public on GitHub. Read the code, fork it, or run your own copy. The hosted service at freeDMS.co runs the same code; hosted access is invite-only during the pilot.</p>
+    </details>
+    <details>
+      <summary>I'm a franchise dealer. Is freeDMS for me?</summary>
+      <p>Not yet. freeDMS is built for independent and upstart dealers first. OEM-certified integrations and franchise programs are a later phase, after the independent core is proven with real dealers.</p>
+    </details>
+  </div>
+</section>
+
+<section class="ink" style="text-align:center">
+  <div class="wrap">
+    <p class="eyebrow">Inventory. Deals. Growth. Yours.</p>
+    <h2 style="font-size:2.2rem">Your next DMS costs $0.</h2>
+    <p class="lede" style="margin:14px auto 0">The hosted pilot is invite-only. The code is public today.</p>
+    <div class="ctas">
+      <a class="btn light" href="index.html#signup">Pilot access</a>
+      <a class="btn ghost" style="color:#fff;border-color:#46657A" href="https://github.com/tomesposito/freedms">GitHub</a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-in">
+      <div>
+        <a class="brand" href="index.html"><img src="assets/logo-reversed.svg" alt="freeDMS"></a>
+        <p class="foot-tag">Inventory. Deals. Growth. Yours.</p>
+        <p style="margin:10px 0 0;max-width:22rem">The free, open-source dealer management system for independent dealers.</p>
+      </div>
+      <nav class="foot-links" aria-label="Footer">
+        <a href="index.html#features">Features</a>
+        <a href="index.html#pricing">Pricing</a>
+        <a href="index.html#faq">FAQ</a>
+        <a href="dms-cost.html">What a DMS costs</a>
+        <a href="free-dealer-management-software.html">Free DMS for independents</a>
+        <a href="https://github.com/tomesposito/freedms">GitHub</a>
+        <a href="https://app.freedms.co/">Sign in</a>
+      </nav>
+    </div>
+    <p class="foot-note">&copy; <span id="yr">2026</span> freeDMS &middot; MIT License &middot; Built in the open.</p>
+  </div>
+</footer>
+
+<script>
+document.getElementById('yr').textContent = new Date().getFullYear();
+var t = document.getElementById('navToggle'), links = document.getElementById('navLinks');
+t.addEventListener('click', function(){ var open = links.classList.toggle('open'); t.setAttribute('aria-expanded', open); });
+links.addEventListener('click', function(){ links.classList.remove('open'); t.setAttribute('aria-expanded','false'); });
+</script>
+</body>
+</html>
