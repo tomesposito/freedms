@@ -301,6 +301,50 @@ recommendations combine safe aggregates with a dealer's own authorized context;
 they must not expose another dealer's records. No cross-tenant model training is
 implied by making agents first-class.
 
+### Scalability planning numbers (owner discussion, 2026-10-27)
+
+Per-rooftop demand model, from industry benchmarks and the beachhead profile:
+
+- Stock ~100 vehicles. The used-vehicle turn benchmark is 12 per year; the
+  real-world average is 43–48 days on market, about 8 turns. Plan on 8 turns:
+  ~800 sales a year, about 65 a month.
+- Funnel: blended lead-to-sale close rates average ~5% (independent-dealer lead
+  studies average ~4.5% across sources; internet ~6% at 30 days, phone ~14%,
+  walk-ins ~25%). Feeding 65 sales a month takes ~1,300 leads a month, ~15,000
+  a year, plus the follow-up activity those leads generate.
+- Service is the volume sleeper: a small shop writes 10–20 repair orders a day,
+  3,000–6,000 a year, each with labor lines, parts lines, and GL postings.
+- All-in, one rooftop produces roughly 250k–500k records a year. A ten-year
+  tenant carries ~2.5–5M records. Staff is 5–15 users per rooftop with low
+  concurrency.
+
+Platform scenarios: 1,000 rooftops add ~250–500M records a year and peak around
+150–300 staff requests/second. 10,000 rooftops peak around ~2,000 requests/second,
+inside API Gateway defaults and Lambda with a standard concurrency-limit raise.
+
+Why the architecture fits: storage is partitioned by tenant (DynamoDB partition
+key `TENANT#<id>`, sort-key prefixes per record type, paginated queries, no table
+scans in the API), compute is stateless Lambda, and every read is tenant-scoped
+with reports date-ranged. Growth adds partitions instead of contention.
+
+Known scale switches and watch items:
+
+1. The table is currently provisioned at 5 RCU / 5 WCU (the D-4 free-tier
+   posture). The scale-up is a one-line template change to on-demand
+   (PAY_PER_REQUEST), matching the D-4 intent; flipping it is a deploy-time
+   owner decision.
+2. Cross-tenant benchmarks never query tenant tables; they consume the
+   outbox/event stream into an aggregate store (gated on D-2/D-5/D-6).
+3. Long-history in-tenant reports stay bounded by date-ranged queries; period
+   rollups are the known next step if a long-tenured tenant's reports slow.
+4. Public surfaces (buyer links today, the listing aggregator later) are
+   read-only and cacheable, and stay off tenant records.
+
+These numbers are hypotheses until measured. Issue #49 tracks the load test:
+seed one synthetic ten-year tenant plus 1,000 light tenants and measure hot-path
+p95 latency against budgets (reads under 300ms, reports under 1s) at expected
+peak and at 10×.
+
 ## 7. Phased plan — proposals
 
 | Phase | Proposed delivery | Evidence needed to move outward |
