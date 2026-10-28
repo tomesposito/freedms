@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { leadSources, leadStages, pencilMath, type DealView, type InventoryReport, type LeadReport, type SalesReport } from '@freedms/shared';
+import { leadSources, leadStages, pencilMath, type CrmEntity, type Lead, type DealView, type InventoryReport, type LeadReport, type SalesReport } from '@freedms/shared';
+import { countLeads } from '../src/repository.js';
 import { MemoryRepositories } from '../src/memory.js';
 import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
-import { inventoryCsv, leadCsv, salesCsv, soldDate, toCsv } from '../src/reports.js';
+import { inventoryCsv, leadReport, leadCsv, salesCsv, soldDate, toCsv } from '../src/reports.js';
 
 function parseCsv(csv: string): string[][] {
   const rows: string[][] = []; let row: string[] = [], cell = '', quoted = false;
@@ -170,4 +171,47 @@ test('sales sort ties by deal ID and exclude working, approved and dead deals', 
   assert.equal(sales.totals.dealsSold, 2);
   const inventory = await s.json<InventoryReport>('/reports/inventory');
   assert.equal(inventory.totals.count, 3);
+});
+
+test('lead counter consumes a raw iterable once and preserves legacy counts and ordering', async () => {
+  const s = await setup();
+  const {lead: template} = await s.json<{lead: Lead}>('/leads', 'POST', {customerId: s.customer.id, source: 'phone'});
+  const leads = [template, {...template, stage: 'contacted', source: 'website'},
+    {...template, stage: 'contacted', source: 'phone'},
+    {...template, stage: 'unknown', source: 'toString'}] as Lead[];
+  const expected = {byStage: leadStages.map(stage => ({stage, count: leads.filter(l => l.stage === stage).length})),
+    bySource: leadSources.map(source => ({source, count: leads.filter(l => l.source === source).length})), total: leads.length};
+  let passes = 0, visits = 0;
+  const rows: Iterable<CrmEntity> = {[Symbol.iterator]: function* () {
+    assert.equal(++passes, 1);
+    yield s.customer;
+    for (const lead of leads) { visits++; yield lead; }
+  }};
+  const actual = countLeads(rows);
+  assert.equal(visits, 4); assert.deepEqual(actual, expected);
+  assert.equal(JSON.stringify(actual), JSON.stringify(expected));
+  assert.equal(leadCsv(actual), leadCsv(expected));
+  assert.deepEqual(countLeads(leads.slice(2), countLeads(leads.slice(0, 2))), expected);
+});
+
+test('memory lead summary avoids cloning and full-list reads, stays fresh and tenant isolated', async t => {
+  const s = await setup();
+  const {lead} = await s.json<{lead: Lead}>('/leads', 'POST', {customerId: s.customer.id, source: 'phone'});
+  const repo = s.repositories.forTenant('A');
+  const old = await repo.crmList('lead');
+  const clone = t.mock.method(globalThis, 'structuredClone', () => { throw new Error('summary must not clone rows'); });
+  const guarded = new Proxy(repo, {get(target, property) {
+    if (property === 'crmList') return () => { throw new Error('summary must not list rows'); };
+    return Reflect.get(target, property);
+  }});
+  assert.deepEqual(await leadReport(guarded), countLeads(old));
+  assert.deepEqual(await s.repositories.forTenant('B').leadSummary(), countLeads([]));
+  clone.mock.restore();
+  await s.json(`/leads/${lead.id}`, 'PUT', {version: lead.version, stage: 'contacted'});
+  const updated = await repo.leadSummary();
+  assert.equal(updated.total, 1);
+  assert.equal(updated.byStage.find(row => row.stage === 'new')!.count, 0);
+  assert.equal(updated.byStage.find(row => row.stage === 'contacted')!.count, 1);
+  updated.byStage[0].count = 999;
+  assert.equal((await repo.leadSummary()).byStage[0].count, 0);
 });

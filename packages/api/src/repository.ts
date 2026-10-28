@@ -1,3 +1,4 @@
+import { leadStages, leadSources, type LeadReport } from '@freedms/shared';
 import type { MfaRecord } from '@freedms/shared';
 import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
@@ -32,6 +33,7 @@ export interface TenantRepository {
   appendUsage(usage: QuickEntryUsage): Promise<void>;
   usageForTest(): Promise<QuickEntryUsage[]>;
   users(): Promise<User[]>;
+  leadSummary(): Promise<LeadReport>;
   leadListPage(query: LeadQuery): Promise<LeadPage>;
   crmList<K extends CrmEntity['kind']>(kind: K): Promise<Extract<CrmEntity, {kind: K}>[]>;
   crmGet<K extends CrmEntity['kind']>(kind: K, id: string): Promise<Extract<CrmEntity, {kind: K}> | undefined>;
@@ -176,4 +178,21 @@ export function leadPage(rows: Iterable<CrmEntity>, customers: Map<string, Custo
   }
   const leads = heap.sort(compare).slice(query.offset);
   return {leads, customers: leads.map(lead => customers.get(lead.customerId)!), total};
+}
+
+/** Count raw rows once; an optional accumulator lets query pages be discarded immediately. */
+export function countLeads(rows: Iterable<CrmEntity>, summary: LeadReport = {
+  byStage: leadStages.map(stage => ({stage, count: 0})),
+  bySource: leadSources.map(source => ({source, count: 0})), total: 0
+}): LeadReport {
+  const stages = new Map(summary.byStage.map(row => [row.stage, row]));
+  const sources = new Map(summary.bySource.map(row => [row.source, row]));
+  for (const lead of rows) {
+    if (lead.kind !== 'lead') continue;
+    summary.total++;
+    const stage = stages.get(lead.stage), source = sources.get(lead.source);
+    if (stage) stage.count++;
+    if (source) source.count++;
+  }
+  return summary;
 }

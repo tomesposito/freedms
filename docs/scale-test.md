@@ -189,3 +189,31 @@ tenant's full lead set to filter and total, and 50 concurrent scans queue
 on a single process. That residual is tracked as a separate follow-up;
 Dataset B (49,271 leads) was not re-measured in this check. Other endpoint
 budgets remain separate follow-ups.
+
+## Lead pipeline summary (#53)
+
+`GET /reports/leads` and its CSV export now count current raw lead rows in a
+single pass. Memory iterates the tenant's CRM map without cloning leads or
+building a lead array. Dynamo counts each tenant `LEAD#` query page before
+requesting the next, retaining only the aggregate counts. All canonical
+stages/sources remain present in domain order, including zero counts; unknown
+values contribute only to the total. Counts are recomputed on every request.
+
+Local check on 2026-10-28 (Node v24.22.1), using the unchanged #49 harness:
+
+```sh
+node --import tsx scripts/scale-seed.ts --profile smoke --heavy-leads 12000 --heavy-customers 2400 --light-tenants 0 --state /tmp/issue53-state.json --maxMinutes 20
+node --import tsx scripts/scale-measure.ts --state /tmp/issue53-state.json --out /tmp/issue53-results.json --report /tmp/issue53-report.md
+```
+
+The seed completed with 12,000 leads, 2,400 customers, 60 vehicles, 15 deals,
+40 repair orders, five parts and three appointments, with no light tenants.
+Measurement setup added 50 vehicles, customers and scratch deals. With 100
+requests per endpoint per level, lead-summary p95 was **20.7 ms at peak
+(concurrency 5)** and **124.9 ms at 10x (concurrency 50)**, both below the
+1,000 ms budget, with zero errors. This reproduces Dataset A's lead/customer
+volume only; it is not a full Dataset A or B reproduction or hosted capacity
+measurement. Build completed before measurement; the offline suite finished
+during the harness's initial work. The unchanged harness also reported
+out-of-scope 10x misses for the lead board (606.4 ms) and pencil calculation
+(634.8 ms), against their 300 ms budgets.

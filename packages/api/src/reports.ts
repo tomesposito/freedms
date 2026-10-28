@@ -1,7 +1,7 @@
 import { stockedCost } from './fixed-ops.js';
 import { repairOrderTotals, type FixedOpsReport } from '@freedms/shared';
 import type { Track } from './analytics.js';
-import { agingBuckets, leadSources, leadStages, pencilMath, type Deal, type InventoryReport, type LeadReport, type SalesReport, type Vehicle } from '@freedms/shared';
+import { agingBuckets, pencilMath, type Deal, type InventoryReport, type LeadReport, type SalesReport, type Vehicle } from '@freedms/shared';
 import { ApiError, missing } from './errors.js';
 import { csvResponse, response, type ApiRequest } from './handler.js';
 import type { TenantRepository } from './repository.js';
@@ -51,8 +51,7 @@ export async function salesReport(repo: TenantRepository, range: ReturnType<type
   return {...range, rows, totals: {dealsSold: rows.length, totalFrontGross, totalFiGross: rows.reduce((sum, r) => sum + r.fiGross, 0), averageGross: rows.length ? Math.round(totalFrontGross / rows.length) : 0}};
 }
 export async function leadReport(repo: TenantRepository): Promise<LeadReport> {
-  const leads = await repo.crmList('lead');
-  return {byStage: leadStages.map(stage => ({stage, count: leads.filter(l => l.stage === stage).length})), bySource: leadSources.map(source => ({source, count: leads.filter(l => l.source === source).length})), total: leads.length};
+  return repo.leadSummary();
 }
 export function inventoryCsv(data: InventoryReport): string {
   return toCsv([['stockNumber', 'vehicle', 'status', 'dateStocked', 'agingDays', 'bucket', 'listPrice', 'cost', 'reconTotal', 'totalCost'], ...data.rows.map(r => [r.stockNumber, r.vehicle, r.status, r.dateStocked, String(r.agingDays), r.bucket, ...[r.listPrice, r.cost, r.reconTotal, r.totalCost].map(dollars)])]);

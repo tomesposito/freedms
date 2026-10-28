@@ -214,3 +214,31 @@ test('Dynamo lead pages join and filter across all lead and customer query pages
   assert.deepEqual(calls, {'LEAD#': 2, 'CUSTOMER#': 2});
   assert.equal(page.total, 3); assert.deepEqual(page.leads.map(l => l.id), ['a']); assert.deepEqual(page.customers.map(c => c.id), ['c']);
 });
+
+test('Dynamo lead summary counts each scoped page before requesting the next, including empty pages', async () => {
+  let calls = 0, consumed = 0;
+  const client = {send: async (command: QueryCommand) => {
+    assert.ok(command instanceof QueryCommand);
+    const input = command.input;
+    assert.equal(input.TableName, 'table');
+    assert.equal(input.KeyConditionExpression, 'PK = :pk AND begins_with(SK, :prefix)');
+    assert.equal(input.ExpressionAttributeValues?.[':prefix'], 'LEAD#');
+    assert.equal(input.ConsistentRead, true);
+    if (input.ExpressionAttributeValues?.[':pk'] === 'TENANT#B') return {};
+    assert.equal(input.ExpressionAttributeValues?.[':pk'], 'TENANT#A');
+    const page = calls++;
+    assert.equal(consumed, page === 0 ? 0 : 1);
+    assert.deepEqual(input.ExclusiveStartKey, page === 0 ? undefined : {PK: 'TENANT#A', SK: `LEAD#${page}`});
+    return {Items: page === 1 ? [] : [{data: {kind: 'lead',
+      get stage() { assert.equal(calls, page + 1, 'row must be counted before next query'); consumed++; return page === 0 ? 'new' : 'contacted'; },
+      source: 'phone'}}], ...(page < 2 ? {LastEvaluatedKey: {PK: 'TENANT#A', SK: `LEAD#${page + 1}`}} : {})};
+  }} as unknown as DynamoDBDocumentClient;
+  const repositories = new DynamoRepositories('table', client);
+  const summary = await repositories.forTenant('A').leadSummary();
+  assert.equal(calls, 3); assert.equal(consumed, 2); assert.equal(summary.total, 2);
+  assert.deepEqual(summary.byStage.map(row => row.count), [1, 1, 0, 0, 0, 0, 0]);
+  assert.equal(summary.bySource.find(row => row.source === 'phone')!.count, 2);
+  assert.ok(summary.bySource.filter(row => row.source !== 'phone').every(row => row.count === 0));
+  const empty = await repositories.forTenant('B').leadSummary();
+  assert.equal(empty.total, 0); assert.ok([...empty.byStage, ...empty.bySource].every(row => row.count === 0));
+});

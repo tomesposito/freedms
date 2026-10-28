@@ -7,7 +7,7 @@ import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, type VehicleQuery, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, type VehicleQuery, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   constructor(private table: string, private client = DynamoDBDocumentClient.from(new DynamoDBClient({}))) {}
@@ -116,6 +116,18 @@ export class DynamoRepositories implements RepositoryFactory {
       users: async () => {
         const [users, members] = await Promise.all([listRows<User>('USER#'), listRows<Membership>('MEMBER#')]);
         return users.filter(u => members.some(m => m.userId === u.id && m.active));
+      },
+      leadSummary: async () => {
+        const summary = countLeads([]);
+        let cursor: Record<string, unknown> | undefined;
+        do {
+          const result = await this.client.send(new QueryCommand({TableName: this.table,
+            KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+            ExpressionAttributeValues: {':pk': PK, ':prefix': 'LEAD#'}, ConsistentRead: true, ExclusiveStartKey: cursor}));
+          countLeads((function* () { for (const item of result.Items ?? []) yield item.data as Lead; })(), summary);
+          cursor = result.LastEvaluatedKey;
+        } while (cursor);
+        return summary;
       },
       leadListPage: async query => {
         // Still reads every LEAD#/CUSTOMER# query page; pagination only bounds returned rows.
