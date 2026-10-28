@@ -3,7 +3,7 @@ import { mountOnboarding } from './onboarding';
 import { inviteLandingHtml, invitedEmailMatches, inviteSignInHtml, welcomeHtml, welcomeDismissed, dismissWelcome, type InviteView } from './invites';
 import { publicApi } from './retail';
 import type { Invite } from '@freedms/shared';
-import { icon, sidebarToggleIcon, sidebarNavigation, readSidebarPreference, writeSidebarPreference } from './sidebar';
+import { icon, sidebarUserHtml, sidebarToggleIcon, sidebarNavigation, readSidebarPreference, writeSidebarPreference } from './sidebar';
 import { partsRoute } from './parts';
 import { serviceRoute, serviceHistoryHtml } from './service';
 import type { RepairOrderView } from '@freedms/shared';
@@ -23,13 +23,13 @@ import { reportsRoute } from './reports';
 import { jacketRoute } from './jacket';
 import { dealsRoute } from './desking';
 import { crmRoute } from './crm';
-import { vehicleStatuses, type ApiEnvelope, type DecodedVin, type Principal, type Tenant, type VehicleInput, type VehicleView } from '@freedms/shared';
+import { vehicleStatuses, type ApiEnvelope, type DecodedVin, type Session, type VehicleInput, type VehicleView } from '@freedms/shared';
 import { cents, currency, escapeHtml as e } from './format';
 import { finishSignIn, getToken, localMode, setToken, signIn, signOut } from './auth';
 import './style.css';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const base = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
-let session: {principal: Principal; tenant: Tenant; mfaEnabled: boolean};
+let session: Session;
 let search = ''; let status = ''; let routeSequence = 0;
 async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const response = await fetch(`${base}${path}`, {method, headers: {'content-type': 'application/json', ...(getToken() ? {authorization: `Bearer ${getToken()}`} : {})}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
@@ -66,7 +66,7 @@ function shell(content: string): void {
       <nav aria-label="Main navigation">
         ${sidebarNavigation(session?.principal.role === 'admin')}
       </nav>
-      <div class="sidebar-footer">${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button type="button" id="sidebar-toggle" class="quiet" aria-expanded="${!slim}" aria-label="${slim ? 'Expand sidebar' : 'Collapse sidebar'}" title="${slim ? 'Expand sidebar' : 'Collapse sidebar'}">${sidebarToggleIcon(slim)}</button><button id="signout" class="quiet" title="Sign out" aria-label="Sign out">${icon('<path d="M9 3H3v18h6m6-14 5 5-5 5m-7-5h12"/>')}<span class="nav-text">Sign out</span></button></div>
+      <div class="sidebar-footer">${sidebarUserHtml(session?.user)}${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button type="button" id="sidebar-toggle" class="quiet" aria-expanded="${!slim}" aria-label="${slim ? 'Expand sidebar' : 'Collapse sidebar'}" title="${slim ? 'Expand sidebar' : 'Collapse sidebar'}">${sidebarToggleIcon(slim)}</button><button id="signout" class="quiet" title="Sign out" aria-label="Sign out">${icon('<path d="M9 3H3v18h6m6-14 5 5-5 5m-7-5h12"/>')}<span class="nav-text">Sign out</span></button></div>
     </div>
   </aside><main class="app-main"><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main>`;
   app.querySelectorAll<HTMLAnchorElement>('.sidebar nav a').forEach(anchor => {
@@ -235,7 +235,7 @@ async function route(): Promise<void> {
     if (parts[0] === 'welcome') {
       const {tenantId, userId, role} = session.principal;
       if (welcomeDismissed(localStorage, tenantId, userId)) { location.hash = '#/'; return; }
-      shell(welcomeHtml(role, session.tenant.name, !localMode));
+      shell(welcomeHtml(role, session.tenant?.name || 'Your dealership', !localMode));
       app.querySelectorAll<HTMLButtonElement>('[data-welcome]').forEach(button => button.addEventListener('click', () => { dismissWelcome(localStorage, tenantId, userId); location.hash = `#${button.dataset.welcome}`; }));
     }
     else if (parts[0] === 'deals') {

@@ -204,3 +204,13 @@ test('post-signup invitation validation and duplicate checks include inactive us
   s.advance(new Date(second.data.expiresAt));
   assert.equal((await create()).status, 201);
 });
+
+test('fresh onboarding session preserves the entered owner identity for the sidebar', async () => {
+  const s = await setup();
+  const result = await localSession(JSON.stringify({...payload(), name: 'Olivia Owner', invites: []}), s.repositories, s.tokens, now);
+  const {token} = JSON.parse(result.body).data;
+  const session = await s.call('/session', token);
+  assert.equal(session.status, 200);
+  assert.deepEqual(session.data.user, {id: s.tokens.verify(token).sub, name: 'Olivia Owner', email: 'owner@example.test'});
+  assert.equal(session.data.tenant.name, 'Test Motors');
+});

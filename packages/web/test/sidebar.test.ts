@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { sidebarToggleIcon, sidebarNavigation, readSidebarPreference, writeSidebarPreference } from '../src/sidebar.js';
+import { sidebarUserHtml, sidebarToggleIcon, sidebarNavigation, readSidebarPreference, writeSidebarPreference } from '../src/sidebar.js';
 
 const main = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
@@ -80,4 +80,29 @@ test('Sidebar toggle is icon-only with the current action and direction in both 
     assert.match(markup, /stroke-width="1.8"/);
     assert.match(markup, /aria-hidden="true"/);
   }
+});
+
+test('Sidebar identity renders name, email and an accessible slim avatar', () => {
+  const html = sidebarUserHtml({name: '  Olivia Owner  ', email: 'owner@example.test'});
+  assert.match(html, /<strong>Olivia Owner<\/strong>/);
+  assert.match(html, /class="sidebar-user-email">owner@example.test<\/span>/);
+  assert.match(html, /title="Olivia Owner \(owner@example.test\)" aria-label="Olivia Owner \(owner@example.test\)">O<\/span>/);
+  assert.match(html, /class="sidebar-user-text nav-text"/);
+  assert.match(main, /sidebarUserHtml\(session\?\.user\)/);
+  assert.match(css, /\.sidebar.is-slim \.sidebar-user \{ justify-content: center/);
+});
+test('Sidebar identity escapes user text and tooltip attributes', () => {
+  const html = sidebarUserHtml({name: '<script>"&', email: "a'<>@example.test"});
+  assert.doesNotMatch(html, /<script>|a'<>/);
+  assert.match(html, /&lt;script&gt;&quot;&amp;/);
+  assert.match(html, /a&#39;&lt;&gt;@example.test/);
+  assert.match(html, />&lt;<\/span>/);
+});
+test('Sidebar identity handles absent users, missing emails and trimmed initials', () => {
+  assert.equal(sidebarUserHtml(null), '');
+  assert.equal(sidebarUserHtml(undefined), '');
+  const html = sidebarUserHtml({name: '  olivia Owner ', email: null});
+  assert.match(html, /title="olivia Owner" aria-label="olivia Owner">O<\/span>/);
+  assert.doesNotMatch(html, /sidebar-user-email/);
+  assert.match(sidebarUserHtml({name: '  ', email: null}), />\?<\/span>/);
 });

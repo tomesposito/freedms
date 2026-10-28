@@ -173,6 +173,11 @@ button, .button { transition: background-color .15s, border-color .15s; }
 .sidebar nav a:hover { background: #1D3243; color: #fff; }
 .sidebar nav a[aria-current="page"] { background: var(--accent); color: #fff; font-weight: 650; }
 .sidebar-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 16px; border-top: 1px solid #293E50; flex-shrink: 0; }
+.sidebar-user { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; }
+.sidebar-avatar { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: 50%; background: #334155; color: #e4ebef; font-weight: 700; }
+.sidebar-user-text { min-width: 0; overflow-wrap: anywhere; font-size: .85rem; max-height: 100px; overflow: auto; }
+.sidebar-user-text strong { display: block; }
+.sidebar-user-email { display: block; color: #a9bac5; font-size: .75rem; }
 .sidebar .local-label { background: #334155; color: #CBD5E1; font-size: .7rem; white-space: nowrap; }
 .sidebar button { background: transparent; color: #e4ebef; }
 .sidebar button:hover { background: #293E50; }
@@ -204,6 +209,7 @@ button, .button { transition: background-color .15s, border-color .15s; }
   .sidebar.is-slim nav a { justify-content: center; padding: 10px 0; }
   .sidebar.is-slim .nav-group + .nav-group { border-top: 1px solid #293E50; padding-top: 10px; margin-top: 10px; }
   .sidebar.is-slim .sidebar-footer { flex-direction: column; padding: 12px 6px; }
+  .sidebar.is-slim .sidebar-user { justify-content: center; }
   .sidebar.is-slim .sidebar-footer button { justify-content: center; width: 44px; min-height: 44px; padding: 10px; }
 }
 @media (max-width: 760px) {

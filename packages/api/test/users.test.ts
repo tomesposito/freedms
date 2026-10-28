@@ -8,10 +8,10 @@ import { LocalTokens } from '../src/auth.js';
 import { localSession } from '../src/local-session.js';
 import { totp } from '../src/totp.js';
 const now = new Date('2026-10-23T12:00:00Z');
-async function setup() {
+async function setup(distinctOwners = false) {
   const repositories = new MemoryRepositories();
   const tokens = new LocalTokens('local-test-secret-at-least-32-characters', () => now.getTime());
-  for (const tenantId of ['A', 'B']) await repositories.forTenant(tenantId).provision({id: tenantId, name: tenantId, createdAt: now.toISOString()}, {id: 'admin', name: 'Admin'}, {tenantId, userId: 'admin', role: 'admin', active: true}, {id: 'bootstrap', tenantId, actorId: 'admin', aggregateId: tenantId, aggregateVersion: 1, type: 'tenant.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'});
+  for (const tenantId of ['A', 'B']) await repositories.forTenant(tenantId).provision({id: tenantId, name: tenantId, createdAt: now.toISOString()}, {id: 'admin', name: distinctOwners && tenantId === 'B' ? 'Other Owner' : 'Admin', ...(distinctOwners && tenantId === 'B' ? {email: 'other@example.test'} : {})}, {tenantId, userId: 'admin', role: 'admin', active: true}, {id: 'bootstrap', tenantId, actorId: 'admin', aggregateId: tenantId, aggregateVersion: 1, type: 'tenant.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'});
   const handler = createHandler(repositories, {decode: async () => { throw Error('No network'); }}, () => now, undefined, undefined, undefined, async () => { throw Error('No network'); });
   const call = async (path = '/admin/users', method = 'GET', body: unknown = {}, tenant = 'A', user = 'admin', query?: Record<string, string>) => {
     const result = await handler({path, method, body: JSON.stringify(body), claims: tokens.verify(tokens.issue(user, tenant)), query});
@@ -135,4 +135,24 @@ test('Dynamo membership writes use tenant keys, guard-before-snapshot and an ato
     return client.send(command as never);
   }} as unknown as DynamoDBDocumentClient;
   await assert.rejects(new DynamoRepositories('table', rejecting).forTenant('A').saveMember(user, member, 0, event), /changed/);
+});
+
+test('session exposes only the caller identity, with nullable email and tenant isolation', async () => {
+  const s = await setup(true);
+  const staff = (await s.add()).data;
+  const events = await s.repositories.forTenant('A').events();
+  const owner = await s.call('/session');
+  assert.equal(owner.status, 200);
+  assert.deepEqual(owner.data.user, {id: 'admin', name: 'Admin', email: null});
+  assert.deepEqual((await s.call('/session', 'GET', {}, 'A', staff.userId)).data.user, {id: staff.userId, name: 'New User', email: 'staff@example.test'});
+  assert.deepEqual((await s.call('/session', 'GET', {}, 'B')).data.user, {id: 'admin', name: 'Other Owner', email: 'other@example.test'});
+  assert.equal((await s.call('/session', 'GET', {}, 'B', staff.userId)).status, 403);
+  assert.deepEqual(await s.repositories.forTenant('A').events(), events);
+});
+test('session remains available when the caller user row is missing', async () => {
+  const s = await setup();
+  const handler = createHandler({forTenant: id => ({...s.repositories.forTenant(id), users: async () => [{id: 'someone-else', name: 'Other user'}]})}, {decode: async () => { throw Error('No network'); }});
+  const result = await handler({path: '/session', method: 'GET', claims: s.tokens.verify(s.tokens.issue('admin', 'A'))});
+  assert.equal(result.statusCode, 200);
+  assert.equal(JSON.parse(result.body).data.user, null);
 });

@@ -24,7 +24,7 @@ import type { DocumentStore } from './document-store.js';
 import { desking } from './desking.js';
 import { crm, intake } from './crm.js';
 import { randomUUID } from 'node:crypto';
-import { vehicleStatuses, type AuthClaims, type OutboxEvent, type Vehicle } from '@freedms/shared';
+import { vehicleStatuses, type Session, type AuthClaims, type OutboxEvent, type Vehicle } from '@freedms/shared';
 import { authorize, requireWrite } from './auth.js';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import type { RepositoryFactory } from './repository.js';
@@ -100,7 +100,14 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
             : await command();
         }
         if (/^\/(customers|leads|users|intake-token|equity-mining|ownership-cycle)(\/|$)/.test(path)) return await crm(request, principal, repository, now());
-        if (method === 'GET' && path === '/session') return response(200, {data: {principal, tenant: await repository.tenant(), mfaEnabled: (await repository.mfa(principal.userId))?.enabled ?? false}});
+        if (method === 'GET' && path === '/session') {
+          const user = (await repository.users()).find(user => user.id === principal.userId);
+          const data: Session = {
+            principal, tenant: await repository.tenant(), mfaEnabled: (await repository.mfa(principal.userId))?.enabled ?? false,
+            user: user ? {id: user.id, name: user.name, email: user.email ?? null} : null,
+          };
+          return response(200, {data});
+        }
         if (method === 'GET' && path.startsWith('/vin/')) return response(200, {data: await decoder.decode(vin(decodeURIComponent(path.slice(5))))});
         if (/^\/vehicles\/imports?(\/|$)/.test(path)) return await inventoryImport(request, principal, repository, now(), decoder);
         if (path !== '/vehicles' && !/^\/vehicles\/[^/]+$/.test(path)) throw new ApiError(404, 'NOT_FOUND', 'Endpoint not found.');

@@ -24,6 +24,8 @@ export type Role = 'admin' | 'staff';
 export interface Tenant { id: string; name: string; createdAt: string; address?: string; phone?: string; dealerType?: 'independent' | 'franchise' | 'other' }
 export interface User { id: string; name: string; email?: string }
 export interface Membership { tenantId: string; userId: string; role: Role; active: boolean; version?: number }
+export interface SessionUser { id: string; name: string; email: string | null }
+export interface Session { principal: Principal; tenant: Tenant | undefined; mfaEnabled: boolean; user: SessionUser | null }
 export interface Principal { tenantId: string; userId: string; role: Role }
 export const vehicleStatuses = ['available', 'reserved', 'sold', 'in recon'] as const;
 export type VehicleStatus = typeof vehicleStatuses[number];

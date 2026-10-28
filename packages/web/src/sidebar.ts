@@ -1,5 +1,13 @@
 import { escapeHtml as e } from './format';
 
+export function sidebarUserHtml(user: {name: string; email: string | null} | null | undefined): string {
+  if (!user) return '';
+  const name = user.name.trim();
+  const initial = Array.from(name)[0]?.toUpperCase() || '?';
+  const identity = user.email ? `${name} (${user.email})` : name;
+  return `<div class="sidebar-user"><span class="sidebar-avatar" role="img" title="${e(identity)}" aria-label="${e(identity)}">${e(initial)}</span><div class="sidebar-user-text nav-text"><strong>${e(name)}</strong>${user.email ? `<span class="sidebar-user-email">${e(user.email)}</span>` : ''}</div></div>`;
+}
+
 export const icon = (paths: string): string => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="20" height="20" aria-hidden="true">${paths}</svg>`;
 export function sidebarToggleIcon(slim: boolean): string {
   return icon(`<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18${slim ? 'm4-13 4 4-4 4' : 'm7-13-4 4 4 4'}"/>`);
