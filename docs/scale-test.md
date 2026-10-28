@@ -257,4 +257,28 @@ The process-local body cache evicts oldest insertions when it exceeds 16 entries
 or 32 MiB of UTF-8 body bytes. An individual body over that byte cap is returned
 without being cached. The response shape and full-day selection are unchanged.
 
-Local check: results will be filled in after measurement by the supervisor.
+Local check on 2026-10-28 (Node v24.22.1), using the unchanged #49 harness:
+
+```sh
+node --import tsx scripts/scale-seed.ts --profile smoke --heavy-vehicles 2000 --heavy-in-stock 100 --heavy-leads 12000 --heavy-customers 2400 --heavy-deals 400 --heavy-repair-orders 2500 --heavy-parts 60 --heavy-appointments 12 --light-tenants 0 --state /tmp/issue54-state.json --maxMinutes 30
+node --import tsx scripts/scale-measure.ts --state /tmp/issue54-state.json
+```
+
+Dataset A's heavy tenant only; no light tenants. The board returns all
+2,500 repair orders (3,370,857 bytes) because the seed creates them the
+same day. With 100 requests per endpoint per level, service-board measured
+p95 **296.8 ms at peak (concurrency 5) — PASS** and **2,918.2 ms at 10x
+(concurrency 50) — FAIL** against the 300 ms read budget, with zero errors
+at both levels. Before this fix, the same dataset measured p95 795.2 ms at
+peak and 7,099.8 ms at 10x, and a sequential board read took ~93–148 ms;
+after the fix a sequential read is ~55 ms computed cold and ~6 ms served
+from the epoch cache. The date-bounded read alone (before the cache)
+measured p95 443.0 ms at peak and 4,271.7 ms at 10x.
+
+The residual 10x miss is no longer recomputation: warm reads cost the
+server ~6 ms sequentially, and a threaded client burst at concurrency 50
+measured p95 129.5 ms. What remains is moving and handling ~337 MB of
+board JSON per 100-request batch between the Node measure client and the
+Node server on this 2-core local box. That residual is tracked as a
+separate follow-up; this is a local in-memory measurement, not hosted
+(DynamoDB) capacity evidence, and Dataset B was not re-measured.
