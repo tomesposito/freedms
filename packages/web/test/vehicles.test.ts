@@ -29,3 +29,20 @@ test('fetchAllVehicles checks the next page when the last populated page is full
   const api = async <T>(): Promise<T> => (++calls === 1 ? rows : []) as T;
   assert.deepEqual(await fetchAllVehicles(api), rows); assert.equal(calls, 2);
 });
+
+test('lead board wires paged envelopes, range controls and filter resets', async () => {
+  const {readFileSync} = await import('node:fs');
+  const source = readFileSync(new URL('../src/crm.ts', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
+  assert.match(main, /crmRoute\(parts, \{api, apiEnvelope,/);
+  assert.match(source, /params.set\('limit', '100'\); params.set\('offset', String\(boardOffset\)\)/);
+  assert.match(source, /ui.apiEnvelope<LeadView\[\]>/);
+  assert.ok(source.includes('Showing ${boardOffset + 1}–${boardOffset + leads.length} of ${total} leads'));
+  assert.match(source, /id="prev-leads".*boardOffset === 0.*>Prev/);
+  assert.match(source, /id="next-leads".*boardOffset \+ leads.length >= total.*>Next/);
+  assert.match(source, /boardOffset = Math.max\(0, boardOffset - 100\)/); assert.match(source, /boardOffset \+= 100/);
+  assert.match(source, /bind\(ui, 'lead-filters'.*boardOffset = 0; ui.refresh\(\)/);
+  assert.match(source, /querySelector\('#clear-leads'\).*boardOffset = 0; ui.refresh\(\)/);
+  assert.match(source, /total > 0 && boardOffset >= total/);
+  assert.match(source, /\$\{total \? `<p class="muted count">/);
+});

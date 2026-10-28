@@ -2,9 +2,11 @@ import type { MfaRecord } from '@freedms/shared';
 import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
-import type { CrmEntity } from '@freedms/shared';
+import type { CrmEntity, Lead, Customer } from '@freedms/shared';
 import type { Membership, OutboxEvent, Tenant, User, Vehicle, VehicleStatus } from '@freedms/shared';
 export interface VehicleQuery { status?: VehicleStatus; search?: string }
+export interface LeadQuery { search?: string; stage?: Lead['stage']; assignee?: string | null; limit: number; offset: number }
+export interface LeadPage { leads: Lead[]; customers: Customer[]; total: number }
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
   acceptInvite(invite: import('@freedms/shared').Invite, user: User, now: Date): Promise<'accepted' | 'already-member'>;
@@ -30,6 +32,7 @@ export interface TenantRepository {
   appendUsage(usage: QuickEntryUsage): Promise<void>;
   usageForTest(): Promise<QuickEntryUsage[]>;
   users(): Promise<User[]>;
+  leadListPage(query: LeadQuery): Promise<LeadPage>;
   crmList<K extends CrmEntity['kind']>(kind: K): Promise<Extract<CrmEntity, {kind: K}>[]>;
   crmGet<K extends CrmEntity['kind']>(kind: K, id: string): Promise<Extract<CrmEntity, {kind: K}> | undefined>;
   crmWrite(writes: CrmWrite[], vehicles?: VehicleWrite[]): Promise<void>;
@@ -137,4 +140,40 @@ export function vehiclePage(vehicles: Vehicle[], {limit, offset}: {limit: number
   }
   vehicles.sort(compare);
   return {vehicles: vehicles.slice(offset, end), total};
+}
+
+/** Join raw references and retain only the first offset + limit matches. Callers clone the page. */
+export function leadPage(rows: Iterable<CrmEntity>, customers: Map<string, Customer>, query: LeadQuery): LeadPage {
+  const compare = (a: Lead, b: Lead): number => a.createdAt > b.createdAt ? -1 : a.createdAt < b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  const heap: Lead[] = []; let total = 0;
+  const end = query.offset + query.limit, search = (query.search ?? '').toLowerCase();
+  const siftDown = (start: number): void => {
+    let parent = start;
+    while (parent * 2 + 1 < heap.length) {
+      let child = parent * 2 + 1;
+      if (child + 1 < heap.length && compare(heap[child + 1], heap[child]) > 0) child++;
+      if (compare(heap[parent], heap[child]) >= 0) break;
+      [heap[parent], heap[child]] = [heap[child], heap[parent]]; parent = child;
+    }
+  };
+  for (const lead of rows) {
+    if (lead.kind !== 'lead') continue;
+    const customer = customers.get(lead.customerId);
+    // Orphan leads cannot form a LeadView; exclude them without inventing a customer.
+    if (!customer || (query.stage && lead.stage !== query.stage) ||
+      (query.assignee !== undefined && lead.assigneeId !== query.assignee) ||
+      ![customer.name, customer.email, customer.phone, lead.source, lead.vehicleDescription].join(' ').toLowerCase().includes(search)) continue;
+    total++;
+    if (heap.length < end) {
+      heap.push(lead);
+      let child = heap.length - 1;
+      while (child > 0) {
+        const parent = Math.floor((child - 1) / 2);
+        if (compare(heap[parent], heap[child]) >= 0) break;
+        [heap[parent], heap[child]] = [heap[child], heap[parent]]; child = parent;
+      }
+    } else if (compare(lead, heap[0]) < 0) { heap[0] = lead; siftDown(0); }
+  }
+  const leads = heap.sort(compare).slice(query.offset);
+  return {leads, customers: leads.map(lead => customers.get(lead.customerId)!), total};
 }

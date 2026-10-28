@@ -6,8 +6,8 @@ import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
-import type { CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, type VehicleQuery, type RepositoryFactory, type TenantRepository } from './repository.js';
+import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
+import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, type VehicleQuery, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   constructor(private table: string, private client = DynamoDBDocumentClient.from(new DynamoDBClient({}))) {}
@@ -116,6 +116,11 @@ export class DynamoRepositories implements RepositoryFactory {
       users: async () => {
         const [users, members] = await Promise.all([listRows<User>('USER#'), listRows<Membership>('MEMBER#')]);
         return users.filter(u => members.some(m => m.userId === u.id && m.active));
+      },
+      leadListPage: async query => {
+        // Still reads every LEAD#/CUSTOMER# query page; pagination only bounds returned rows.
+        const [leads, customers] = await Promise.all([listRows<Lead>('LEAD#'), listRows<Customer>('CUSTOMER#')]);
+        return leadPage(leads, new Map(customers.map(c => [c.id, c])), query);
       },
       crmList: kind => listRows(`${kind.toUpperCase()}#`) as never,
       crmGet: (kind, id) => get<CrmEntity>(`${kind.toUpperCase()}#${requireId(id)}`) as never,

@@ -140,3 +140,56 @@ test('staff can work leads but cannot rotate intake tokens; inactive users and a
   }
   assert.deepEqual((await staff.call('A', 'GET', '/users')).data.map((u: {id: string}) => u.id), ['userA']);
 });
+
+test('lead pages bound default reads and preserve full lists and tenant isolation', async () => {
+  const {call, makeLead, repositories} = await setup();
+  for (let i = 0; i < 103; i++) await makeLead();
+  await makeLead('B');
+  const first = await call('A');
+  assert.equal(first.data.length, 100); assert.equal(first.total, 103); assert.equal(first.limit, 100); assert.equal(first.offset, 0);
+  assert.ok(first.data.every((l: Lead) => l.tenantId === 'A'));
+  for (const [offset, length] of [[100, 3], [103, 0]]) {
+    const page = await call('A', 'GET', '/leads', undefined, {offset: String(offset)});
+    assert.equal(page.total, 103); assert.equal(page.data.length, length);
+  }
+  const b = await call('B'); assert.equal(b.total, 1); assert.equal(b.data[0].tenantId, 'B');
+  const repo = repositories.forTenant('A'); assert.equal((await repo.crmList('lead')).length, 103);
+  const page = await repo.leadListPage({limit: 1, offset: 0});
+  page.leads[0].activities[0].summary = 'changed'; page.customers[0].name = 'changed';
+  assert.notEqual((await repo.crmGet('lead', page.leads[0].id))!.activities[0].summary, 'changed');
+  assert.notEqual((await repo.crmGet('customer', page.customers[0].id))!.name, 'changed');
+});
+
+test('lead pages order ties, filter before slicing, preserve joined search and skip orphans', async () => {
+  const {call, makeLead, repositories} = await setup();
+  const template = await makeLead(); const repo = repositories.forTenant('A');
+  const rows: Lead[] = [template];
+  for (let i = 0; i < 31; i++) {
+    const lead: Lead = {...template, id: `lead-${String(i).padStart(3, '0')}`, createdAt: `2026-10-${20 + i % 3}T00:00:00Z`,
+      stage: i % 2 ? 'new' : 'contacted', assigneeId: i % 3 ? null : 'userA', vehicleDescription: i % 4 ? 'Blue sedan' : 'Truck'};
+    rows.push(lead);
+    await repo.crmWrite([{record: lead, expectedVersion: 0, event: {id: `event-${i}`, tenantId: 'A', actorId: 'userA', aggregateId: lead.id, aggregateVersion: 1, type: 'lead.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'}}]);
+  }
+  const orphan = {...template, id: 'orphan', customerId: 'missing'};
+  await repo.crmWrite([{record: orphan, expectedVersion: 0, event: {id: 'orphan-event', tenantId: 'A', actorId: 'userA', aggregateId: orphan.id, aggregateVersion: 1, type: 'lead.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'}}]);
+  rows.sort((a,b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+  for (const filters of [{}, {stage: 'new'}, {assignee: 'unassigned'}, {assignee: 'userA'}, {search: 'BLUE'}, {stage: 'new', assignee: 'unassigned', search: 'BLUE'}, {search: 'jamie'}, {search: 'example.test'}, {search: '5551234567 walk-in'}] as Record<string, string>[]) {
+    const expected = rows.filter(l => (!filters.stage || l.stage === filters.stage) && (!filters.assignee || l.assigneeId === (filters.assignee === 'unassigned' ? null : filters.assignee)) && [customer.name, customer.email, customer.phone, l.source, l.vehicleDescription].join(' ').toLowerCase().includes((filters.search ?? '').toLowerCase()));
+    const ids: string[] = [];
+    for (let offset = 0; offset <= expected.length; offset += 2) {
+      const page = await call('A', 'GET', '/leads', undefined, {...filters, limit: '2', offset: String(offset)});
+      assert.equal(page.total, expected.length); ids.push(...page.data.map((l: Lead) => l.id));
+    }
+    assert.deepEqual(ids, expected.map(l => l.id));
+  }
+  assert.equal((await call('A', 'GET', '/leads/orphan')).status, 404);
+  assert.equal((await repo.crmList('lead')).length, 33);
+});
+
+test('lead pagination rejects malformed numbers and unknown query keys', async () => {
+  const {call} = await setup();
+  for (const query of [
+    ...['0', '501', 'abc', '1.5', '', ' 1', '1 ', '1x', '1e2', '-1'].map(limit => ({limit})),
+    ...['-1', 'abc', '1.5', '9007199254740992', '', ' ', '1e2'].map(offset => ({offset})), {unknown: '1'},
+  ]) assert.equal((await call('A', 'GET', '/leads', undefined, query)).status, 400, JSON.stringify(query));
+});

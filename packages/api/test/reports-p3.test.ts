@@ -89,7 +89,7 @@ test('P3 inventory days supply compares pace halves and responds to additional s
   const {forecasts}=await import('../src/reports-p3.js');
   const sold=(date:string)=>({status:'sold',history:[{status:'sold',timestamp:date}],updatedAt:date});
   const deals=[sold('2026-10-03'),sold('2026-10-20')];
-  const repo={listPage:async()=>{throw new Error('Unexpected vehicle page read');},list:async()=>[{status:'available'},{status:'available'}],crmList:async(kind:string)=>kind==='deal'?deals:[]};
+  const repo={leadListPage: async () => { throw new Error('Unexpected lead page read'); }, listPage:async()=>{throw new Error('Unexpected vehicle page read');},list:async()=>[{status:'available'},{status:'available'}],crmList:async(kind:string)=>kind==='deal'?deals:[]};
   const run=()=>forecasts(repo as any,{from:'2026-10-01',to:'2026-10-24'},new Date('2026-10-24T12:00:00Z'));
   assert.deepEqual((await run()).inventory.projection,{currentStock:2,daysSupply:24,earlierDaysSupply:24,changeDays:0});
   deals.push(sold('2026-10-22')); const data=(await run()).inventory;

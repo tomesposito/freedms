@@ -158,3 +158,18 @@ though the 50-worker result has little headroom. Two measurement runs added
 run overlapped the build and measured 93.7 ms / 797.4 ms. This is an inventory
 volume probe, not a reproduction of the full Dataset B customer/lead counts;
 other endpoint budgets remain separate follow-ups.
+
+## Lead pagination (#52)
+
+`GET /leads` returns `{data, total, limit, offset}` with default `limit=100`,
+maximum 500, and default `offset=0`. Stage, assignee (including unassigned),
+and joined customer/source/vehicle-description search filters apply before
+createdAt descending, id ascending ordering and paging. The board shows pages
+of 100; the unchanged harness measures the bounded first page.
+
+Memory reads build a customer lookup from raw rows, join/filter raw references,
+and retain at most offset + limit leads in a bounded heap. Only the returned
+leads and their customers are cloned. Orphan leads are excluded from matches.
+Dynamo still reads every tenant LEAD# and CUSTOMER# query page before joining,
+filtering and paging; pagination bounds returned rows, not Dynamo query work.
+Internal `crmList('lead')` and `crmList('customer')` callers still receive all rows.

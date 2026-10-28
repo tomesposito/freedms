@@ -83,7 +83,7 @@ invites. Nothing is created until Finish; the workspace starts empty.
 
 ![Slim sidebar](docs/screenshots/sidebar-slim.png)
 
-**Leads** — the pipeline, with assignment, stage history, and follow-ups.
+**Leads** — the pipeline in pages of 100, with assignment, stage history, and follow-ups.
 
 ![Leads list](docs/screenshots/leads-list.png)
 
@@ -505,7 +505,7 @@ send UTC timestamps; list overdue flags refresh when the list is loaded.
 | GET | `/users` | Active users in the authenticated workspace |
 | GET / POST | `/customers` | List/search customers; create with duplicate warnings |
 | GET / PUT | `/customers/{id}` | Read with communication history; replace editable fields + `version` |
-| GET | `/leads?stage=new&assignee=USER_ID&search=...` | Filter leads; `assignee=unassigned` is supported |
+| GET | `/leads?stage=new&assignee=USER_ID&search=...` | Filter leads; `assignee=unassigned`; `limit`/`offset` pagination with `{data, total, limit, offset}` envelope |
 | POST | `/leads` | Atomic customer + lead create, or use `customerId` |
 | GET / PUT | `/leads/{id}` | Detail; update `stage`, `assigneeId`, `vehicleId` + `version` |
 | POST | `/leads/{id}/follow-ups` | `type`, `dueAt` (UTC ISO timestamp), lead `version` |

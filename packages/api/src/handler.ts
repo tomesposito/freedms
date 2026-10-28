@@ -29,7 +29,7 @@ import { authorize, requireWrite } from './auth.js';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import type { RepositoryFactory } from './repository.js';
 import type { VinDecoder } from './vin.js';
-import { invalid, object, onlyKeys, text, vehicleInput, version, view, vin } from './validation.js';
+import { pageNumber, invalid, object, onlyKeys, text, vehicleInput, version, view, vin } from './validation.js';
 export interface ApiRequest { method: string; path: string; query?: Record<string, string | undefined>; body?: string; claims?: AuthClaims; intakeToken?: string }
 export interface ApiResponse { statusCode: number; headers: Record<string, string>; body: string }
 export function response(statusCode: number, body: unknown): ApiResponse {
@@ -117,11 +117,6 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
           const query = request.query ?? {};
           onlyKeys(query, ['status', 'search', 'limit', 'offset']);
           if (query.status && !vehicleStatuses.includes(query.status as typeof vehicleStatuses[number])) throw invalid('Invalid status filter.');
-          const pageNumber = (value: string | undefined, fallback: number, min: number, max: number): number => {
-            if (value === undefined) return fallback;
-            if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < min || Number(value) > max) throw invalid('Invalid pagination parameter.');
-            return Number(value);
-          };
           const limit = pageNumber(query.limit, 100, 1, 500), offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
           const {vehicles, total} = await repository.listPage({limit, offset, status: query.status as typeof vehicleStatuses[number] | undefined, search: query.search ? text(query.search, 'Search', 200) : undefined});
           return response(200, {data: vehicles.map(v => view(v, now())), total, limit, offset});

@@ -196,3 +196,21 @@ test('Dynamo vehicle pages filter and sort across all query pages before slicing
   const page = await new DynamoRepositories('table', client).forTenant('A').listPage({limit: 1, offset: 1, status: 'available', search: 'TEST'});
   assert.equal(calls, 2); assert.equal(page.total, 3); assert.deepEqual(page.vehicles.map(v => v.id), ['a']);
 });
+
+test('Dynamo lead pages join and filter across all lead and customer query pages before slicing', async () => {
+  const calls: Record<string, number> = {};
+  const lead = {kind: 'lead', tenantId: 'A', customerId: 'c', stage: 'new', assigneeId: null, source: 'phone', vehicleDescription: 'Sedan', createdAt: '2026-10-19T00:00:00Z'};
+  const client = {send: async (command: QueryCommand) => {
+    assert.equal(command.input.ExpressionAttributeValues?.[':pk'], 'TENANT#A');
+    const prefix = String(command.input.ExpressionAttributeValues?.[':prefix']);
+    assert.ok(['LEAD#', 'CUSTOMER#'].includes(prefix));
+    calls[prefix] = (calls[prefix] ?? 0) + 1;
+    const second = !!command.input.ExclusiveStartKey;
+    if (second) assert.deepEqual(command.input.ExclusiveStartKey, {PK: 'TENANT#A', SK: `${prefix}cursor`});
+    const data = prefix === 'LEAD#' ? (second ? [{...lead, id: 'a'}, {...lead, id: 'newer', customerId: 'd', createdAt: '2026-10-20T00:00:00Z'}] : [{...lead, id: 'z'}, {...lead, id: 'excluded', stage: 'lost'}, {...lead, id: 'orphan', customerId: 'missing'}]) : [{kind: 'customer', id: second ? 'c' : 'd', name: 'Jamie', email: '', phone: ''}];
+    return {Items: data.map(data => ({data})), ...(second ? {} : {LastEvaluatedKey: {PK: 'TENANT#A', SK: `${prefix}cursor`}})};
+  }} as unknown as DynamoDBDocumentClient;
+  const page = await new DynamoRepositories('table', client).forTenant('A').leadListPage({limit: 1, offset: 1, stage: 'new', assignee: null, search: 'JAMIE'});
+  assert.deepEqual(calls, {'LEAD#': 2, 'CUSTOMER#': 2});
+  assert.equal(page.total, 3); assert.deepEqual(page.leads.map(l => l.id), ['a']); assert.deepEqual(page.customers.map(c => c.id), ['c']);
+});

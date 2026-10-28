@@ -136,7 +136,7 @@ test('jacket completion observes uploads, ignores repeats and preserves commands
   const {observeJacketCompletion} = await import('../src/jacket.js');
   let status = 'approved', types: string[] = ['id'], failRead = false, calls = 0;
   const repo = {
-    listPage: async () => { throw new Error('Unexpected vehicle page read'); },
+    leadListPage: async () => { throw new Error('Unexpected lead page read'); }, listPage: async () => { throw new Error('Unexpected vehicle page read'); },
     crmGet: async () => { if (failRead) throw new Error('read failure'); return {status}; },
     crmList: async () => types.map(type => ({dealId: 'd', type}))
   } as unknown as import('../src/repository.js').TenantRepository;

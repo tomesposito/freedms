@@ -264,7 +264,7 @@ async function route(): Promise<void> {
     else if (parts[0] === 'feeds') await feedRoute({api, download, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'accounting') await accountingRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'fi-products') await fiRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
-    else if (parts[0] === 'leads') await crmRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
+    else if (parts[0] === 'leads') await crmRoute(parts, {api, apiEnvelope, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'new') await form(undefined, sequence);
     else if (parts[0] === 'vehicles' && parts[1]) { if (parts[2] === 'edit') await form(parts[1], sequence); else await detail(parts[1], sequence); }
     else await list(sequence);

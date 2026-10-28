@@ -53,3 +53,9 @@ export function dollarCents(value: unknown): number | undefined {
   const amount = Math.round(Number(s.replace(/,/g, '')) * 100);
   return Number.isSafeInteger(amount) && amount <= 100_000_000_00 ? amount : undefined;
 }
+
+export function pageNumber(value: string | undefined, fallback: number, min: number, max: number): number {
+  if (value === undefined) return fallback;
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < min || Number(value) > max) throw invalid('Invalid pagination parameter.');
+  return Number(value);
+}

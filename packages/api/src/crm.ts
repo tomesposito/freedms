@@ -4,7 +4,7 @@ import { isOverdue, type Activity, type CrmEntity, type Customer, type CustomerI
 import type { CrmWrite, RepositoryFactory, TenantRepository } from './repository.js';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest, type ApiResponse } from './handler.js';
-import { invalid, onlyKeys, text, version } from './validation.js';
+import { pageNumber, invalid, onlyKeys, text, version } from './validation.js';
 import { choice, communicationType, customerInput, normalizedPhone, source, stage, timestamp } from './crm-validation.js';
 import { parseAdf } from './adf.js';
 const hash = (token: string) => createHash('sha256').update(token).digest('hex');
@@ -134,11 +134,14 @@ export async function crm(request: ApiRequest, principal: Principal, repo: Tenan
       const lead = await repo.crmGet('lead', id); if (!lead) throw missing(); return response(200, {data: await leadView(repo, lead, now)});
     }
     if (collection === 'customers') { onlyKeys(query, ['search']); const search = text(query.search ?? '', 'Search', 200, true).toLowerCase(); return response(200, {data: (await repo.crmList('customer')).filter(c => [c.name, c.email, c.phone].join(' ').toLowerCase().includes(search))}); }
-    onlyKeys(query, ['search', 'stage', 'assignee']); if (query.stage) stage(query.stage);
+    onlyKeys(query, ['search', 'stage', 'assignee', 'limit', 'offset']);
+    const stageFilter = query.stage ? stage(query.stage) : undefined;
     if (query.assignee && query.assignee !== 'unassigned') requireId(query.assignee);
     const search = text(query.search ?? '', 'Search', 200, true).toLowerCase();
-    const leads = await Promise.all((await repo.crmList('lead')).map(l => leadView(repo, l, now)));
-    return response(200, {data: leads.filter(l => (!query.stage || l.stage === query.stage) && (!query.assignee || (query.assignee === 'unassigned' ? l.assigneeId === null : l.assigneeId === query.assignee)) && [l.customer.name, l.customer.email, l.customer.phone, l.source, l.vehicleDescription].join(' ').toLowerCase().includes(search)).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))});
+    const limit = pageNumber(query.limit, 100, 1, 500), offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const {leads, customers, total} = await repo.leadListPage({search, stage: stageFilter,
+      assignee: query.assignee === 'unassigned' ? null : query.assignee || undefined, limit, offset});
+    return response(200, {data: leads.map((lead, i) => ({...lead, customer: customers[i], overdue: lead.followUps.some(t => isOverdue(t, now))})), total, limit, offset});
   }
   onlyKeys(query, []);
   if (!['POST', 'PUT'].includes(method)) throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
