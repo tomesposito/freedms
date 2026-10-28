@@ -195,3 +195,20 @@ test('lead pagination rejects malformed numbers and unknown query keys', async (
     ...['-1', 'abc', '1.5', '9007199254740992', '', ' ', '1e2'].map(offset => ({offset})), {unknown: '1'},
   ]) assert.equal((await call('A', 'GET', '/leads', undefined, query)).status, 400, JSON.stringify(query));
 });
+
+test('memory service board selects day and linked rows once, preserves insertion order and isolates tenants and clones', async () => {
+  const {boardRows, boardDay, boardIds} = await import('./fixtures/service-board.js');
+  const repositories = new MemoryRepositories(), repo = repositories.forTenant('A');
+  for (const record of boardRows) await repo.crmWrite([{record, expectedVersion: 0, event: {
+    id: `event-${record.id}`, tenantId: 'A', actorId: 'userA', aggregateId: record.id, aggregateVersion: 1,
+    type: `${record.kind}.created` as import('@freedms/shared').OutboxEvent['type'], occurredAt: now.toISOString(), deliveryStatus: 'pending'
+  }}]);
+  const board = await repo.serviceBoard(boardDay);
+  assert.deepEqual(Object.fromEntries(Object.entries(board).map(([kind, rows]) => [kind, rows.map((r: {id: string}) => r.id)])), boardIds);
+  board.repairOrders[0].lineItems.push({id: 'changed', kind: 'parts', description: '', quantity: 1, unitPriceCents: 100, laborHoursHundredths: null, laborRateCents: null});
+  board.appointments[0].customerName = 'changed'; board.signatures[0].signerName = 'changed'; board.technicians[0].skills.push('brakes');
+  const reread = await repo.serviceBoard(boardDay);
+  assert.equal(reread.repairOrders[0].lineItems.length, 0); assert.equal(reread.appointments[0].customerName, 'Customer');
+  assert.equal(reread.signatures[0].signerName, 'Customer'); assert.deepEqual(reread.technicians[0].skills, []);
+  assert.deepEqual(await repositories.forTenant('B').serviceBoard(boardDay), {appointments: [], repairOrders: [], signatures: [], technicians: []});
+});

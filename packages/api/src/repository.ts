@@ -3,7 +3,7 @@ import type { MfaRecord } from '@freedms/shared';
 import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
-import type { CrmEntity, Lead, Customer } from '@freedms/shared';
+import type { CrmEntity, Lead, Customer, ServiceAppointment, RepairOrder, SignatureRecord, Technician } from '@freedms/shared';
 import type { Membership, OutboxEvent, Tenant, User, Vehicle, VehicleStatus } from '@freedms/shared';
 export interface VehicleQuery { status?: VehicleStatus; search?: string }
 export interface LeadQuery { search?: string; stage?: Lead['stage']; assignee?: string | null; limit: number; offset: number }
@@ -33,6 +33,7 @@ export interface TenantRepository {
   appendUsage(usage: QuickEntryUsage): Promise<void>;
   usageForTest(): Promise<QuickEntryUsage[]>;
   users(): Promise<User[]>;
+  serviceBoard(day: string): Promise<ServiceBoardRows>;
   leadSummary(): Promise<LeadReport>;
   leadListPage(query: LeadQuery): Promise<LeadPage>;
   crmList<K extends CrmEntity['kind']>(kind: K): Promise<Extract<CrmEntity, {kind: K}>[]>;
@@ -195,4 +196,44 @@ export function countLeads(rows: Iterable<CrmEntity>, summary: LeadReport = {
     if (source) source.count++;
   }
   return summary;
+}
+
+export interface ServiceBoardRows {
+  appointments: ServiceAppointment[];
+  repairOrders: RepairOrder[];
+  signatures: SignatureRecord[];
+  technicians: Technician[];
+}
+
+/** Select raw references in input order; callers clone only the returned rows if needed.
+ * Ordered pages must supply all appointments, then ROs, then signatures, so unmatched
+ * rows can be discarded immediately. Unordered memory rows resolve links at finish.
+ */
+export function serviceBoardSelection(day: string, ordered = false) {
+  const board: ServiceBoardRows = {appointments: [], repairOrders: [], signatures: [], technicians: []};
+  const appointmentIds = new Set<string>(), repairOrderIds = new Set<string>();
+  const matchesOrder = (r: RepairOrder) => r.createdAt.slice(0, 10) === day || !!(r.appointmentId && appointmentIds.has(r.appointmentId));
+  const matchesSignature = (s: SignatureRecord) => s.targetType === 'repair-order' && !!(s.repairOrderId && repairOrderIds.has(s.repairOrderId));
+  return {
+    add(rows: Iterable<CrmEntity>) {
+      for (const row of rows) {
+        if (row.kind === 'service-appointment' && row.scheduledStart.slice(0, 10) === day) {
+          board.appointments.push(row); appointmentIds.add(row.id);
+        } else if (row.kind === 'repair-order' && (ordered ? matchesOrder(row) : row.createdAt.slice(0, 10) === day || !!row.appointmentId)) {
+          board.repairOrders.push(row); repairOrderIds.add(row.id);
+        } else if (row.kind === 'signature' && (ordered ? matchesSignature(row) : row.targetType === 'repair-order')) {
+          board.signatures.push(row);
+        } else if (row.kind === 'technician') board.technicians.push(row);
+      }
+    },
+    finish(): ServiceBoardRows {
+      if (!ordered) {
+        board.repairOrders = board.repairOrders.filter(matchesOrder);
+        repairOrderIds.clear();
+        for (const row of board.repairOrders) repairOrderIds.add(row.id);
+        board.signatures = board.signatures.filter(matchesSignature);
+      }
+      return board;
+    }
+  };
 }

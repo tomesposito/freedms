@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { pencilMath, repairOrderTotals, signatureStatusFor, targetSignatures, type Deal, type DealDocument, type RepairOrder, type SignatureRecord, type SignatureStatus } from '@freedms/shared';
+import { pencilMath, repairOrderTotals, targetSignatures, type Deal, type DealDocument, type RepairOrder, type SignatureRecord, type SignatureStatus } from '@freedms/shared';
 import type { TenantRepository } from './repository.js';
 import type { DocumentStore } from './document-store.js';
 import { missing } from './errors.js';
@@ -20,12 +20,20 @@ export function packetHash(packet: Awaited<ReturnType<typeof packetInputs>>) {
   const {deal: d, pencil, numbers, fiProducts} = packet, c = d.customer, v = d.vehicle;
   return sha256(stableStringify({deal: {id:d.id, status:d.status, type:d.type, docFee:d.docFee, taxRateBps:d.taxRateBps, taxTradeDifference:d.taxTradeDifference, trade:d.trade}, pencil, numbers, customer:{name:c.name, phone:c.phone, email:c.email, address:c.address}, vehicle:{year:v.year, make:v.make, model:v.model, trim:v.trim, vin:v.vin, stockNumber:v.stockNumber}, fiProducts}));
 }
+// Versions cover every RO write; signatures are separate records and never affect this hash.
+const repairOrderHashes = new Map<string, string>();
 export function repairOrderHash(r: RepairOrder) {
-  return sha256(stableStringify({id:r.id, customerId:r.customerId, customerName:r.customerName, vehicleDescription:r.vehicleDescription, concern:r.concern, payType:r.payType, lineItems:r.lineItems, totals:repairOrderTotals(r.lineItems)}));
+  const key = JSON.stringify([r.tenantId, r.id, r.version]);
+  const cached = repairOrderHashes.get(key);
+  if (cached !== undefined) return cached;
+  const hash = sha256(stableStringify({id:r.id, customerId:r.customerId, customerName:r.customerName, vehicleDescription:r.vehicleDescription, concern:r.concern, payType:r.payType, lineItems:r.lineItems, totals:repairOrderTotals(r.lineItems)}));
+  if (repairOrderHashes.size >= 5000) repairOrderHashes.clear();
+  repairOrderHashes.set(key, hash);
+  return hash;
 }
 export function repairOrderSignatureView(r: RepairOrder, records: SignatureRecord[]) {
   const signatureHash = repairOrderHash(r), signatures = targetSignatures(records, 'repair-order', r.id);
-  return {...r, totals:repairOrderTotals(r.lineItems), signatureHash, signatures, signatureStatus:signatureStatusFor(signatures,'repair-order',r.id,signatureHash)};
+  return {...r, totals:repairOrderTotals(r.lineItems), signatureHash, signatures, signatureStatus: (signatures.some(s => s.targetHash === signatureHash) ? 'signed' : signatures.length ? 'superseded' : 'awaiting') as SignatureStatus};
 }
 export async function documentSignatureStatus(doc: DealDocument, signatures: SignatureRecord[], store?: DocumentStore): Promise<SignatureStatus> {
   const records = targetSignatures(signatures, 'document', doc.id);

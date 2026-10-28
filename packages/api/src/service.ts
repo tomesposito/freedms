@@ -4,7 +4,7 @@ import type { DocumentStore } from './document-store.js';
 import { reconcilePosting } from './fixed-ops.js';
 import { reconcileStock, negativeOverride, reservedOverride } from './parts.js';
 import { randomUUID } from 'node:crypto';
-import { serviceSkills, maxDocumentBytes, appointmentStatuses, repairOrderPayTypes, repairOrderStatuses, repairOrderTotals, type ServiceAppointment, type RepairOrder, type RepairOrderLineItem, type Principal, type ServiceBoardDay } from '@freedms/shared';
+import { serviceSkills, maxDocumentBytes, appointmentStatuses, repairOrderPayTypes, repairOrderStatuses, repairOrderTotals, type SignatureRecord, type ServiceAppointment, type RepairOrder, type RepairOrderLineItem, type Principal, type ServiceBoardDay } from '@freedms/shared';
 import { requireWrite } from './auth.js';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
@@ -70,8 +70,8 @@ async function references(repo: TenantRepository, b: Record<string, unknown>) {
 }
 export async function service(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date, store?: DocumentStore) {
   const path = request.path.replace(/\/$/, ''), method = request.method.toUpperCase(), q = request.query ?? {}, time = now.toISOString();
-  const signatureRecords = await repo.crmList('signature');
-  const view = (r: RepairOrder) => repairOrderSignatureView(r, signatureRecords);
+  let signatureRecords: Promise<SignatureRecord[]> | undefined;
+  const view = async (r: RepairOrder) => repairOrderSignatureView(r, await (signatureRecords ??= repo.crmList('signature')));
   const methodError = () => new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
   const catalog = await serviceCatalog(request,principal,repo,now); if (catalog) return catalog;
   // Jacket documents require a deal. Inspection references instead live on the RO,
@@ -98,15 +98,16 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
     await storage.put(id,bytes);
     try { await repo.crmWrite([{record,expectedVersion:old.version,event:{id:randomUUID(),tenantId:principal.tenantId,actorId:principal.userId,aggregateId:old.id,aggregateVersion:record.version,type:'repair-order.updated',occurredAt:time,deliveryStatus:'pending'}}]); }
     catch(error) { await storage.remove(id); throw error; }
-    return response(201,{data:view(record)});
+    return response(201,{data:await view(record)});
   }
   if (path === '/service/board') {
     if (method !== 'GET') throw methodError(); onlyKeys(q, ['date']); const day = date(q.date ?? time.slice(0,10));
-    const appointments = (await repo.crmList('service-appointment')).filter(a => a.scheduledStart.slice(0,10) === day).sort((a,b) => a.scheduledStart.localeCompare(b.scheduledStart) || a.id.localeCompare(b.id));
-    const ids = new Set(appointments.map(a => a.id));
-    const repairOrders = (await repo.crmList('repair-order')).filter(r => r.createdAt.slice(0,10) === day || (r.appointmentId && ids.has(r.appointmentId))).sort((a,b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)).map(view);
+    const board = await repo.serviceBoard(day);
+    const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+    const appointments = board.appointments.sort((a,b) => compare(a.scheduledStart,b.scheduledStart) || compare(a.id,b.id));
+    const repairOrders = board.repairOrders.sort((a,b) => compare(a.createdAt,b.createdAt) || compare(a.id,b.id)).map(r => repairOrderSignatureView(r, board.signatures));
     const byStatus = Object.fromEntries(appointmentStatuses.map(s => [s, appointments.filter(a => a.status === s)])) as ServiceBoardDay['byStatus'];
-    const technicians = (await repo.crmList('technician')).map(t=>({...t,dayLoad:[...appointments,...repairOrders].filter(r=>r.technicianId===t.id).length}));
+    const technicians = board.technicians.map(t=>({...t,dayLoad:[...appointments,...repairOrders].filter(r=>r.technicianId===t.id).length}));
     return response(200, {data: {date: day, appointments, byStatus, repairOrders, technicians}});
   }
   const match = /^\/service\/(appointments|repair-orders)(?:\/([^/]+))?$/.exec(path); if (!match) throw missing();
@@ -116,7 +117,7 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
   const old = id ? appt ? await repo.crmGet('service-appointment', id) : await repo.crmGet('repair-order', id) : undefined;
   if (id && !old) throw missing();
   if (method === 'GET') {
-    if (old) return response(200, {data: old.kind === 'repair-order' ? view(old) : old});
+    if (old) return response(200, {data: old.kind === 'repair-order' ? await view(old) : old});
     const search = text(q.search ?? '', 'Search', 200, true).toLowerCase();
     const status = q.status === undefined ? undefined : appt ? choice(q.status, appointmentStatuses, 'status') : choice(q.status, repairOrderStatuses, 'status');
     const matches = (r: ServiceAppointment | RepairOrder) => (!status || r.status === status) && [r.customerName,r.vehicleDescription,r.concern].some(v => v.toLowerCase().includes(search));
@@ -125,7 +126,7 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
       return response(200, {data: (await repo.crmList('service-appointment')).filter(r => matches(r) && (!day || r.scheduledStart.slice(0,10) === day)).sort((a,b) => a.scheduledStart.localeCompare(b.scheduledStart) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))});
     }
     if (q.customerId !== undefined) requireId(q.customerId); if (q.vehicleId !== undefined) requireId(q.vehicleId);
-    return response(200, {data: (await repo.crmList('repair-order')).filter(r => matches(r) && (!q.customerId || r.customerId === q.customerId) && (!q.vehicleId || r.vehicleId === q.vehicleId)).sort((a,b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id)).map(view)});
+    return response(200, {data: await Promise.all((await repo.crmList('repair-order')).filter(r => matches(r) && (!q.customerId || r.customerId === q.customerId) && (!q.vehicleId || r.vehicleId === q.vehicleId)).sort((a,b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id)).map(view))});
   }
   requireWrite(principal, method);
   const b = parseBody(request.body);
@@ -177,5 +178,5 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
   if (!appointmentFits) await repo.crmWrite(appointmentWrites);
   // RO + stock can consume all ten writes; validated journal entries follow immediately.
   if (journalWrites.length) await repo.crmWrite(journalWrites);
-  return response(old ? 200 : 201, {data: record.kind === 'repair-order' ? view(record) : record});
+  return response(old ? 200 : 201, {data: record.kind === 'repair-order' ? await view(record) : record});
 }

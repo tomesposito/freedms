@@ -242,3 +242,31 @@ test('Dynamo lead summary counts each scoped page before requesting the next, in
   const empty = await repositories.forTenant('B').leadSummary();
   assert.equal(empty.total, 0); assert.ok([...empty.byStage, ...empty.bySource].every(row => row.count === 0));
 });
+
+test('Dynamo service board filters each scoped page before fetching the next and follows all cursors', async () => {
+  const {boardRows, boardDay, boardIds} = await import('./fixtures/service-board.js');
+  const calls: Record<string, number> = {};
+  let consumed = true;
+  const client = {send: async (command: QueryCommand) => {
+    assert.ok(consumed, 'previous page must be filtered before the next query');
+    const input = command.input, prefix = String(input.ExpressionAttributeValues?.[':prefix']);
+    assert.equal(input.TableName, 'table'); assert.equal(input.ConsistentRead, true);
+    assert.equal(input.KeyConditionExpression, 'PK = :pk AND begins_with(SK, :prefix)');
+    assert.ok(['SERVICE-APPOINTMENT#', 'REPAIR-ORDER#', 'SIGNATURE#', 'TECHNICIAN#'].includes(prefix));
+    if (input.ExpressionAttributeValues?.[':pk'] === 'TENANT#B') return {};
+    assert.equal(input.ExpressionAttributeValues?.[':pk'], 'TENANT#A');
+    if (prefix === 'SIGNATURE#') assert.equal(calls['REPAIR-ORDER#'], 3);
+    const page = calls[prefix] ?? 0; calls[prefix] = page + 1;
+    assert.deepEqual(input.ExclusiveStartKey, page ? {PK: 'TENANT#A', SK: `${prefix}${page}`} : undefined);
+    const rows = boardRows.filter(r => `${r.kind.toUpperCase()}#` === prefix);
+    const selected = page === 0 ? rows.slice(0, 1) : page === 1 ? [] : rows.slice(1);
+    consumed = selected.length === 0;
+    return {Items: selected.map(row => ({data: {...row, get kind() { consumed = true; assert.equal(calls[prefix], page + 1); return row.kind; }}})),
+      ...(page < 2 ? {LastEvaluatedKey: {PK: 'TENANT#A', SK: `${prefix}${page + 1}`}} : {})};
+  }} as unknown as DynamoDBDocumentClient;
+  const repositories = new DynamoRepositories('table', client);
+  const board = await repositories.forTenant('A').serviceBoard(boardDay);
+  assert.deepEqual(Object.fromEntries(Object.entries(board).map(([kind, rows]) => [kind, rows.map((r: {id: string}) => r.id)])), boardIds);
+  assert.deepEqual(Object.values(calls), [3, 3, 3, 3]);
+  assert.deepEqual(await repositories.forTenant('B').serviceBoard(boardDay), {appointments: [], repairOrders: [], signatures: [], technicians: []});
+});

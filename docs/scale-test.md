@@ -217,3 +217,23 @@ measurement. Build completed before measurement; the offline suite finished
 during the harness's initial work. The unchanged harness also reported
 out-of-scope 10x misses for the lead board (606.4 ms) and pencil calculation
 (634.8 ms), against their 300 ms budgets.
+
+## Service board date-bounded read (#54)
+
+`GET /service/board` selects appointments on the requested UTC day, repair
+orders created that day or linked to those appointments (once each), signatures
+for those repair orders, and all tenant technicians. Final sorting, status
+groups, signature views and technician day loads retain the existing response.
+Memory scans raw tenant rows once, resolves links and clones only returned rows.
+Dynamo filters each page before requesting the next, reading appointments before
+repair orders and signatures after repair orders. It still reads every row of
+the four kinds: this bounds retained/materialized rows, not Dynamo-side date
+query work. Repository ordering remains insertion order in memory and query/SK
+order in Dynamo.
+
+Signature loading is lazy outside the board. RO hashes use a bounded cache keyed
+by tenant, RO id and version; every RO write increments its version. Signature
+records do not affect the hash, and signature views/status are always rebuilt.
+The response still contains the full day — all 2,500 ROs in the harness dataset.
+
+Local check: results will be filled in after measurement by the supervisor.

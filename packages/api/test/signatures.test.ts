@@ -159,3 +159,15 @@ test('pending disposal prohibits signing/replacement while keeping history reada
   const j=(await call('A','GET',base+'/jacket')).data;
   assert.equal(j.documents[0].status,'disposal-pending'); assert.equal(j.signatures.length,1);
 });
+
+test('repair order hash memoization preserves the algorithm and invalidates on version changes', async () => {
+  const {boardOrder} = await import('./fixtures/service-board.js');
+  const {repairOrderHash, repairOrderSignatureView} = await import('../src/signature-targets.js');
+  const r = {...boardOrder, id: 'hash-cache-test'};
+  const expected = createHash('sha256').update(stableStringify({id:r.id, customerId:r.customerId, customerName:r.customerName, vehicleDescription:r.vehicleDescription, concern:r.concern, payType:r.payType, lineItems:r.lineItems, totals:repairOrderTotals(r.lineItems)})).digest('hex');
+  assert.equal(repairOrderHash(r), expected); assert.equal(repairOrderHash(structuredClone(r)), expected);
+  const changed = {...r, version: 2, lineItems: [{id: 'part', kind: 'parts' as const, description: 'Part', quantity: 2, unitPriceCents: 500, laborHoursHundredths: null, laborRateCents: null}]};
+  assert.notEqual(repairOrderHash(changed), expected);
+  assert.notEqual(repairOrderHash({...changed, tenantId: 'B', version: 1}), expected);
+  assert.equal(repairOrderSignatureView(r, []).signatureStatus, 'awaiting');
+});
