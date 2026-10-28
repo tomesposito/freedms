@@ -182,6 +182,8 @@ test('lead pages order ties, filter before slicing, preserve joined search and s
     }
     assert.deepEqual(ids, expected.map(l => l.id));
   }
+  assert.equal((await call('A', 'GET', '/leads', undefined, {search: 'no-matching-lead'})).total, 0);
+  assert.equal((await call('A', 'GET', '/leads')).total, rows.length);
   assert.equal((await call('A', 'GET', '/leads/orphan')).status, 404);
   assert.equal((await repo.crmList('lead')).length, 33);
 });

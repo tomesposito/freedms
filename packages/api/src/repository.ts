@@ -162,7 +162,7 @@ export function leadPage(rows: Iterable<CrmEntity>, customers: Map<string, Custo
     // Orphan leads cannot form a LeadView; exclude them without inventing a customer.
     if (!customer || (query.stage && lead.stage !== query.stage) ||
       (query.assignee !== undefined && lead.assigneeId !== query.assignee) ||
-      ![customer.name, customer.email, customer.phone, lead.source, lead.vehicleDescription].join(' ').toLowerCase().includes(search)) continue;
+      (search && ![customer.name, customer.email, customer.phone, lead.source, lead.vehicleDescription].join(' ').toLowerCase().includes(search))) continue;
     total++;
     if (heap.length < end) {
       heap.push(lead);
