@@ -317,3 +317,59 @@ test('Appointment sync fits with eight stock writes and follows a full nine-part
     assert.equal((await call('A','GET','/accounting/journal',undefined,{repairOrderId:r.id})).data.length,2);
   }
 });
+
+test('Memory service board epoch tracks committed service batches only and isolates tenants', async () => {
+  const {boardRows} = await import('./fixtures/service-board.js');
+  const repositories = new MemoryRepositories(), repo = repositories.forTenant('A');
+  const write = (record: import('@freedms/shared').CrmEntity): import('../src/repository.js').CrmWrite => ({record,expectedVersion:0,event:{id:`epoch-${record.id}`,tenantId:'A',actorId:'userA',aggregateId:record.id,aggregateVersion:1,type:`${record.kind}.created` as import('@freedms/shared').OutboxEvent['type'],occurredAt:record.createdAt,deliveryStatus:'pending'}});
+  assert.equal(await repo.serviceBoardEpoch(),0);
+  let epoch = 0;
+  for (const kind of ['service-appointment','repair-order','signature','technician']) {
+    const record = boardRows.find(r=>r.kind===kind)!;
+    await repo.crmWrite([write(record)]);
+    assert.equal(await repo.serviceBoardEpoch(),++epoch);
+    await assert.rejects(repo.crmWrite([{...write(record),event:{...write(record).event,id:`conflict-${record.id}`}}]),{status:409});
+    assert.equal(await repo.serviceBoardEpoch(),epoch);
+  }
+  const tech = boardRows.find(r=>r.kind==='technician')!;
+  await repo.crmWrite([write({...tech,id:'batch1'}),write({...tech,id:'batch2'})]);
+  assert.equal(await repo.serviceBoardEpoch(),++epoch);
+  const {repositories: seeded} = await setup();
+  const lead = (await seeded.forTenant('A').crmList('lead'))[0];
+  await repo.crmWrite([write(lead)]);
+  const journal: import('@freedms/shared').JournalEntry = {kind:'journal-entry',id:'journal',tenantId:'A',version:1,createdAt:tech.createdAt,updatedAt:tech.updatedAt,date:'2026-10-28',dealId:null,source:'manual',memo:'Test',lines:[],reversesEntryId:null,reversedByEntryId:null};
+  await repo.crmWrite([write(journal)]);
+  assert.equal(await repo.serviceBoardEpoch(),epoch);
+  assert.equal(await repositories.forTenant('B').serviceBoardEpoch(),0);
+});
+
+test('Board body cache invalidates for service writes and reuses bodies across non-service writes', async () => {
+  const {call,appointment,ro,repositories,setTime,a} = await setup();
+  setTime('2030-01-01T12:00:00Z');
+  const original = repositories.forTenant.bind(repositories);
+  let reads = 0, epochReads = 0;
+  repositories.forTenant = tenant => {
+    const repo = original(tenant);
+    return {...repo,serviceBoardEpoch:async()=>{epochReads++;return repo.serviceBoardEpoch();},serviceBoard:async day=>{reads++;return repo.serviceBoard(day);}};
+  };
+  const board = (tenant='A') => call(tenant,'GET','/service/board');
+  const empty = await board(), other = await board('B');
+  assert.deepEqual(await board(),empty); assert.equal(reads,2);
+  const ap = (await appointment({scheduledStart:'2030-01-01T09:00:00Z',scheduledEnd:'2030-01-01T10:00:00Z'})).data;
+  const r = (await ro({appointmentId:ap.id})).data;
+  assert.equal((await board()).data.repairOrders[0].id,r.id);
+  assert.equal((await call('A','POST',`/service/repair-orders/${r.id}/signatures`,{signerName:'Buyer',method:'typed',signatureData:'Buyer'})).status,201);
+  assert.equal((await board()).data.repairOrders[0].signatureStatus,'signed');
+  assert.equal((await call('A','PUT',`/service/repair-orders/${r.id}`,{version:1,status:'completed'})).status,200);
+  assert.equal((await board()).data.byStatus.done[0].id,ap.id);
+  const tech = await call('A','POST','/service/technicians',{name:'Tech',skills:[]});
+  const before = await board(); assert.equal(before.data.technicians[0].id,tech.data.id);
+  const count = reads;
+  assert.equal((await call('A','POST','/leads',{customerId:a.customerId,source:'walk-in'})).status,201);
+  assert.deepEqual(await board(),before); assert.equal(reads,count);
+  assert.deepEqual(await board('B'),other); assert.equal(reads,count);
+  const epochs = epochReads;
+  for (const query of [{date:'2030-02-30'},{extra:'bad'}]) assert.equal((await call('A','GET','/service/board',undefined,query)).status,400);
+  assert.equal((await call('A','POST','/service/board',{})).status,405);
+  assert.equal(epochReads,epochs);
+});

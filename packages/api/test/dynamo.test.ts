@@ -270,3 +270,36 @@ test('Dynamo service board filters each scoped page before fetching the next and
   assert.deepEqual(Object.values(calls), [3, 3, 3, 3]);
   assert.deepEqual(await repositories.forTenant('B').serviceBoard(boardDay), {appointments: [], repairOrders: [], signatures: [], technicians: []});
 });
+
+test('Dynamo service epoch uses a consistent Get and one conditional Put in the service transaction', async () => {
+  const {boardOrder} = await import('./fixtures/service-board.js');
+  const commands: (GetCommand | TransactWriteCommand)[] = [];
+  let stored: number | undefined;
+  const client = {send:async(command:GetCommand | TransactWriteCommand)=>{
+    commands.push(command);
+    if (command instanceof GetCommand) {
+      assert.deepEqual(command.input.Key,{PK:'TENANT#A',SK:'SERVICEBOARD#EPOCH'});
+      assert.equal(command.input.ConsistentRead,true);
+      return stored === undefined ? {} : {Item:{data:{version:stored}}};
+    }
+    return {};
+  }} as unknown as DynamoDBDocumentClient;
+  const repo = new DynamoRepositories('table',client).forTenant('A');
+  assert.equal(await repo.serviceBoardEpoch(),0);
+  for (const version of [undefined,7]) {
+    stored = version;
+    await repo.crmWrite([boardOrder,{...boardOrder,id:'second'}].map(record=>({record,expectedVersion:0,event:{...event,id:`event-${record.id}`,aggregateId:record.id,type:'repair-order.created'}})));
+    const items = (commands.at(-1) as TransactWriteCommand).input.TransactItems!;
+    assert.equal(items.length,5);
+    const epochs = items.filter(i=>i.Put?.Item?.SK==='SERVICEBOARD#EPOCH');
+    assert.equal(epochs.length,1);
+    assert.deepEqual(epochs[0].Put?.Item,{PK:'TENANT#A',SK:'SERVICEBOARD#EPOCH',data:{version:(version ?? 0)+1}});
+    assert.equal(epochs[0].Put?.ConditionExpression,version===undefined?'attribute_not_exists(PK)':'#d.#v = :v');
+    assert.deepEqual(epochs[0].Put?.ExpressionAttributeValues,version===undefined?undefined:{':v':version});
+  }
+  commands.length=0;
+  const lead: import('@freedms/shared').Lead = {kind:'lead',id:'lead',tenantId:'A',version:1,createdAt:vehicle.createdAt,updatedAt:vehicle.updatedAt,customerId:'c',vehicleId:null,vehicleDescription:'',source:'walk-in',sourceDetail:'',stage:'new',assigneeId:null,followUps:[],activities:[]};
+  await repo.crmWrite([{record:lead,expectedVersion:0,event:{...event,aggregateId:lead.id,type:'lead.created'}}]);
+  assert.equal(commands.length,1);
+  assert.deepEqual((commands[0] as TransactWriteCommand).input.TransactItems?.map(i=>i.Put?.Item?.SK),['LEAD#lead','EVENT#e']);
+});

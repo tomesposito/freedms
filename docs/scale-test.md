@@ -233,7 +233,28 @@ order in Dynamo.
 
 Signature loading is lazy outside the board. RO hashes use a bounded cache keyed
 by tenant, RO id and version; every RO write increments its version. Signature
-records do not affect the hash, and signature views/status are always rebuilt.
+records do not affect the hash; signature views/status are rebuilt on board cache
+misses and other RO reads.
 The response still contains the full day — all 2,500 ROs in the harness dataset.
+
+The board caches the exact serialized JSON body per tenant and UTC day. After
+method, query and date validation, each request reads the tenant service-data
+epoch; a matching epoch serves the cached body without cloning rows, rebuilding
+views or serializing the board again. A miss retains the epoch read before
+computation, so a concurrent service write makes that body ineligible on the
+next read. Readers, staff and admins share the same body.
+
+Every successful `crmWrite` containing an appointment, repair order, signature
+or technician advances the tenant epoch once, including multi-record batches.
+Rejected transactions and other kinds (including leads, parts and journals) do
+not advance it. Memory increments a counter during the synchronous apply phase.
+Dynamo reads `SERVICEBOARD#EPOCH` consistently (missing means zero) and adds one
+conditional epoch Put to the same transaction as the business writes. Concurrent
+epoch conflicts reject the transaction through the existing conflict handling.
+Epochs and invalidation are isolated per tenant.
+
+The process-local body cache evicts oldest insertions when it exceeds 16 entries
+or 32 MiB of UTF-8 body bytes. An individual body over that byte cap is returned
+without being cached. The response shape and full-day selection are unchanged.
 
 Local check: results will be filled in after measurement by the supervisor.

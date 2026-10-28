@@ -12,6 +12,22 @@ import { choice, timestamp } from './crm-validation.js';
 import { invalid, object, onlyKeys, text, money, version } from './validation.js';
 import type { CrmWrite, TenantRepository } from './repository.js';
 
+const boardCache = new Map<string, {epoch: number; body: string}>();
+let boardCacheBytes = 0;
+const maxBoardCacheBytes = 32 * 1024 * 1024;
+function cacheBoard(key: string, epoch: number, body: string): void {
+  const old = boardCache.get(key);
+  if (old) { boardCacheBytes -= Buffer.byteLength(old.body); boardCache.delete(key); }
+  const bytes = Buffer.byteLength(body);
+  if (bytes > maxBoardCacheBytes) return;
+  boardCache.set(key, {epoch, body}); boardCacheBytes += bytes;
+  while (boardCache.size > 16 || boardCacheBytes > maxBoardCacheBytes) {
+    const oldest = boardCache.keys().next().value!;
+    boardCacheBytes -= Buffer.byteLength(boardCache.get(oldest)!.body);
+    boardCache.delete(oldest);
+  }
+}
+
 async function syncAppointment(repo: TenantRepository, principal: Principal, time: string, old: RepairOrder, order: RepairOrder): Promise<CrmWrite[]> {
   if (old.status === order.status || !order.appointmentId) return [];
   const finalized = (status: RepairOrder['status']) => status === 'completed' || status === 'picked-up';
@@ -102,13 +118,19 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
   }
   if (path === '/service/board') {
     if (method !== 'GET') throw methodError(); onlyKeys(q, ['date']); const day = date(q.date ?? time.slice(0,10));
+    const epoch = await repo.serviceBoardEpoch();
+    const key = `${principal.tenantId}|${day}`, hit = boardCache.get(key);
+    if (hit?.epoch === epoch) return {...response(200, null), body: hit.body};
     const board = await repo.serviceBoard(day);
     const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
     const appointments = board.appointments.sort((a,b) => compare(a.scheduledStart,b.scheduledStart) || compare(a.id,b.id));
     const repairOrders = board.repairOrders.sort((a,b) => compare(a.createdAt,b.createdAt) || compare(a.id,b.id)).map(r => repairOrderSignatureView(r, board.signatures));
     const byStatus = Object.fromEntries(appointmentStatuses.map(s => [s, appointments.filter(a => a.status === s)])) as ServiceBoardDay['byStatus'];
     const technicians = board.technicians.map(t=>({...t,dayLoad:[...appointments,...repairOrders].filter(r=>r.technicianId===t.id).length}));
-    return response(200, {data: {date: day, appointments, byStatus, repairOrders, technicians}});
+    const result = response(200, {data: {date: day, appointments, byStatus, repairOrders, technicians}});
+    // Keep the epoch read BEFORE computation: concurrent writes invalidate this body.
+    cacheBoard(key, epoch, result.body);
+    return result;
   }
   const match = /^\/service\/(appointments|repair-orders)(?:\/([^/]+))?$/.exec(path); if (!match) throw missing();
   const appt = match[1] === 'appointments', id = match[2] ? requireId(match[2]) : undefined;

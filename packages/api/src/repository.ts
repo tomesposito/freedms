@@ -33,6 +33,7 @@ export interface TenantRepository {
   appendUsage(usage: QuickEntryUsage): Promise<void>;
   usageForTest(): Promise<QuickEntryUsage[]>;
   users(): Promise<User[]>;
+  serviceBoardEpoch(): Promise<number>;
   serviceBoard(day: string): Promise<ServiceBoardRows>;
   leadSummary(): Promise<LeadReport>;
   leadListPage(query: LeadQuery): Promise<LeadPage>;
@@ -61,6 +62,8 @@ export function assertScope(tenantId: string, ...rows: {tenantId: string}[]): vo
 export function assertEvent(vehicleId: string, version: number, event: OutboxEvent, type: OutboxEvent['type']): void {
   if (event.aggregateId !== vehicleId || event.aggregateVersion !== version || event.type !== type) throw new Error('Invalid outbox event');
 }
+
+export const serviceBoardKinds = new Set<CrmEntity['kind']>(['service-appointment', 'repair-order', 'signature', 'technician']);
 
 export interface CrmWrite { record: CrmEntity; expectedVersion: number; event: OutboxEvent }
 export function assertCrmWrites(tenantId: string, writes: CrmWrite[]): void {

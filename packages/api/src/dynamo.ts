@@ -7,7 +7,7 @@ import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardSelection, type VehicleQuery, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, type VehicleQuery, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   constructor(private table: string, private client = DynamoDBDocumentClient.from(new DynamoDBClient({}))) {}
@@ -117,6 +117,7 @@ export class DynamoRepositories implements RepositoryFactory {
         const [users, members] = await Promise.all([listRows<User>('USER#'), listRows<Membership>('MEMBER#')]);
         return users.filter(u => members.some(m => m.userId === u.id && m.active));
       },
+      serviceBoardEpoch: async () => (await get<{version: number}>('SERVICEBOARD#EPOCH'))?.version ?? 0,
       serviceBoard: async day => {
         const selection = serviceBoardSelection(day, true);
         // Still reads every row of these kinds; only retained rows are date-bounded.
@@ -162,6 +163,11 @@ export class DynamoRepositories implements RepositoryFactory {
             reservations.push(put(`PART-NUMBER#${record.partNumber}`, {id:record.id}));
             if (old) reservations.push({Delete:{TableName:this.table,Key:key(`PART-NUMBER#${old.partNumber}`),ConditionExpression:'#d.#id = :id',ExpressionAttributeNames:{'#d':'data','#id':'id'},ExpressionAttributeValues:{':id':record.id}}});
           }
+        }
+        if (writes.some(({record}) => serviceBoardKinds.has(record.kind))) {
+          const epoch = await get<{version: number}>('SERVICEBOARD#EPOCH');
+          reservations.push(put('SERVICEBOARD#EPOCH', {version: (epoch?.version ?? 0) + 1},
+            epoch ? '#d.#v = :v' : 'attribute_not_exists(PK)', epoch?.version));
         }
         await transact([...reservations, ...vehicles.flatMap(({record, expectedVersion, event}) => [put(`VEHICLE#${requireId(record.id)}`, record, '#d.#v = :v', expectedVersion), eventPut(event)]), ...writes.flatMap(({record, expectedVersion, event}) => [
           put(`${record.kind.toUpperCase()}#${requireId(record.id)}`, record,
