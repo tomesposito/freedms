@@ -1,3 +1,4 @@
+import { reservationActive, reservationStatus } from '@freedms/shared';
 import { partsDepth } from './parts-depth.js';
 import { ensureDefaultAccounts, write } from './accounting.js';
 import { fixedPosting } from './fixed-ops.js';
@@ -43,18 +44,31 @@ export async function reconcileStock(repo: TenantRepository, principal: Principa
   record.reservedStockWarning = finalized && old?.stockApplied ? old.reservedStockWarning ?? null : null;
   const reservedParts: NonNullable<RepairOrder['reservedStockWarning']>['parts'] = [];
   const orders = changes.some(([,amount])=>amount<0) ? await repo.crmList('parts-po') : [];
+  const reservations = changes.length ? (await repo.crmList('parts-reservation')).filter(r=>r.repairOrderId===record.id).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id)) : [];
   const writes: CrmWrite[] = [];
   for (const [id,amount] of changes) {
     const part = await repo.crmGet('part',id); if (!part) throw invalid('Part must belong to this workspace.');
     const updated = stockChange(part,amount,override,time);
     if (amount < 0) {
-      const reservedForThisRo = orders.flatMap(po=>po.lines).filter(line=>line.partId===part.id && line.specialOrder?.repairOrderId===record.id).reduce((sum,line)=>sum+line.quantityReserved,0);
+      const reservedForThisRo = orders.flatMap(po=>po.lines).filter(line=>line.partId===part.id && line.specialOrder?.repairOrderId===record.id).reduce((sum,line)=>sum+line.quantityReserved,0)+reservations.filter(r=>r.partId===id).reduce((sum,r)=>sum+reservationActive(r),0);
       const reservedForOthers = Math.max(0,(part.quantityReserved ?? 0)-reservedForThisRo);
       if (reservedForOthers > 0 && updated.quantityOnHand < reservedForOthers) reservedParts.push({partId:part.id,partNumber:part.partNumber,quantityReserved:reservedForOthers});
     }
     if (amount < 0 && updated.quantityOnHand < 0) record.stockWarning = `Negative stock explicitly allowed for ${part.partNumber}.` + (record.stockWarning ? ` ${record.stockWarning}` : '');
+    // Consume and restore oldest first, with stable id ordering for equal timestamps.
+    let remaining=Math.abs(amount);
+    for(const reservation of reservations.filter(r=>r.partId===id)) {
+      const quantity=Math.min(remaining,amount<0 ? reservationActive(reservation) : reservation.quantityConsumed);
+      if(!quantity) continue;
+      const changed={...reservation,quantityConsumed:reservation.quantityConsumed+(amount<0 ? quantity : -quantity),version:reservation.version+1,updatedAt:time};
+      changed.status=reservationStatus(changed,'consumed');
+      updated.quantityReserved=integer((updated.quantityReserved ?? 0)+(amount<0 ? -quantity : quantity),'Reserved');
+      writes.push({record:changed,expectedVersion:reservation.version,event:{id:randomUUID(),tenantId:principal.tenantId,actorId:principal.userId,aggregateId:changed.id,aggregateVersion:changed.version,type:'parts-reservation.updated',occurredAt:time,deliveryStatus:'pending',causeId:record.id}});
+      remaining-=quantity;if(!remaining) break;
+    }
     writes.push({record:updated,expectedVersion:part.version,event:stockEvent(principal,time,updated,record.id)});
   }
+  if(writes.length>38) throw invalid('Stock save exceeds transaction limit: too many on-hand reservations affected.');
   if (reservedParts.length) {
     if (!acknowledgeReservedStock) throw invalid(`Stock is reserved for other special orders: ${reservedParts.map(p=>`${p.partNumber} (${p.quantityReserved} reserved)`).join(', ')}. Explicit reserved-stock acknowledgement required.`);
     record.reservedStockWarning = {parts:reservedParts,acknowledgedBy:principal.userId,acknowledgedAt:time};
@@ -63,7 +77,7 @@ export async function reconcileStock(repo: TenantRepository, principal: Principa
 }
 export async function parts(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date) {
   const path=request.path.replace(/\/$/,''), method=request.method.toUpperCase(), time=now.toISOString(), q=request.query ?? {};
-  if (/^\/parts\/(purchase-orders|returns|pricing-matrix|pricing-proposal)(?:\/|$)/.test(path)) return partsDepth(request,principal,repo,now);
+  if (/^\/parts\/(purchase-orders|returns|pricing-matrix|pricing-proposal|reservations)(?:\/|$)/.test(path)) return partsDepth(request,principal,repo,now);
   const match=/^\/parts(?:\/(sales)(?:\/([^/]+))?|\/([^/]+))?$/.exec(path); if (!match) throw missing();
   const sale=!!match[1], id=match[2] || match[3]; if(id) requireId(id);
   if (!(id ? sale ? ['GET'] : ['GET','PUT'] : ['GET','POST']).includes(method)) throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');

@@ -318,3 +318,112 @@ test('Reserved-stock flags are strictly scoped, server warnings cannot be forged
   const done=await call('PUT',path,{version:1,status:'completed',allowNegativeStock:true,acknowledgeReservedStock:true});
   assert.equal(done.status,200);assert.match(done.data.stockWarning,/FILTER-1/);assert.equal(done.data.reservedStockWarning.parts[0].quantityReserved,3);assert.equal(await stock(p.id),-1);assert.equal((await call('GET',`/parts/${p.id}`)).data.quantityReserved,3);
 });
+
+test('On-hand reservations create audited tenant-scoped holds, validate strictly and fail atomically',async()=>{
+  const {call,part,ro,customers,repositories}=await setup(),p=(await part()).data,r=(await ro([])).data;
+  const body={partId:p.id,repairOrderId:r.id,quantity:12};
+  const result=await call('POST','/parts/reservations',body);assert.equal(result.status,201);const hold=result.data;
+  assert.deepEqual([hold.customerId,hold.customerName,hold.createdBy,hold.createdAt,hold.quantity,hold.quantityConsumed,hold.quantityReleased,hold.status,hold.releasedAt,hold.releasedBy],[customers.A,'Buyer A','userA','2026-10-24T12:00:00.000Z',12,0,0,'active',null,null]);
+  assert.deepEqual((await call('GET',`/parts/reservations/${hold.id}`)).data,hold);
+  assert.deepEqual((await call('GET','/parts/reservations')).data,[hold]);
+  const before=(await call('GET',`/parts/${p.id}`)).data,events=repositories.eventsForTest('A').length;
+  assert.equal(before.quantityReserved,12);
+  const denied=await call('POST','/parts/reservations',{...body,quantity:9});assert.equal(denied.status,400);assert.match(denied.error.message,/FILTER-1/);
+  assert.deepEqual((await call('GET',`/parts/${p.id}`)).data,before);assert.equal(repositories.eventsForTest('A').length,events);assert.equal((await call('GET','/parts/reservations')).data.length,1);
+  const foreignPart=(await part({},'B')).data,foreignRo=(await ro([],'B')).data;
+  for(const patch of [{partId:foreignPart.id},{repairOrderId:foreignRo.id},{customerId:customers.B},{repairOrderId:null},{repairOrderId:undefined},{quantity:0},{quantity:1.5},{quantity:'1'},{quantity:Number.MAX_SAFE_INTEGER+1},{status:'active'},{createdBy:'fake'},{quantityReserved:1},{quantityConsumed:1},{quantityReleased:1},{extra:true}]) assert.equal((await call('POST','/parts/reservations',{...body,quantity:1,...patch})).status,400,JSON.stringify(patch));
+  assert.equal((await call('GET',`/parts/reservations/${hold.id}`,undefined,'B')).status,404);
+  assert.equal((await call('POST',`/parts/reservations/${hold.id}/release`,{version:1},'B')).status,404);
+  assert.deepEqual((await call('GET','/parts/reservations',undefined,'B')).data,[]);
+  for(const path of ['/parts/reservations',`/parts/reservations/${hold.id}/release`]) await assert.rejects(parts({method:'POST',path,body:'{}'},{tenantId:'A',userId:'userA',role:'reader'} as unknown as Principal,repositories.forTenant('A'),new Date()),{status:403});
+  assert.equal((await call('PUT','/parts/reservations',{})).status,405);assert.equal((await call('GET',`/parts/reservations/${hold.id}/release`)).status,405);
+  for(const path of [`/parts/reservations/${hold.id}/receive`,`/parts/purchase-orders/${hold.id}/release`]) assert.equal((await call('POST',path,{})).status,404);
+  assert.equal((await call('GET','/parts/reservations',undefined,'A',{extra:'x'})).status,400);
+  const created=repositories.eventsForTest('A').find(e=>e.type==='parts-reservation.created')!;assert.equal(created.actorId,'userA');assert.equal(created.aggregateId,hold.id);
+  assert.ok(repositories.eventsForTest('A').some(e=>e.type==='part.updated'&&e.causeId===hold.id));
+});
+
+test('On-hand holds protect counter sales and other ROs; acknowledged completion records warning',async()=>{
+  const {call,part,ro,repositories}=await setup(),p=(await part()).data,owner=(await ro([])).data,other=(await ro([line(p.id,6)])).data;
+  await call('POST','/parts/reservations',{partId:p.id,repairOrderId:owner.id,quantity:15});
+  const sale={partId:p.id,quantity:6};assert.equal((await call('POST','/parts/sales',sale)).status,400);
+  const before=repositories.eventsForTest('A').length;
+  const denied=await call('PUT',`/service/repair-orders/${other.id}`,{version:1,status:'completed'});assert.equal(denied.status,400);assert.match(denied.error.message,/FILTER-1/);assert.equal(repositories.eventsForTest('A').length,before);
+  const done=await call('PUT',`/service/repair-orders/${other.id}`,{version:1,status:'completed',acknowledgeReservedStock:true});assert.equal(done.status,200);assert.equal(done.data.reservedStockWarning.parts[0].partNumber,p.partNumber);assert.equal(done.data.reservedStockWarning.acknowledgedBy,'userA');
+  assert.equal((await call('GET','/parts/reservations')).data[0].quantityConsumed,0);
+  await call('PUT',`/service/repair-orders/${other.id}`,{version:2,status:'open'});
+  assert.equal((await call('POST','/parts/sales',{partId:p.id,quantity:5})).status,201);
+});
+
+test('Owning RO consumes and restores oldest holds exactly across partial usage, edits and refinalizing',async()=>{
+  const {call,part,ro,setTime,repositories}=await setup(),p=(await part()).data;let r=(await ro([line(p.id,4)])).data;
+  const make=async(quantity:number)=>(await call('POST','/parts/reservations',{partId:p.id,repairOrderId:r.id,quantity})).data;
+  const a=await make(3);setTime('2026-10-25T12:00:00Z');const b=await make(5);
+  const save=async(patch:object)=>{const res=await call('PUT',`/service/repair-orders/${r.id}`,{version:r.version,...patch});assert.equal(res.status,200,JSON.stringify(res));r=res.data;};
+  const check=async(onHand:number,reserved:number,consumed:number[])=>{const part=(await call('GET',`/parts/${p.id}`)).data;assert.deepEqual([part.quantityOnHand,part.quantityReserved],[onHand,reserved]);for(const [i,h] of [a,b].entries()){const row=(await call('GET',`/parts/reservations/${h.id}`)).data;assert.equal(row.quantityConsumed,consumed[i]);assert.equal(row.quantity,h.quantity);assert.equal(row.status,consumed[i]===h.quantity?'consumed':'active');}};
+  await save({status:'completed'});await check(16,4,[3,1]);
+  assert.equal((await call('POST',`/parts/reservations/${a.id}/release`,{version:2})).status,400);
+  await save({lineItems:[line(p.id,2)]});await check(18,6,[1,1]);
+  await save({status:'open'});await check(20,8,[0,0]);
+  await save({status:'completed',lineItems:[line(p.id,8)]});await check(12,0,[3,5]);
+  await save({status:'open'});await check(20,8,[0,0]);
+  await save({status:'completed'});await check(12,0,[3,5]);
+  assert.ok(repositories.eventsForTest('A').filter(e=>e.type==='parts-reservation.updated').every(e=>e.causeId===r.id&&e.actorId==='userA'));
+});
+
+test('Manual partial/full release restores sale availability, audits actors, rejects stale/invalid releases and preserves mixed status on reopen',async()=>{
+  const {call,part,ro,setTime}=await setup(),p=(await part()).data;let r=(await ro([line(p.id,2)])).data;
+  let h=(await call('POST','/parts/reservations',{partId:p.id,repairOrderId:r.id,quantity:10})).data;const path=`/parts/reservations/${h.id}/release`;
+  assert.equal((await call('POST','/parts/sales',{partId:p.id,quantity:15})).status,400);
+  for(const patch of [{quantity:0},{quantity:11},{quantity:1.1},{quantity:null},{status:'released'},{releasedBy:'fake'},{quantityReleased:10}]) assert.equal((await call('POST',path,{version:1,...patch})).status,400);
+  setTime('2026-10-26T12:00:00Z');h=(await call('POST',path,{version:1,quantity:5})).data;
+  assert.deepEqual([h.quantityReleased,h.status,h.releasedBy,h.releasedAt],[5,'active','userA','2026-10-26T12:00:00.000Z']);
+  assert.equal((await call('POST',path,{version:1})).status,409);
+  assert.equal((await call('POST','/parts/sales',{partId:p.id,quantity:15})).status,201);
+  r=(await call('PUT',`/service/repair-orders/${r.id}`,{version:r.version,status:'completed'})).data;
+  h=(await call('GET',`/parts/reservations/${h.id}`)).data;assert.equal(h.quantityConsumed,2);
+  h=(await call('POST',path,{version:h.version})).data;assert.deepEqual([h.quantityReleased,h.quantityConsumed,h.status],[8,2,'released']);
+  assert.equal((await call('POST',path,{version:h.version})).status,400);
+  r=(await call('PUT',`/service/repair-orders/${r.id}`,{version:r.version,status:'open'})).data;
+  h=(await call('GET',`/parts/reservations/${h.id}`)).data;assert.deepEqual([h.quantityReleased,h.quantityConsumed,h.status],[8,0,'active']);
+  await call('PUT',`/service/repair-orders/${r.id}`,{version:r.version,status:'completed'});
+  h=(await call('GET',`/parts/reservations/${h.id}`)).data;assert.equal(h.status,'consumed');
+  assert.equal((await call('GET',`/parts/${p.id}`)).data.quantityReserved,0);
+});
+
+test('Dynamo on-hand reservations persist tenant keys, conditional versions and paired events',async()=>{
+  const {call,part,ro,repositories}=await setup(),p=(await part()).data,r=(await ro([])).data;
+  const h=(await call('POST','/parts/reservations',{partId:p.id,repairOrderId:r.id,quantity:2})).data;
+  const released=(await call('POST',`/parts/reservations/${h.id}/release`,{version:1})).data;
+  const commands:TransactWriteCommand[]=[];const client={send:async(command:TransactWriteCommand)=>{commands.push(command);return {};}} as unknown as DynamoDBDocumentClient;
+  const repo=new DynamoRepositories('table',client).forTenant('A');
+  for(const record of [h,released]) {const event=repositories.eventsForTest('A').find(e=>e.aggregateId===record.id&&e.aggregateVersion===record.version)!;await repo.crmWrite([{record,expectedVersion:record.version-1,event}]);await assert.rejects(new DynamoRepositories('table',client).forTenant('B').crmWrite([{record,expectedVersion:record.version-1,event}]),/scope/);}
+  for(const c of commands){assert.equal(c.input.TransactItems!.length,2);assert.ok(c.input.TransactItems!.every(i=>i.Put!.Item!.PK==='TENANT#A'));assert.equal(c.input.TransactItems![0].Put!.Item!.SK,`PARTS-RESERVATION#${h.id}`);assert.match(c.input.TransactItems![1].Put!.Item!.SK,/^EVENT#/);}
+  assert.equal(commands[0].input.TransactItems![0].Put!.ConditionExpression,'attribute_not_exists(PK)');assert.equal(commands[1].input.TransactItems![0].Put!.ExpressionAttributeValues![':v'],1);
+});
+
+test('Nine affected parts plus on-hand holds remain atomic; excessive reservation writes fail without mutation',async()=>{
+  const {call,part,ro,repositories}=await setup();const ps=[];for(let i=0;i<9;i++) ps.push((await part({partNumber:`HOLD-${i}`,quantityOnHand:100})).data);
+  let r=(await ro(ps.map((p,i)=>line(p.id,1,String(i))))).data;
+  for(const p of ps) assert.equal((await call('POST','/parts/reservations',{partId:p.id,repairOrderId:r.id,quantity:1})).status,201);
+  const result=await call('PUT',`/service/repair-orders/${r.id}`,{version:1,status:'completed'});assert.equal(result.status,200,JSON.stringify(result));r=result.data;
+  assert.ok((await call('GET','/parts/reservations')).data.every((h:{status:string})=>h.status==='consumed'));
+  assert.equal((await call('PUT',`/service/repair-orders/${r.id}`,{version:r.version,status:'open'})).status,200);
+  const many=(await ro([line(ps[0].id,38)])).data;
+  for(let i=0;i<38;i++) assert.equal((await call('POST','/parts/reservations',{partId:ps[0].id,repairOrderId:many.id,quantity:1})).status,201);
+  const before=(await call('GET',`/parts/${ps[0].id}`)).data,holds=(await call('GET','/parts/reservations')).data,events=repositories.eventsForTest('A').length;
+  const denied=await call('PUT',`/service/repair-orders/${many.id}`,{version:1,status:'completed'});assert.equal(denied.status,400);assert.match(denied.error.message,/transaction limit/);
+  assert.deepEqual((await call('GET',`/parts/${ps[0].id}`)).data,before);assert.deepEqual((await call('GET','/parts/reservations')).data,holds);assert.equal(repositories.eventsForTest('A').length,events);
+});
+
+test('Concurrent holds cannot overreserve and PO plus on-hand reserved totals remain consistent',async()=>{
+  const ctx=await setup(),{call,part,ro,repositories}=ctx,p=(await part()).data,r=(await ro([line(p.id,4)])).data;
+  await reserve(ctx,p.id,3,r.id);
+  const results=await Promise.all([1,2].map(()=>call('POST','/parts/reservations',{partId:p.id,repairOrderId:r.id,quantity:15})));assert.deepEqual(results.map(r=>r.status).sort(),[201,409]);
+  const invariant=async()=>{const po=(await call('GET','/parts/purchase-orders')).data,holds=await repositories.forTenant('A').crmList('parts-reservation');const total=po.flatMap((p:{lines:{quantityReserved:number}[]})=>p.lines).reduce((sum:number,l:{quantityReserved:number})=>sum+l.quantityReserved,0)+holds.reduce((sum,h)=>sum+h.quantity-h.quantityConsumed-h.quantityReleased,0);assert.equal((await call('GET',`/parts/${p.id}`)).data.quantityReserved,total);};
+  await invariant();let done=await call('PUT',`/service/repair-orders/${r.id}`,{version:1,status:'completed'});assert.equal(done.status,200);await invariant();
+  const h=(await call('GET','/parts/reservations')).data[0];assert.equal(h.quantityConsumed,4);
+  assert.equal((await call('POST',`/parts/reservations/${h.id}/release`,{version:h.version,quantity:2})).status,200);await invariant();
+  done=await call('PUT',`/service/repair-orders/${r.id}`,{version:done.data.version,status:'open'});assert.equal(done.status,200);await invariant();
+  assert.equal((await call('GET','/parts/purchase-orders')).data[0].lines[0].quantityReserved,3);
+});

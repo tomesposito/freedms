@@ -30,3 +30,11 @@ test('Parts depth renders escaped local orders, reservations, returns and honest
   const returned=returnsHtml([{id:'r',partId:'p',vendorName:'<vendor>',quantity:2,totalValueCents:1002,reason:'<reason>',purchaseOrderId:'<po>'} as import('@freedms/shared').PartsReturn],[p]);assert.match(returned,/&lt;reason&gt;/);assert.ok(returned.includes(currency(1002)));assert.doesNotMatch(returned,/<vendor>|<reason>|<po>/);
   const empty=depthHtml([],[],[],[],[],{enabled:false,brackets:[]});assert.match(empty,/No vendor ordering or transmission is included/);assert.match(empty,/No purchase orders yet/);assert.match(empty,/No vendor returns yet/);
 });
+
+test('On-hand reservations show honest empty state, named ROs, escaped audit fields and only active release actions',async()=>{
+  const {reservationsHtml}=await import('../src/parts-depth.js');
+  assert.match(reservationsHtml([],[],[],[]),/No on-hand reservations yet/);
+  const h={id:'<hold>',partId:'p',repairOrderId:'<ro>',customerName:'<buyer>',quantity:5,quantityConsumed:2,quantityReleased:1,createdBy:'<actor>',createdAt:'<time>',status:'active'} as import('@freedms/shared').PartsReservation;
+  const html=reservationsHtml([h],[p],[],[]);for(const value of ['part','ro','buyer','actor','time'])assert.ok(html.includes(`&lt;${value}&gt;`));assert.doesNotMatch(html,/<part>|<ro>|<buyer>|<actor>|<time>/);assert.match(html,/2 remaining/);assert.match(html,/data-release="&lt;hold&gt;"/);
+  assert.doesNotMatch(reservationsHtml([{...h,quantityReleased:3,status:'released'}],[p],[],[]),/data-release/);
+});

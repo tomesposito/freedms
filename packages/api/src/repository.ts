@@ -58,7 +58,9 @@ export function assertEvent(vehicleId: string, version: number, event: OutboxEve
 export interface CrmWrite { record: CrmEntity; expectedVersion: number; event: OutboxEvent }
 export function assertCrmWrites(tenantId: string, writes: CrmWrite[]): void {
   const keys = new Set<string>(); const events = new Set<string>();
-  if (!writes.length || writes.length > 10) throw new Error('Invalid CRM transaction');
+  // Allow reservation reconciliation alongside the existing ten business records.
+  // 39 paired rows/events leave room for part-number guards and a vehicle pair.
+  if (!writes.length || writes.length > 39 || writes.filter(w=>w.record.kind!=='parts-reservation').length > 10) throw new Error('Invalid CRM transaction');
   for (const {record, expectedVersion, event} of writes) {
     assertScope(tenantId, record, event);
     if (['signature', 'parts-return', 'parts-sale', 'compliance-check', 'journal-entry', 'payoff-quote', 'share-response'].includes(record.kind) && expectedVersion !== 0) throw new Error('Signatures, parts sales, journal entries, payoff quotes, share responses and compliance checks are immutable');

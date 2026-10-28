@@ -1,5 +1,6 @@
+import { reservationActive, reservationStatus } from '@freedms/shared';
 import { randomUUID } from 'node:crypto';
-import type { CrmEntity, Part, PartsPurchaseOrder, PartsReturn, PricingMatrix, Principal, PurchaseOrderLine } from '@freedms/shared';
+import type { CrmEntity, PartsReservation, Part, PartsPurchaseOrder, PartsReturn, PricingMatrix, Principal, PurchaseOrderLine } from '@freedms/shared';
 import { requireWrite } from './auth.js';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
@@ -9,16 +10,17 @@ import type { CrmWrite, TenantRepository } from './repository.js';
 
 export async function partsDepth(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date) {
   const path=request.path.replace(/\/$/,''), method=request.method.toUpperCase(), time=now.toISOString(), q=request.query ?? {};
-  const match=/^\/parts\/(purchase-orders|returns|pricing-matrix|pricing-proposal)(?:\/([^/]+)(?:\/(receive|special-fulfill))?)?$/.exec(path);
+  const match=/^\/parts\/(purchase-orders|returns|pricing-matrix|pricing-proposal|reservations)(?:\/([^/]+)(?:\/(receive|special-fulfill|release))?)?$/.exec(path);
   if(!match) throw missing();
   const [,family,id,action]=match;
   const singleton=family==='pricing-matrix'||family==='pricing-proposal';
   if(singleton && id || family==='returns' && action) throw missing();
+  if(action && (family==='reservations' ? action!=='release' : family!=='purchase-orders'||action==='release')) throw missing();
   if(id) requireId(id);
   const allowed=family==='pricing-proposal' ? ['GET'] : family==='pricing-matrix' ? ['GET','PUT'] : action ? ['POST'] : id ? ['GET'] : ['GET','POST'];
   if(!allowed.includes(method)) throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
   onlyKeys(q,family==='pricing-proposal' ? ['costCents'] : []);
-  const kind=family==='returns' ? 'parts-return' : 'parts-po';
+  const kind=family==='reservations' ? 'parts-reservation' : family==='returns' ? 'parts-return' : 'parts-po';
   if(method==='GET') {
     if(singleton) {
       const matrix=await repo.crmGet('pricing-matrix','pricing-matrix');
@@ -34,8 +36,32 @@ export async function partsDepth(request: ApiRequest, principal: Principal, repo
   }
   requireWrite(principal,method);
   const b=parseBody(request.body), base={id:randomUUID(),tenantId:principal.tenantId,version:1,createdAt:time,updatedAt:time};
-  const write=(record: Extract<CrmEntity,{kind:'parts-po'|'parts-return'|'pricing-matrix'}>, expectedVersion: number): CrmWrite=>({record,expectedVersion,event:{id:randomUUID(),tenantId:principal.tenantId,actorId:principal.userId,aggregateId:record.id,aggregateVersion:record.version,type:record.kind==='parts-return' ? 'parts-return.created' : `${record.kind}.${expectedVersion ? 'updated':'created'}`,occurredAt:time,deliveryStatus:'pending'}});
+  const write=(record: Extract<CrmEntity,{kind:'parts-po'|'parts-return'|'pricing-matrix'|'parts-reservation'}>, expectedVersion: number): CrmWrite=>({record,expectedVersion,event:{id:randomUUID(),tenantId:principal.tenantId,actorId:principal.userId,aggregateId:record.id,aggregateVersion:record.version,type:record.kind==='parts-return' ? 'parts-return.created' : `${record.kind}.${expectedVersion ? 'updated':'created'}`,occurredAt:time,deliveryStatus:'pending'}});
   const partWrite=(part: Part, causeId: string): CrmWrite=>({record:part,expectedVersion:part.version-1,event:stockEvent(principal,time,part,causeId)});
+  if(family==='reservations') {
+    if(!id) {
+      onlyKeys(b,['partId','repairOrderId','customerId','quantity']);
+      const part=await repo.crmGet('part',requireId(b.partId)), ro=await repo.crmGet('repair-order',requireId(b.repairOrderId));
+      if(!part||!ro) throw invalid('Part and repair order must belong to this workspace.');
+      const customerId=b.customerId==null ? ro.customerId : requireId(b.customerId), customer=await repo.crmGet('customer',customerId);
+      if(!customer) throw invalid('Customer must belong to this workspace.');
+      const quantity=integer(b.quantity,'Quantity',1);
+      if(quantity>part.quantityOnHand-(part.quantityReserved ?? 0)) throw invalid(`Insufficient unreserved stock for ${part.partNumber}.`);
+      const record:PartsReservation={...base,kind:'parts-reservation',partId:part.id,repairOrderId:ro.id,customerId,customerName:customer.name,quantity,quantityConsumed:0,quantityReleased:0,status:'active',createdBy:principal.userId,releasedBy:null,releasedAt:null};
+      await repo.crmWrite([write(record,0),partWrite({...part,quantityReserved:integer((part.quantityReserved ?? 0)+quantity,'Reserved'),version:part.version+1,updatedAt:time},record.id)]);
+      return response(201,{data:record});
+    }
+    onlyKeys(b,['version','quantity']);
+    const old=await repo.crmGet('parts-reservation',id);if(!old) throw missing();
+    const expected=version(b.version);if(old.version!==expected) throw conflict();
+    const active=reservationActive(old), quantity=b.quantity===undefined ? active : integer(b.quantity,'Quantity',1);
+    if(quantity<1||quantity>active) throw invalid('Quantity exceeds active reservation.');
+    const part=await repo.crmGet('part',old.partId);if(!part) throw missing();
+    const record:PartsReservation={...old,version:expected+1,updatedAt:time,quantityReleased:old.quantityReleased+quantity,releasedBy:principal.userId,releasedAt:time};
+    record.status=reservationStatus(record,'released');
+    await repo.crmWrite([write(record,expected),partWrite({...part,quantityReserved:integer(part.quantityReserved-quantity,'Reserved'),version:part.version+1,updatedAt:time},record.id)]);
+    return response(200,{data:record});
+  }
   if(family==='pricing-matrix') {
     onlyKeys(b,['version','enabled','brackets']);
     const old=await repo.crmGet('pricing-matrix','pricing-matrix'), expected=integer(b.version,'Version');

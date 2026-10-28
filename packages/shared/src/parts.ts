@@ -24,3 +24,15 @@ export interface PartsReturn extends CrmRecord {
 export interface PricingBracket { maxCostCents: number | null; markupBps: number }
 export interface PricingMatrix extends CrmRecord { kind: 'pricing-matrix'; enabled: boolean; brackets: PricingBracket[] }
 export interface PricingProposal { costCents: number; proposedRetailCents: number | null; markupBps: number | null }
+
+export interface PartsReservation extends CrmRecord {
+  kind: 'parts-reservation'; partId: string; repairOrderId: string;
+  customerId: string | null; customerName: string | null;
+  quantity: number; quantityConsumed: number; quantityReleased: number;
+  status: 'active' | 'consumed' | 'released'; createdBy: string;
+  releasedBy: string | null; releasedAt: string | null;
+}
+export const reservationActive = (r: PartsReservation): number => r.quantity-r.quantityConsumed-r.quantityReleased;
+export function reservationStatus(r: PartsReservation, action: 'consumed' | 'released'): PartsReservation['status'] {
+  return reservationActive(r)>0 ? 'active' : action;
+}

@@ -146,13 +146,16 @@ below the form is signed in store against the $180.00 estimate.
 
 **Parts catalog** — workspace stock, bins, locations, cost and retail prices,
 and reserved counts, with reorder flags and a list that includes parts exactly
-at their reorder point. The catalog filters by location.
+at their reorder point. The catalog filters by location. On-hand reservations
+link shelf stock to a named repair order, show who reserved it and when, and
+allow manual release. Completing the owning RO consumes its hold; reopening
+restores it.
 
 ![Parts catalog and reorder list](docs/screenshots/parts-catalog.png)
 
 **Counter sales** — walk-in or customer sales with totals and atomic stock
 updates. Each sale posts its own journal entry, and the Journal column shows
-whether it posted. Sales cannot take stock reserved for a special order.
+whether it posted. Sales cannot take stock reserved for special orders or on-hand RO holds.
 
 ![Parts counter sales](docs/screenshots/parts-counter-sale.png)
 
