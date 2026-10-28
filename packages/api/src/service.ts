@@ -10,7 +10,23 @@ import { ApiError, conflict, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
 import { choice, timestamp } from './crm-validation.js';
 import { invalid, object, onlyKeys, text, money, version } from './validation.js';
-import type { TenantRepository } from './repository.js';
+import type { CrmWrite, TenantRepository } from './repository.js';
+
+async function syncAppointment(repo: TenantRepository, principal: Principal, time: string, old: RepairOrder, order: RepairOrder): Promise<CrmWrite[]> {
+  if (old.status === order.status || !order.appointmentId) return [];
+  const finalized = (status: RepairOrder['status']) => status === 'completed' || status === 'picked-up';
+  if (!finalized(order.status) && !finalized(old.status)) return [];
+  const appointment = await repo.crmGet('service-appointment', order.appointmentId);
+  // A no-show is an explicit advisor decision; linked RO activity must not override it.
+  if (!appointment || appointment.status === 'no-show') return [];
+  const linked = (await repo.crmList('repair-order')).filter(r => r.appointmentId === appointment.id && r.id !== order.id);
+  const statuses = [order.status, ...linked.map(r => r.status)];
+  const status: ServiceAppointment['status'] = statuses.includes('picked-up') ? 'picked-up'
+    : statuses.includes('completed') ? 'done' : order.status === 'in-progress' ? 'in-service' : 'scheduled';
+  if (appointment.status === status) return [];
+  const record: ServiceAppointment = {...appointment, status, version: appointment.version + 1, updatedAt: time};
+  return [{record, expectedVersion: appointment.version, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: 'service-appointment.updated', occurredAt: time, deliveryStatus: 'pending'}}];
+}
 
 function date(value: unknown): string {
   const s = text(value, 'Date', 10);
@@ -154,7 +170,11 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
   const stockWrites = record.kind === 'repair-order' ? await reconcileStock(repo, principal, time, old?.kind === 'repair-order' ? old : undefined, record, negativeOverride(b.allowNegativeStock), reservedOverride(b.acknowledgeReservedStock)) : [];
   const reservedWarning = record.kind === 'repair-order' && record.reservedStockWarning && record.reservedStockWarning !== (old?.kind === 'repair-order' ? old.reservedStockWarning : undefined) ? record.reservedStockWarning : null;
   const journalWrites = record.kind === 'repair-order' ? await reconcilePosting(repo, principal, now, old?.kind === 'repair-order' ? old : undefined, record) : [];
-  await repo.crmWrite([...stockWrites, {record, expectedVersion: expected, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: `${record.kind}.${old ? 'updated' : 'created'}`, ...(reservedWarning ? {action:`repair-order.reserved-stock-acknowledged: ${reservedWarning.parts.map(p=>p.partNumber).join(', ')}`} : {}), occurredAt: time, deliveryStatus: 'pending'}}]);
+  const appointmentWrites = record.kind === 'repair-order' && old?.kind === 'repair-order' ? await syncAppointment(repo, principal, time, old, record) : [];
+  const appointmentFits = stockWrites.length + 1 + appointmentWrites.length <= 10;
+  await repo.crmWrite([...stockWrites, {record, expectedVersion: expected, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: `${record.kind}.${old ? 'updated' : 'created'}`, ...(reservedWarning ? {action:`repair-order.reserved-stock-acknowledged: ${reservedWarning.parts.map(p=>p.partNumber).join(', ')}`} : {}), occurredAt: time, deliveryStatus: 'pending'}}, ...(appointmentFits ? appointmentWrites : [])]);
+  // Keep appointment sync in this request even when stock fills the main batch.
+  if (!appointmentFits) await repo.crmWrite(appointmentWrites);
   // RO + stock can consume all ten writes; validated journal entries follow immediately.
   if (journalWrites.length) await repo.crmWrite(journalWrites);
   return response(old ? 200 : 201, {data: record.kind === 'repair-order' ? view(record) : record});

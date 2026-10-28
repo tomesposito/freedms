@@ -213,3 +213,107 @@ test('Photo and inspection validation rejects forged references, oversized uploa
   await call('A','POST','/service/labor-rates',{skill:'brakes',laborRateCents:100});
   assert.equal((await ro({...b,inspection:[{label:'X',status:'needs-attention',skill:'brakes'}]},'B')).status,400);
 });
+
+test('Completing a linked RO versions its appointment, emits an event and updates the service board', async () => {
+  const {appointment,ro,call,repositories,setTime} = await setup();
+  const ap = (await appointment()).data, r = (await ro({appointmentId:ap.id})).data;
+  setTime('2026-10-24T13:00:00Z');
+  assert.equal((await call('A','PUT',`/service/repair-orders/${r.id}`,{version:1,status:'completed'})).status,200);
+  const updated = (await call('A','GET',`/service/appointments/${ap.id}`)).data;
+  assert.deepEqual(updated,{...ap,status:'done',version:2,updatedAt:'2026-10-24T13:00:00.000Z'});
+  const events = repositories.eventsForTest('A').filter(e=>e.type==='service-appointment.updated');
+  assert.equal(events.length,1);
+  assert.deepEqual({...events[0],id:'generated'},{id:'generated',tenantId:'A',actorId:'userA',aggregateId:ap.id,aggregateVersion:2,type:'service-appointment.updated',occurredAt:updated.updatedAt,deliveryStatus:'pending'});
+  const board = (await call('A','GET','/service/board',undefined,{date:'2026-10-24'})).data;
+  assert.deepEqual(board.byStatus.done,[updated]); assert.deepEqual(board.byStatus.scheduled,[]);
+  assert.deepEqual(board.appointments,[updated]); assert.equal(board.repairOrders[0].status,'completed');
+  // Exercise J07's board-agreement check against the actual API response and renderer offline.
+  const {serviceBoardHtml} = await import('../../web/src/service.js');
+  const html = serviceBoardHtml(board);
+  assert.ok(html.includes(ap.customerName)); assert.ok(html.includes(ap.vehicleDescription));
+  assert.match(html,/Completed/); assert.doesNotMatch(html,/Scheduled \(1\)/);
+  assert.equal((await call('A','PUT',`/service/repair-orders/${r.id}`,{version:1,status:'open'})).status,409);
+  assert.deepEqual((await call('A','GET',`/service/appointments/${ap.id}`)).data,updated);
+});
+
+test('Pickup and reopening finalized ROs follow the appointment status mapping', async () => {
+  for (const finalized of ['completed','picked-up']) for (const [status,expected] of [['open','scheduled'],['in-progress','in-service']]) {
+    const {appointment,ro,call} = await setup();
+    const ap = (await appointment()).data, r = (await ro({appointmentId:ap.id})).data;
+    const path = `/service/repair-orders/${r.id}`, apPath = `/service/appointments/${ap.id}`;
+    assert.equal((await call('A','PUT',path,{version:1,status:finalized})).status,200);
+    assert.equal((await call('A','GET',apPath)).data.status,finalized==='completed'?'done':'picked-up');
+    assert.equal((await call('A','PUT',path,{version:2,status})).status,200);
+    const updated = (await call('A','GET',apPath)).data;
+    assert.equal(updated.status,expected); assert.equal(updated.version,3);
+  }
+});
+
+test('Walk-in completion and unchanged RO status do not write appointments', async () => {
+  const {appointment,ro,call,repositories} = await setup();
+  const walkIn = (await ro()).data;
+  assert.equal((await call('A','PUT',`/service/repair-orders/${walkIn.id}`,{version:1,status:'completed'})).status,200);
+  const ap = (await appointment()).data, r = (await ro({appointmentId:ap.id})).data;
+  assert.equal((await call('A','PUT',`/service/repair-orders/${r.id}`,{version:1,payType:'internal',status:'open'})).status,200);
+  assert.deepEqual((await call('A','GET',`/service/appointments/${ap.id}`)).data,ap);
+  assert.equal(repositories.eventsForTest('A').filter(e=>e.type==='service-appointment.updated').length,0);
+});
+
+test('Missing or foreign linked appointments are never changed by RO completion', async () => {
+  const {appointment,ro,call,repositories,b} = await setup();
+  const foreign = (await appointment(b,'B')).data;
+  assert.equal((await ro({appointmentId:foreign.id})).status,400);
+  for (const appointmentId of [foreign.id,'missing']) {
+    const r = (await ro()).data;
+    const repo = repositories.forTenant('A'), stored = (await repo.crmGet('repair-order',r.id))!;
+    // Simulate a legacy dangling reference that cannot be created through the API.
+    await repo.crmWrite([{record:{...stored,appointmentId,version:2},expectedVersion:1,event:{id:`dangling-${r.id}`,tenantId:'A',actorId:'userA',aggregateId:r.id,aggregateVersion:2,type:'repair-order.updated',occurredAt:r.updatedAt,deliveryStatus:'pending'}}]);
+    assert.equal((await call('A','PUT',`/service/repair-orders/${r.id}`,{version:2,status:'completed'})).status,200);
+  }
+  assert.deepEqual((await call('B','GET',`/service/appointments/${foreign.id}`)).data,foreign);
+  for (const tenant of ['A','B']) assert.equal(repositories.eventsForTest(tenant).filter(e=>e.type==='service-appointment.updated').length,0);
+});
+
+test('Shared appointments retain the highest finalized RO state until all ROs reopen', async () => {
+  const {appointment,ro,call} = await setup();
+  const ap = (await appointment()).data, first = (await ro({appointmentId:ap.id})).data, second = (await ro({appointmentId:ap.id})).data;
+  const update = async (r: RepairOrderView, status: string, expected: string) => {
+    const result = await call('A','PUT',`/service/repair-orders/${r.id}`,{version:r.version,status});
+    assert.equal(result.status,200); Object.assign(r,result.data);
+    assert.equal((await call('A','GET',`/service/appointments/${ap.id}`)).data.status,expected);
+  };
+  await update(first,'completed','done'); await update(second,'completed','done');
+  await update(first,'open','done'); await update(second,'picked-up','picked-up');
+  await update(first,'completed','picked-up'); await update(first,'in-progress','picked-up');
+  await update(second,'open','scheduled');
+});
+
+test('RO status changes preserve an advisor no-show decision', async () => {
+  const {appointment,ro,call,repositories} = await setup();
+  const ap = (await appointment({status:'no-show'})).data; let r = (await ro({appointmentId:ap.id})).data;
+  for (const status of ['completed','picked-up','open','completed','in-progress']) {
+    const result = await call('A','PUT',`/service/repair-orders/${r.id}`,{version:r.version,status});
+    assert.equal(result.status,200); r=result.data;
+    assert.deepEqual((await call('A','GET',`/service/appointments/${ap.id}`)).data,ap);
+  }
+  assert.equal(repositories.eventsForTest('A').filter(e=>e.type==='service-appointment.updated').length,0);
+});
+
+test('Appointment sync fits with eight stock writes and follows a full nine-part batch', async () => {
+  for (const count of [8,9]) {
+    const {appointment,ro,call} = await setup();
+    const ap = (await appointment()).data, lineItems = [];
+    for (let i=0;i<count;i++) {
+      const part = (await call('A','POST','/parts',{partNumber:`PART-${i}`,description:'Filter',costCents:100,retailPriceCents:200,quantityOnHand:10,reorderPoint:0,binLocation:''})).data;
+      lineItems.push({...parts,id:`line-${i}`,partId:part.id,quantity:1,unitPriceCents:200});
+    }
+    let r = (await ro({appointmentId:ap.id,lineItems})).data;
+    for (const [status,expected,quantity] of [['completed','done',9],['open','scheduled',10]] as const) {
+      const result = await call('A','PUT',`/service/repair-orders/${r.id}`,{version:r.version,status});
+      assert.equal(result.status,200); r=result.data;
+      assert.equal((await call('A','GET',`/service/appointments/${ap.id}`)).data.status,expected);
+      for (const line of lineItems) assert.equal((await call('A','GET',`/parts/${line.partId}`)).data.quantityOnHand,quantity);
+    }
+    assert.equal((await call('A','GET','/accounting/journal',undefined,{repairOrderId:r.id})).data.length,2);
+  }
+});
