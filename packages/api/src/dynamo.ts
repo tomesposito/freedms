@@ -7,13 +7,25 @@ import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, type VehicleQuery, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   constructor(private table: string, private client = DynamoDBDocumentClient.from(new DynamoDBClient({}))) {}
   forTenant(tenantId: string): TenantRepository {
     requireId(tenantId);
     const PK = `TENANT#${tenantId}`;
+    const list = async (query: VehicleQuery): Promise<Vehicle[]> => {
+      const vehicles: Vehicle[] = [];
+      let cursor: Record<string, unknown> | undefined;
+      do {
+        const result = await this.client.send(new QueryCommand({TableName: this.table,
+          KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+          ExpressionAttributeValues: {':pk': PK, ':prefix': 'VEHICLE#'}, ConsistentRead: true, ExclusiveStartKey: cursor}));
+        vehicles.push(...(result.Items ?? []).map(item => item.data as Vehicle).filter(v => matches(v, query)));
+        cursor = result.LastEvaluatedKey;
+      } while (cursor);
+      return vehicles;
+    };
     const key = (SK: string) => ({PK, SK});
     const get = async <T>(SK: string): Promise<T | undefined> => {
       const result = await this.client.send(new GetCommand({TableName: this.table, Key: key(SK), ConsistentRead: true}));
@@ -126,18 +138,9 @@ export class DynamoRepositories implements RepositoryFactory {
       membership: id => get<Membership>(`MEMBER#${requireId(id)}`),
       tenant: () => get<Tenant>('PROFILE'),
       get: id => get<Vehicle>(`VEHICLE#${requireId(id)}`),
-      list: async query => {
-        const vehicles: Vehicle[] = [];
-        let cursor: Record<string, unknown> | undefined;
-        do {
-          const result = await this.client.send(new QueryCommand({TableName: this.table,
-            KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-            ExpressionAttributeValues: {':pk': PK, ':prefix': 'VEHICLE#'}, ConsistentRead: true, ExclusiveStartKey: cursor}));
-          vehicles.push(...(result.Items ?? []).map(item => item.data as Vehicle).filter(v => matches(v, query)));
-          cursor = result.LastEvaluatedKey;
-        } while (cursor);
-        return vehicles;
-      },
+      list,
+      // Still reads every VEHICLE# query page; pagination only bounds the returned rows.
+      listPage: async query => vehiclePage(await list(query), query),
       create: async (v, event) => {
         assertScope(tenantId, v); assertEvent(v.id, v.version, event, 'vehicle.created');
         await transact([put(`VEHICLE#${requireId(v.id)}`, v), eventPut(event)]);

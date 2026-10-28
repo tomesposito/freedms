@@ -30,8 +30,11 @@ import './style.css';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const base = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
 let session: Session;
-let search = ''; let status = ''; let routeSequence = 0;
+let search = ''; let status = ''; let offset = 0; let routeSequence = 0;
 async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  return (await apiEnvelope<T>(path, method, body)).data;
+}
+async function apiEnvelope<T>(path: string, method = 'GET', body?: unknown): Promise<Extract<ApiEnvelope<T>, {data: T}>> {
   const response = await fetch(`${base}${path}`, {method, headers: {'content-type': 'application/json', ...(getToken() ? {authorization: `Bearer ${getToken()}`} : {})}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
   const result = await response.json() as ApiEnvelope<T>;
   if ('error' in result) {
@@ -39,7 +42,7 @@ async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
     throw Object.assign(new Error(result.error.message), {status: response.status});
   }
   if (!response.ok) throw new Error('The request could not be completed.');
-  return result.data;
+  return result;
 }
 async function download(path: string, filename: string): Promise<void> {
   const token = getToken();
@@ -117,16 +120,20 @@ async function login(): Promise<void> {
 async function list(sequence: number): Promise<void> {
   shell(`<div class="heading"><div><p class="eyebrow">YOUR LOT</p><h1>Inventory</h1><p class="muted">Stock, price, and track every vehicle.</p></div><div class="form-actions"><a class="button" href="#/import">Import CSV</a><a class="button primary" href="#/new">+ Add vehicle</a></div></div>${quickEntryCard}<form id="filters" class="filters"><label class="search">Search inventory<input name="search" type="search" maxlength="200" placeholder="Stock number, VIN, make, model, location" value="${e(search)}"></label><label>Status<select name="status"><option value="">All statuses</option>${vehicleStatuses.map(s => `<option ${s === status ? 'selected' : ''}>${s}</option>`).join('')}</select></label><button>Search</button></form><section id="results" aria-live="polite"><p class="muted">Loading inventory…</p></section>`);
   void bindQuickEntry('vehicle', api, () => sequence === routeSequence);
-  document.querySelector<HTMLFormElement>('#filters')!.addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget as HTMLFormElement); search = String(data.get('search') || '').trim(); status = String(data.get('status') || ''); void route(); });
+  document.querySelector<HTMLFormElement>('#filters')!.addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget as HTMLFormElement); search = String(data.get('search') || '').trim(); status = String(data.get('status') || ''); offset = 0; void route(); });
   document.querySelector<HTMLSelectElement>('[name=status]')!.addEventListener('change', () => document.querySelector<HTMLFormElement>('#filters')!.requestSubmit());
   const params = new URLSearchParams(); if (search) params.set('search', search); if (status) params.set('status', status);
-  const vehicles = await api<VehicleView[]>(`/vehicles?${params}`); if (sequence !== routeSequence) return;
+  params.set('limit', '100'); params.set('offset', String(offset));
+  const {data: vehicles, total = 0} = await apiEnvelope<VehicleView[]>(`/vehicles?${params}`); if (sequence !== routeSequence) return;
+  if (total && offset >= total) { offset = Math.floor((total - 1) / 100) * 100; await route(); return; }
   const results = document.querySelector('#results')!;
-  if (!vehicles.length) {
+  if (!total) {
     results.innerHTML = `<div class="empty"><div class="empty-icon" aria-hidden="true">◇</div><h2>${search || status ? 'No matching vehicles' : 'Your lot starts here'}</h2><p>${search || status ? 'Try a different search or status filter.' : 'Add your first vehicle to track pricing, reconditioning, and time on the lot.'}</p>${search || status ? '<button id="clear">Clear filters</button>' : '<a class="button primary" href="#/new">Add your first vehicle</a>'}</div>`;
-    document.querySelector('#clear')?.addEventListener('click', () => { search = ''; status = ''; void route(); }); return;
+    document.querySelector('#clear')?.addEventListener('click', () => { search = ''; status = ''; offset = 0; void route(); }); return;
   }
-  results.innerHTML = `<p class="muted count">${vehicles.length} vehicle${vehicles.length === 1 ? '' : 's'}</p><div class="table-wrap"><table><thead><tr><th>Vehicle / stock</th><th>Status</th><th>Mileage</th><th>List price</th><th>Recon</th><th>Age</th><th>Location</th></tr></thead><tbody>${vehicles.map(v => `<tr><td><a class="vehicle-link" href="#/vehicles/${v.id}">${e(`${v.year} ${v.make} ${v.model}`)}</a><small>${e(v.stockNumber)} · ${e(v.trim)}</small></td><td>${badge(v.status)}</td><td>${v.mileage == null ? '—' : v.mileage.toLocaleString('en-US')}</td><td>${currency(v.listPrice)}</td><td>${currency(v.reconTotal)}</td><td>${v.agingDays} days</td><td>${e(v.location) || '—'}</td></tr>`).join('')}</tbody></table></div>`;
+  results.innerHTML = `<p class="muted count">Showing ${vehicles.length ? offset + 1 : 0}–${offset + vehicles.length} of ${total} vehicles</p><div class="table-wrap"><table><thead><tr><th>Vehicle / stock</th><th>Status</th><th>Mileage</th><th>List price</th><th>Recon</th><th>Age</th><th>Location</th></tr></thead><tbody>${vehicles.map(v => `<tr><td><a class="vehicle-link" href="#/vehicles/${v.id}">${e(`${v.year} ${v.make} ${v.model}`)}</a><small>${e(v.stockNumber)} · ${e(v.trim)}</small></td><td>${badge(v.status)}</td><td>${v.mileage == null ? '—' : v.mileage.toLocaleString('en-US')}</td><td>${currency(v.listPrice)}</td><td>${currency(v.reconTotal)}</td><td>${v.agingDays} days</td><td>${e(v.location) || '—'}</td></tr>`).join('')}</tbody></table></div><div class="form-actions"><button id="prev" ${offset === 0 ? 'disabled' : ''}>Prev</button><button id="next" ${offset + vehicles.length >= total ? 'disabled' : ''}>Next</button></div>`;
+  document.querySelector('#prev')!.addEventListener('click', () => { offset = Math.max(0, offset - 100); void route(); });
+  document.querySelector('#next')!.addEventListener('click', () => { offset += 100; void route(); });
 }
 async function detail(id: string, sequence: number): Promise<void> {
   shell('<p>Loading vehicle…</p>'); const v = await api<VehicleView>(`/vehicles/${encodeURIComponent(id)}`); if (sequence !== routeSequence) return;

@@ -149,3 +149,45 @@ test('invalid mileage rejects creates and updates without writes or events', asy
   assert.equal((await call('A', 'GET', `/vehicles/${created.data.id}`)).data.mileage, 18500);
   assert.equal(repositories.eventsForTest('A').length, 2);
 });
+
+test('inventory defaults to 100 rows without changing full repository reads or tenant totals', async () => {
+  const {call, repositories} = await setup();
+  for (let i = 0; i < 103; i++) assert.equal((await call('A', 'POST', '/vehicles', {...input, stockNumber: `stock-${i}`})).status, 201);
+  await call('B', 'POST', '/vehicles', input);
+  const page = await call('A');
+  assert.equal(page.data.length, 100); assert.equal(page.total, 103); assert.equal(page.limit, 100); assert.equal(page.offset, 0);
+  assert.ok(page.data.every((v: VehicleView) => v.tenantId === 'A'));
+  assert.equal((await repositories.forTenant('A').list({})).length, 103);
+  const last = await call('A', 'GET', '/vehicles', undefined, {offset: '100'});
+  assert.equal(last.data.length, 3); assert.equal(last.total, 103);
+  const empty = await call('A', 'GET', '/vehicles', undefined, {offset: '103'});
+  assert.deepEqual(empty.data, []); assert.equal(empty.total, 103);
+});
+test('inventory pages are complete, ordered, filtered before paging and isolated', async () => {
+  const {call, repositories} = await setup();
+  const repo = repositories.forTenant('A');
+  for (const [i, id] of ['z', 'b', 'a', 'd', 'c'].entries()) {
+    const createdAt = i === 0 ? '2026-10-18T12:00:00Z' : now.toISOString();
+    await repo.create({...input, id, tenantId: 'A', version: 1, createdAt, updatedAt: createdAt, stockNumber: i < 4 ? 'match' : 'other', status: i < 3 ? 'available' : 'sold'}, {id, tenantId: 'A', actorId: 'user', aggregateId: id, aggregateVersion: 1, type: 'vehicle.created', occurredAt: createdAt, deliveryStatus: 'pending'});
+  }
+  await call('B', 'POST', '/vehicles', {...input, stockNumber: 'match'});
+  const ids: string[] = [];
+  for (const offset of ['0', '2', '4']) {
+    const page = await call('A', 'GET', '/vehicles', undefined, {limit: '2', offset});
+    assert.equal(page.total, 5); assert.equal(page.limit, 2); assert.equal(page.offset, Number(offset));
+    ids.push(...page.data.map((v: VehicleView) => v.id));
+  }
+  assert.deepEqual(ids, ['a', 'b', 'c', 'd', 'z']);
+  for (const [offset, expected] of [['0', ['a', 'b']], ['2', ['z']]] as const) {
+    const page = await call('A', 'GET', '/vehicles', undefined, {limit: '2', offset, status: 'available', search: 'MATCH'});
+    assert.equal(page.total, 3); assert.deepEqual(page.data.map((v: VehicleView) => v.id), expected);
+  }
+  const page = await repo.listPage({limit: 1, offset: 0}); page.vehicles[0].notes = 'changed';
+  assert.equal((await repo.get(page.vehicles[0].id))!.notes, '');
+});
+test('inventory rejects malformed or out-of-range pagination and unknown keys', async () => {
+  const {call} = await setup();
+  for (const query of [{limit: '0'}, {limit: '501'}, {limit: 'abc'}, {limit: '1.5'}, {offset: '-1'}, {offset: 'abc'}, {offset: '1.5'}, {limit: ''}, {limit: ' 1'}, {limit: '1x'}, {limit: '1e2'}, {offset: '9007199254740992'}, {unknown: '1'}]) {
+    assert.equal((await call('A', 'GET', '/vehicles', undefined, query)).status, 400, JSON.stringify(query));
+  }
+});

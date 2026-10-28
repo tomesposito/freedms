@@ -75,7 +75,7 @@ invites. Nothing is created until Finish; the workspace starts empty.
 
 ![Invite welcome](docs/screenshots/invite-welcome.png)
 
-**Inventory** — every vehicle with mileage, aging, cost, and status.
+**Inventory** — vehicles in pages of 100, with mileage, aging, cost, and status.
 
 ![Inventory list](docs/screenshots/inventory-list.png)
 

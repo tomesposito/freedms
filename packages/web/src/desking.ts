@@ -1,3 +1,4 @@
+import { fetchAllVehicles } from './vehicles.js';
 import { mountSharePanel } from './retail';
 import { leaseSummary } from './lease';
 import { menuHtml } from './fi';
@@ -21,7 +22,7 @@ export async function dealsRoute(parts: string[], ui: UI): Promise<void> {
   document.querySelector<HTMLFormElement>('#deal-filter')!.addEventListener('submit', event => { event.preventDefault(); filter = String(new FormData(event.currentTarget as HTMLFormElement).get('status')); ui.refresh(); });
 }
 async function startDeal(parts: string[], ui: UI) {
-  const [vehicles, customers, lead] = await Promise.all([ui.api<Vehicle[]>('/vehicles'), ui.api<Customer[]>('/customers'), parts[2] === 'lead' && parts[3] ? ui.api<LeadView>(`/leads/${encodeURIComponent(parts[3])}`) : Promise.resolve(null)]); if (!ui.current()) return;
+  const [vehicles, customers, lead] = await Promise.all([fetchAllVehicles<Vehicle>(ui.api), ui.api<Customer[]>('/customers'), parts[2] === 'lead' && parts[3] ? ui.api<LeadView>(`/leads/${encodeURIComponent(parts[3])}`) : Promise.resolve(null)]); if (!ui.current()) return;
   const available = vehicles.filter(v => v.status !== 'sold');
   const selected = lead?.vehicleId ?? (parts[2] === 'vehicle' ? parts[3] : '');
   ui.shell(`<a class="back" href="#/deals">← Deals</a><h1>Start deal</h1>${!available.length || !customers.length ? `<section class="empty"><h2>${!available.length ? 'Add a vehicle to get started' : 'Add a buyer to get started'}</h2><p>A deal needs an unsold inventory vehicle and a customer.</p><a class="button" href="#/new">Add vehicle</a> <a class="button" href="#/leads/new">Add customer / lead</a></section>` : `<form id="start-deal" class="card"><div class="form-grid">${select('Vehicle', 'vehicleId', available.map(v => `<option value="${v.id}" ${selected === v.id ? 'selected' : ''}>${e(title(v))}</option>`).join(''))}${select('Buyer', 'customerId', (lead ? customers.filter(c => c.id === lead.customerId) : customers).map(c => `<option value="${c.id}">${e(c.name)}</option>`).join(''))}${select('Deal type', 'type', options(['cash', 'finance', 'lease'], 'finance'))}</div>${lead ? `<p>Originating lead: <a href="#/leads/${lead.id}">${e(lead.customer.name)}</a></p>` : ''}<button class="primary">Start worksheet</button></form>`}`);

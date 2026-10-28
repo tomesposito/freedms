@@ -1,3 +1,4 @@
+import { fetchAllVehicles } from './vehicles.js';
 import { serviceHistoryHtml } from './service';
 import type { RepairOrderView } from '@freedms/shared';
 import type { EquityMiningEntry, CustomerTimelineEntry } from '@freedms/shared';
@@ -32,7 +33,7 @@ export async function crmRoute(parts: string[], ui: UI): Promise<void> {
   const users = await ui.api<User[]>('/users'); if (!ui.current()) return;
   if (parts[1] === 'equity') { await equityMining(ui); return; }
   if (parts[1] === 'new') {
-    const [customers, vehicles] = await Promise.all([ui.api<Customer[]>('/customers'), ui.api<VehicleView[]>('/vehicles')]); if (!ui.current()) return;
+    const [customers, vehicles] = await Promise.all([ui.api<Customer[]>('/customers'), fetchAllVehicles<VehicleView>(ui.api)]); if (!ui.current()) return;
     const draft = takeLeadDraft();
     ui.shell(`<a class="back" href="#/leads">← Leads</a><h1>Add lead</h1>${draft ? reviewNote : ''}<form id="lead-form"><section class="card"><h2>Customer</h2>${select('Choose customer', 'customerId', '<option value="">Create a new customer</option>' + customers.map(c => `<option value="${c.id}">${e(`${c.name} · ${c.email || c.phone}`)}</option>`).join(''))}<fieldset id="new-customer">${customerFields()}</fieldset></section><section class="card"><h2>Lead details</h2><div class="form-grid">${select('Source', 'source', options(leadSources))}${input('Vehicle description / interest', 'vehicleDescription', '', 'maxlength="1000"')}${input('Source details', 'sourceDetail', '', 'maxlength="500"')}${select('Assigned to', 'assigneeId', userOptions(users))}${select('Vehicle of interest', 'vehicleId', vehicleOptions(vehicles))}</div></section><div class="form-actions"><a class="button" href="#/leads">Cancel</a><button class="primary">Save lead</button></div></form>`);
     if (draft) fillDraft(document.querySelector<HTMLFormElement>('#lead-form')!, {...draft.customer, vehicleDescription: draft.vehicleDescription ?? '', source: draft.source ?? 'walk-in', sourceDetail: draft.sourceDetail ?? ''});
@@ -59,7 +60,7 @@ export async function crmRoute(parts: string[], ui: UI): Promise<void> {
   });
 }
 async function leadDetail(id: string, users: User[], ui: UI) {
-  const [l, vehicles] = await Promise.all([ui.api<LeadView>(`/leads/${encodeURIComponent(id)}`), ui.api<VehicleView[]>('/vehicles')]); if (!ui.current()) return;
+  const [l, vehicles] = await Promise.all([ui.api<LeadView>(`/leads/${encodeURIComponent(id)}`), fetchAllVehicles<VehicleView>(ui.api)]); if (!ui.current()) return;
   const c = l.customer; const vehicle = vehicles.find(v => v.id === l.vehicleId);
   const serviceHistory = await ui.api<RepairOrderView[]>(`/service/repair-orders?customerId=${encodeURIComponent(c.id)}`); if (!ui.current()) return;
   const communications = await ui.api<Customer & {timeline: CustomerTimelineEntry[]}>(`/customers/${c.id}`); if (!ui.current()) return;

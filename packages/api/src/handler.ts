@@ -115,11 +115,16 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (method === 'GET') {
           if (id) { const vehicle = await repository.get(id); if (!vehicle) throw missing(); return response(200, {data: view(vehicle, now())}); }
           const query = request.query ?? {};
-          onlyKeys(query, ['status', 'search']);
+          onlyKeys(query, ['status', 'search', 'limit', 'offset']);
           if (query.status && !vehicleStatuses.includes(query.status as typeof vehicleStatuses[number])) throw invalid('Invalid status filter.');
-          const vehicles = await repository.list({status: query.status as typeof vehicleStatuses[number] | undefined, search: query.search ? text(query.search, 'Search', 200) : undefined});
-          vehicles.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
-          return response(200, {data: vehicles.map(v => view(v, now()))});
+          const pageNumber = (value: string | undefined, fallback: number, min: number, max: number): number => {
+            if (value === undefined) return fallback;
+            if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < min || Number(value) > max) throw invalid('Invalid pagination parameter.');
+            return Number(value);
+          };
+          const limit = pageNumber(query.limit, 100, 1, 500), offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+          const {vehicles, total} = await repository.listPage({limit, offset, status: query.status as typeof vehicleStatuses[number] | undefined, search: query.search ? text(query.search, 'Search', 200) : undefined});
+          return response(200, {data: vehicles.map(v => view(v, now())), total, limit, offset});
         }
         if (!((method === 'POST' && !id) || (['PUT', 'DELETE'].includes(method) && id))) throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
         requireWrite(principal, method);

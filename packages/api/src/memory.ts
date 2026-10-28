@@ -5,7 +5,7 @@ import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import type { CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
-import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 interface State { mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
@@ -89,6 +89,10 @@ export class MemoryRepositories implements RepositoryFactory {
       membership: async id => structuredClone(s.memberships.get(id)),
       tenant: async () => structuredClone(s.tenant),
       list: async query => structuredClone([...s.vehicles.values()].filter(v => matches(v, query))),
+      listPage: async query => {
+        const page = vehiclePage([...s.vehicles.values()].filter(v => matches(v, query)), query);
+        return {...page, vehicles: structuredClone(page.vehicles)};
+      },
       get: async id => structuredClone(s.vehicles.get(id)),
       create: async (v, event) => {
         assertScope(tenantId, v); check(event); assertEvent(v.id, v.version, event, 'vehicle.created');

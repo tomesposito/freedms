@@ -137,3 +137,24 @@ API-created records have current creation/posting timestamps: the full
 profile models ten years of record volume, not ten years of dated history.
 Surplus sold vehicles have no associated deal posting; parts lines are
 unlinked synthetic charges, with stocked parts seeded separately.
+
+## Inventory pagination (#51)
+
+`GET /vehicles` returns a page (default `limit=100`, maximum 500, default
+`offset=0`). The envelope includes `data`, `total`, `limit`, and `offset`;
+status/search filters and createdAt descending, id ascending ordering apply
+before paging. The unchanged harness measures the bounded first page.
+Memory reads clone only that page. Dynamo still queries all tenant VEHICLE#
+records before filtering, sorting and slicing; this is not a Dynamo-side
+query optimization. Internal repository `list()` callers still receive all matches.
+
+Local check on 2026-10-28 (Node v24.22.1): seeded the smoke profile with
+`--heavy-vehicles 10000 --light-tenants 0` (24 customers, 120 leads,
+15 deals, 40 repair orders). Ran the unchanged measure CLI with 100 requests
+per endpoint, peak 5 and 10x 50. A repeat run after the build finished measured
+inventory-list p95 **55.4 ms / 299.0 ms**, with zero errors; both meet 300 ms,
+though the 50-worker result has little headroom. Two measurement runs added
+100 scratch vehicles in total beyond the 10,000 seeded vehicles. The first
+run overlapped the build and measured 93.7 ms / 797.4 ms. This is an inventory
+volume probe, not a reproduction of the full Dataset B customer/lead counts;
+other endpoint budgets remain separate follow-ups.

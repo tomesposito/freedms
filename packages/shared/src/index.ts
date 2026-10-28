@@ -50,7 +50,7 @@ export interface OutboxEvent {
   occurredAt: string; deliveryStatus: 'pending';
 }
 export interface DecodedVin { vin: string; year: number | null; make: string; model: string; trim: string; warnings: string[] }
-export type ApiEnvelope<T> = { data: T } | { error: { code: string; message: string } };
+export type ApiEnvelope<T> = { data: T; total?: number; limit?: number; offset?: number } | { error: { code: string; message: string } };
 export interface AuthClaims { email?: string; email_verified?: boolean | string; sub: string; 'custom:tenant_id': string; iss: string; aud: string; exp: number; token_use: 'id' }
 
 export const leadSources = ['walk-in', 'phone', 'website', 'marketplace', 'referral', 'other'] as const;

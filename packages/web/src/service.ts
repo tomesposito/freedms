@@ -1,3 +1,4 @@
+import { fetchAllVehicles } from './vehicles.js';
 import { signatureCaptureHtml, bindSignatureCapture, signatureHistoryHtml, signatureStatusLabel } from './signatures';
 import { SERVICE_SIGNATURE_CONSENT } from '@freedms/shared';
 import { catalogPage, skillOptions, inspectionHtml, inspectionRow, inspectionResults, bindInspection } from './service-depth';
@@ -48,7 +49,7 @@ export async function serviceRoute(parts: string[], ui: UI): Promise<void> {
   if (!['appointments','repair-orders'].includes(parts[1]) || !parts[2]) throw new Error('Service page not found.');
   const creating = parts[2] === 'new', base = `/service/${parts[1]}`;
   const [customers,vehicles,users,record,appointment,catalog,journal,technicians,rates] = await Promise.all([
-    ui.api<Customer[]>('/customers'),ui.api<VehicleView[]>('/vehicles'),ui.api<User[]>('/users'),
+    ui.api<Customer[]>('/customers'),fetchAllVehicles<VehicleView>(ui.api),ui.api<User[]>('/users'),
     creating ? undefined : ui.api<ServiceAppointment | RepairOrderView>(`${base}/${encodeURIComponent(parts[2])}`),
     creating && !appt && parts[3] ? ui.api<ServiceAppointment>(`/service/appointments/${encodeURIComponent(parts[3])}`) : undefined,
     appt ? [] : ui.api<Part[]>('/parts'),

@@ -182,3 +182,17 @@ test('Audit outbox pagination and privacy reads stay in the authenticated tenant
   assert.equal(await repo.crmGet('privacy-request', 'foreign-id'), undefined);
   assert.deepEqual((await repo.events()).map(e => e.id), ['e', 'second']); assert.equal(pages, 2);
 });
+
+test('Dynamo vehicle pages filter and sort across all query pages before slicing', async () => {
+  let calls = 0;
+  const client = {send: async (command: QueryCommand) => {
+    assert.equal(command.input.ExpressionAttributeValues?.[':pk'], 'TENANT#A');
+    assert.equal(command.input.ExpressionAttributeValues?.[':prefix'], 'VEHICLE#');
+    calls++;
+    if (calls === 1) return {Items: [{data: {...vehicle, id: 'z'}}, {data: {...vehicle, id: 'excluded', status: 'sold'}}], LastEvaluatedKey: {PK: 'TENANT#A', SK: 'VEHICLE#z'}};
+    assert.deepEqual(command.input.ExclusiveStartKey, {PK: 'TENANT#A', SK: 'VEHICLE#z'});
+    return {Items: [{data: {...vehicle, id: 'a'}}, {data: {...vehicle, id: 'newer', createdAt: '2026-10-20T00:00:00Z'}}]};
+  }} as unknown as DynamoDBDocumentClient;
+  const page = await new DynamoRepositories('table', client).forTenant('A').listPage({limit: 1, offset: 1, status: 'available', search: 'TEST'});
+  assert.equal(calls, 2); assert.equal(page.total, 3); assert.deepEqual(page.vehicles.map(v => v.id), ['a']);
+});

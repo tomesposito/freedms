@@ -1,3 +1,4 @@
+import { fetchAllVehicles } from './vehicles.js';
 import { vehicleStatuses, type FeedConfig, type FeedOptions, type FeedRun, type Vehicle } from '@freedms/shared';
 import { escapeHtml as e } from './format';
 import type { UI } from './desking';
@@ -7,7 +8,7 @@ export function feedRunHtml(run: FeedRun): string {
 export async function feedRoute(ui: UI & {download: (path: string, filename: string) => Promise<void>}): Promise<void> {
   ui.shell('<p>Loading feeds…</p>');
   try {
-    const [settings, runs, vehicles] = await Promise.all([ui.api<{config: FeedConfig | null; defaults: FeedOptions}>('/feeds/config'), ui.api<FeedRun[]>('/feeds/runs'), ui.api<Vehicle[]>('/vehicles')]);
+    const [settings, runs, vehicles] = await Promise.all([ui.api<{config: FeedConfig | null; defaults: FeedOptions}>('/feeds/config'), ui.api<FeedRun[]>('/feeds/runs'), fetchAllVehicles<Vehicle>(ui.api)]);
     if (!ui.current()) return;
     const config = settings.config ?? settings.defaults;
     ui.shell(`<h1>Feeds</h1><p>Generic listing files for local download. No partner connection exists and nothing is transmitted to any marketplace. Generation happens when you click Generate. A future hosted scheduler could use the configured cadence; no scheduler runs here.</p>

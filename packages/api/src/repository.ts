@@ -36,6 +36,7 @@ export interface TenantRepository {
   membership(userId: string): Promise<Membership | undefined>;
   tenant(): Promise<Tenant | undefined>;
   list(query: VehicleQuery): Promise<Vehicle[]>;
+  listPage(query: VehicleQuery & {limit: number; offset: number}): Promise<{vehicles: Vehicle[]; total: number}>;
   get(id: string): Promise<Vehicle | undefined>;
   create(vehicle: Vehicle, event: OutboxEvent): Promise<void>;
   update(vehicle: Vehicle, expectedVersion: number, event: OutboxEvent): Promise<void>;
@@ -101,4 +102,9 @@ export function assertMfa(tenantId: string, record: MfaRecord, expectedVersion: 
   if (!['mfa.setup', 'mfa.enabled', 'mfa.disabled', 'mfa.reset', 'mfa.recovery_regenerated', 'mfa.verified'].includes(event.type)) throw new Error('Invalid MFA outbox event');
   assertEvent(record.userId, record.version, event, event.type);
   if (record.id !== record.userId || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid MFA version');
+}
+
+export function vehiclePage(vehicles: Vehicle[], {limit, offset}: {limit: number; offset: number}): {vehicles: Vehicle[]; total: number} {
+  vehicles.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+  return {vehicles: vehicles.slice(offset, offset + limit), total: vehicles.length};
 }
