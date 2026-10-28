@@ -173,3 +173,19 @@ leads and their customers are cloned. Orphan leads are excluded from matches.
 Dynamo still reads every tenant LEAD# and CUSTOMER# query page before joining,
 filtering and paging; pagination bounds returned rows, not Dynamo query work.
 Internal `crmList('lead')` and `crmList('customer')` callers still receive all rows.
+
+Local check on 2026-10-28 (Node v24.22.1): seeded the smoke profile with
+`--heavy-leads 12000 --heavy-customers 2400 --light-tenants 0` (100 vehicles,
+10 deals, 40 repair orders; Dataset A's lead count) and ran the unchanged
+measure CLI with 100 requests per endpoint, peak 5 and 10x 50.
+Lead-pipeline-board measured p95 **107.0 ms at peak — PASS** and
+**430.0 ms at 10x — FAIL** against the 300 ms read budget, with zero errors
+at both levels. Before this fix, Dataset A measured p95 4,403 ms at peak and
+61,815 ms at 10x with 13 transport errors in 100, so the peak budget is now
+met and the 10x result is ~144x faster with the error failures gone; a
+sequential (unconcurrent) board read at this dataset takes p50 13.7 ms.
+The residual 10x miss is per-request CPU: the memory read still scans the
+tenant's full lead set to filter and total, and 50 concurrent scans queue
+on a single process. That residual is tracked as a separate follow-up;
+Dataset B (49,271 leads) was not re-measured in this check. Other endpoint
+budgets remain separate follow-ups.
