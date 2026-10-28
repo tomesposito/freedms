@@ -282,3 +282,24 @@ board JSON per 100-request batch between the Node measure client and the
 Node server on this 2-core local box. That residual is tracked as a
 separate follow-up; this is a local in-memory measurement, not hosted
 (DynamoDB) capacity evidence, and Dataset B was not re-measured.
+
+## Sales report date-bounded read (#55)
+
+`GET /reports/sales` uses `salesReportRows(range)` to retain only sold deals
+inside the inclusive UTC `from`/`to` bounds (null means unbounded). Both backends
+share selection logic: use the last sold history entry, falling back to
+`updatedAt`. Only vehicles and customers referenced by selected deals are loaded,
+once per distinct id. Missing selected references or working pencils still fail
+with the existing error; excluded deals do not trigger those lookups.
+
+Memory scans raw tenant CRM rows once, resolves vehicle/customer ids from its
+maps, and clones only selected deals and referenced rows. Dynamo filters each
+deal page before fetching the next and consistently point-gets referenced
+vehicles and customers without listing either set. Dynamo still reads every
+deal row: the bound is on retained/materialized rows and related vehicle/customer
+sets, not Dynamo-side date query work. The complete report, ordering, integer
+cent totals, accounting callers and CSV outputs retain their existing contracts.
+The #49 scale harness is unchanged; these checks are local and offline, not
+hosted capacity evidence.
+
+Local check: results will be filled in after measurement by the supervisor.

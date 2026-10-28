@@ -3,7 +3,7 @@ import type { MfaRecord } from '@freedms/shared';
 import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
-import type { CrmEntity, Lead, Customer, ServiceAppointment, RepairOrder, SignatureRecord, Technician } from '@freedms/shared';
+import type { CrmEntity, Deal, Lead, Customer, ServiceAppointment, RepairOrder, SignatureRecord, Technician } from '@freedms/shared';
 import type { Membership, OutboxEvent, Tenant, User, Vehicle, VehicleStatus } from '@freedms/shared';
 export interface VehicleQuery { status?: VehicleStatus; search?: string }
 export interface LeadQuery { search?: string; stage?: Lead['stage']; assignee?: string | null; limit: number; offset: number }
@@ -35,6 +35,7 @@ export interface TenantRepository {
   users(): Promise<User[]>;
   serviceBoardEpoch(): Promise<number>;
   serviceBoard(day: string): Promise<ServiceBoardRows>;
+  salesReportRows(range: SalesReportRange): Promise<SalesReportRows>;
   leadSummary(): Promise<LeadReport>;
   leadListPage(query: LeadQuery): Promise<LeadPage>;
   crmList<K extends CrmEntity['kind']>(kind: K): Promise<Extract<CrmEntity, {kind: K}>[]>;
@@ -237,6 +238,30 @@ export function serviceBoardSelection(day: string, ordered = false) {
         board.signatures = board.signatures.filter(matchesSignature);
       }
       return board;
+    }
+  };
+}
+
+export interface SalesReportRange { from: string | null; to: string | null }
+export interface SalesReportRows { deals: Deal[]; vehicles: Vehicle[]; customers: Customer[] }
+
+export function soldDate(deal: Deal): string {
+  const timestamp = [...deal.history].reverse().find(h => h.status === 'sold')?.timestamp ?? deal.updatedAt;
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
+/** Retain only sold deals in the inclusive UTC date range, in input order. */
+export function salesReportSelection(range: SalesReportRange) {
+  const deals: Deal[] = [], vehicleIds = new Set<string>(), customerIds = new Set<string>();
+  return {
+    deals, vehicleIds, customerIds,
+    add(rows: Iterable<CrmEntity>) {
+      for (const deal of rows) {
+        if (deal.kind !== 'deal' || deal.status !== 'sold') continue;
+        const date = soldDate(deal);
+        if ((range.from && date < range.from) || (range.to && date > range.to)) continue;
+        deals.push(deal); vehicleIds.add(deal.vehicleId); customerIds.add(deal.customerId);
+      }
     }
   };
 }

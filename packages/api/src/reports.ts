@@ -1,10 +1,11 @@
 import { stockedCost } from './fixed-ops.js';
 import { repairOrderTotals, type FixedOpsReport } from '@freedms/shared';
 import type { Track } from './analytics.js';
-import { agingBuckets, pencilMath, type Deal, type InventoryReport, type LeadReport, type SalesReport, type Vehicle } from '@freedms/shared';
+import { agingBuckets, pencilMath, type InventoryReport, type LeadReport, type SalesReport, type Vehicle } from '@freedms/shared';
 import { ApiError, missing } from './errors.js';
 import { csvResponse, response, type ApiRequest } from './handler.js';
-import type { TenantRepository } from './repository.js';
+import { soldDate, type TenantRepository } from './repository.js';
+export { soldDate } from './repository.js';
 import { invalid, onlyKeys, view } from './validation.js';
 
 export function toCsv(rows: string[][]): string {
@@ -12,10 +13,6 @@ export function toCsv(rows: string[][]): string {
 }
 const dollars = (cents: number) => (cents / 100).toFixed(2);
 const description = (v: Vehicle) => `${v.year} ${v.make} ${v.model}`;
-export function soldDate(deal: Deal): string {
-  const timestamp = [...deal.history].reverse().find(h => h.status === 'sold')?.timestamp ?? deal.updatedAt;
-  return new Date(timestamp).toISOString().slice(0, 10);
-}
 export function dateRange(query: ApiRequest['query'] = {}) {
   onlyKeys(query, ['from', 'to']);
   for (const value of [query.from, query.to]) {
@@ -34,12 +31,11 @@ export async function inventoryReport(repo: TenantRepository, now: Date): Promis
     totals: {count: rows.length, totalCost: rows.reduce((sum, r) => sum + r.totalCost, 0), totalListPrice: rows.reduce((sum, r) => sum + r.listPrice, 0)}};
 }
 export async function salesReport(repo: TenantRepository, range: ReturnType<typeof dateRange>): Promise<SalesReport> {
-  const [deals, vehicles, customers] = await Promise.all([repo.crmList('deal'), repo.list({}), repo.crmList('customer')]);
+  const {deals, vehicles, customers} = await repo.salesReportRows(range);
   const vehicleMap = new Map(vehicles.map(v => [v.id, v])), customerMap = new Map(customers.map(c => [c.id, c]));
   const rows: SalesReport['rows'] = [];
-  for (const deal of deals.filter(d => d.status === 'sold')) {
+  for (const deal of deals) {
     const date = soldDate(deal);
-    if ((range.from && date < range.from) || (range.to && date > range.to)) continue;
     const vehicle = vehicleMap.get(deal.vehicleId), customer = customerMap.get(deal.customerId), pencil = deal.pencils.find(p => p.id === deal.workingPencilId);
     if (!vehicle || !customer || !pencil) throw missing();
     const numbers = pencilMath(pencil, deal.trade, deal, vehicle, pencil.type ?? deal.type);

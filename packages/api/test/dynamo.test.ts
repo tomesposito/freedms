@@ -303,3 +303,27 @@ test('Dynamo service epoch uses a consistent Get and one conditional Put in the 
   assert.equal(commands.length,1);
   assert.deepEqual((commands[0] as TransactWriteCommand).input.TransactItems?.map(i=>i.Put?.Item?.SK),['LEAD#lead','EVENT#e']);
 });
+
+test('Dynamo sales read filters each deal page before advancing, including empty pages', async () => {
+  let calls = 0, consumed = true;
+  const client = {send: async (command: QueryCommand) => {
+    assert.ok(command instanceof QueryCommand, 'excluded deals must not cause point gets');
+    assert.ok(consumed, 'filter the previous page before advancing');
+    const input = command.input;
+    assert.equal(input.TableName, 'table'); assert.equal(input.ConsistentRead, true);
+    assert.equal(input.ExpressionAttributeValues?.[':prefix'], 'DEAL#');
+    assert.equal(input.KeyConditionExpression, 'PK = :pk AND begins_with(SK, :prefix)');
+    if (input.ExpressionAttributeValues?.[':pk'] === 'TENANT#B') return {};
+    assert.equal(input.ExpressionAttributeValues?.[':pk'], 'TENANT#A');
+    const page = calls++;
+    assert.deepEqual(input.ExclusiveStartKey, page ? {PK: 'TENANT#A', SK: `DEAL#${page}`} : undefined);
+    consumed = page === 1;
+    return {Items: page === 1 ? [] : [{data: {kind: 'deal',
+      get status() { assert.equal(calls, page + 1); consumed = true; return 'sold'; },
+      history: [], updatedAt: '2026-09-01T00:00:00Z'}}],
+      ...(page < 2 ? {LastEvaluatedKey: {PK: 'TENANT#A', SK: `DEAL#${page + 1}`}} : {})};
+  }} as unknown as DynamoDBDocumentClient;
+  const repositories = new DynamoRepositories('table', client), range = {from: '2026-10-01', to: null};
+  for (const tenant of ['A', 'B']) assert.deepEqual(await repositories.forTenant(tenant).salesReportRows(range), {deals: [], vehicles: [], customers: []});
+  assert.equal(calls, 3);
+});

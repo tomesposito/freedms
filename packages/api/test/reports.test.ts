@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { leadSources, leadStages, pencilMath, type CrmEntity, type Lead, type DealView, type InventoryReport, type LeadReport, type SalesReport } from '@freedms/shared';
+import { leadSources, leadStages, pencilMath, type Deal, type CrmEntity, type Lead, type DealView, type InventoryReport, type LeadReport, type SalesReport } from '@freedms/shared';
 import { countLeads } from '../src/repository.js';
 import { MemoryRepositories } from '../src/memory.js';
 import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
-import { inventoryCsv, leadReport, leadCsv, salesCsv, soldDate, toCsv } from '../src/reports.js';
+import { salesReport, inventoryCsv, leadReport, leadCsv, salesCsv, soldDate, toCsv } from '../src/reports.js';
 
 function parseCsv(csv: string): string[][] {
   const rows: string[][] = []; let row: string[] = [], cell = '', quoted = false;
@@ -142,11 +142,12 @@ test('missing sold deal references or working pencil fail closed without partial
   const repo = s.repositories.forTenant('A');
   for (const missing of ['vehicle', 'customer', 'pencil']) {
     const handler = createHandler({forTenant: () => new Proxy(repo, {get(target, property) {
-      if (property === 'list' && missing === 'vehicle') return async () => [];
-      if (property === 'crmList') return async (kind: Parameters<typeof repo.crmList>[0]) => {
-        if (missing === 'customer' && kind === 'customer') return [];
-        const rows = await target.crmList(kind);
-        return missing === 'pencil' && kind === 'deal' ? rows.map(r => ({...r, workingPencilId: 'missing'})) : rows;
+      if (property === 'salesReportRows') return async (range: Parameters<typeof repo.salesReportRows>[0]) => {
+        const rows = await target.salesReportRows(range);
+        if (missing === 'vehicle') rows.vehicles = [];
+        if (missing === 'customer') rows.customers = [];
+        if (missing === 'pencil') rows.deals = rows.deals.map(r => ({...r, workingPencilId: 'missing'}));
+        return rows;
       };
       return Reflect.get(target, property);
     }})}, {decode: async () => { throw new Error('No network'); }});
@@ -214,4 +215,85 @@ test('memory lead summary avoids cloning and full-list reads, stays fresh and te
   assert.equal(updated.byStage.find(row => row.stage === 'contacted')!.count, 1);
   updated.byStage[0].count = 999;
   assert.equal((await repo.leadSummary()).byStage[0].count, 0);
+});
+
+
+test('sales bounded read preserves rows and totals amid unrelated data and clones only selected references', async t => {
+  const s = await setup();
+  await s.sell('2026-10-02', 1); await s.sell('2026-10-03', 2);
+  const repo = s.repositories.forTenant('A'), range = {from: '2026-10-02', to: '2026-10-03'};
+  const expected = await salesReport(repo, range), template = (await repo.crmList('deal'))[0];
+  const vehicle = (await repo.list({}))[0];
+  const write = async (record: CrmEntity) => repo.crmWrite([{record, expectedVersion: 0, event: {
+    id: record.id, tenantId: 'A', actorId: 'userA', aggregateId: record.id, aggregateVersion: 1,
+    type: `${record.kind}.created` as 'deal.created', occurredAt: record.createdAt, deliveryStatus: 'pending'
+  }}]);
+  for (let i = 0; i < 1000; i++) {
+    const v = {...vehicle, id: `unrelated-v-${i}`, version: 1};
+    await repo.create(v, {id: v.id, tenantId: 'A', actorId: 'userA', aggregateId: v.id, aggregateVersion: 1,
+      type: 'vehicle.created', occurredAt: v.createdAt, deliveryStatus: 'pending'});
+    await write({...s.customer, id: `unrelated-c-${i}`, version: 1});
+    await write({...template, id: `excluded-${i}`, version: 1, status: i % 2 ? 'working' : 'sold',
+      history: [], updatedAt: i % 4 ? '2026-10-01T23:59:59Z' : '2026-10-04T00:00:00Z',
+      vehicleId: 'missing', customerId: 'missing', workingPencilId: 'missing'});
+  }
+  const clone = structuredClone;
+  const spy = t.mock.method(globalThis, 'structuredClone', (value: unknown) => {
+    const rows = value as Awaited<ReturnType<typeof repo.salesReportRows>>;
+    assert.equal(rows.deals.length, 2); assert.equal(rows.vehicles.length, 2); assert.equal(rows.customers.length, 1);
+    return clone(value);
+  });
+  const guarded = new Proxy(repo, {get(target, property) {
+    if (property === 'list' || property === 'crmList') return () => { throw new Error('no full lists'); };
+    return Reflect.get(target, property);
+  }});
+  assert.equal(JSON.stringify(await salesReport(guarded, range)), JSON.stringify(expected));
+  const rows = await repo.salesReportRows(range); rows.deals[0].history = []; rows.vehicles[0].cost = -1; rows.customers[0].name = 'mutated';
+  assert.deepEqual(await salesReport(guarded, range), expected);
+  spy.mock.restore();
+  assert.deepEqual(await s.repositories.forTenant('B').salesReportRows(range), {deals: [], vehicles: [], customers: []});
+});
+
+test('memory and Dynamo sales selection agree on UTC boundaries, history fallback and dangling references', async () => {
+  const {DynamoRepositories} = await import('../src/dynamo.js');
+  const {GetCommand, QueryCommand} = await import('@aws-sdk/lib-dynamodb');
+  const s = await setup(); await s.sell('2026-10-02', 1);
+  const repo = s.repositories.forTenant('A'), template = (await repo.crmList('deal'))[0];
+  const vehicles = await repo.list({}), customers = await repo.crmList('customer');
+  const range = {from: '2026-10-02', to: '2026-10-03'};
+  for (const fault of ['none', 'vehicle', 'customer', 'pencil'] as const) {
+    const deals: Deal[] = [
+      {...template, id: 'from', history: [], updatedAt: '2026-10-02T00:00:00Z'},
+      {...template, id: 'to', history: [...template.history, {status: 'sold', actorId: 'userA', timestamp: '2026-10-04T01:00:00+02:00'}]},
+      ...['2026-10-01', '2026-10-04'].map((date, i) => ({...template, id: `outside-${i}`, history: [], updatedAt: `${date}T12:00:00Z`, vehicleId: 'missing', customerId: 'missing', workingPencilId: 'missing'})),
+      {...template, id: 'unsold', status: 'working', history: [], vehicleId: 'missing', customerId: 'missing', workingPencilId: 'missing'}
+    ];
+    if (fault === 'vehicle') deals[0].vehicleId = 'missing';
+    if (fault === 'customer') deals[0].customerId = 'missing';
+    if (fault === 'pencil') deals[0].workingPencilId = 'missing';
+    const memory = new MemoryRepositories().forTenant('A');
+    for (const v of vehicles) await memory.create({...v, version: 1}, {id: v.id, tenantId: 'A', actorId: 'userA', aggregateId: v.id, aggregateVersion: 1, type: 'vehicle.created', occurredAt: v.createdAt, deliveryStatus: 'pending'});
+    for (const r of [...customers, ...deals]) await memory.crmWrite([{record: {...r, version: 1}, expectedVersion: 0, event: {id: r.id, tenantId: 'A', actorId: 'userA', aggregateId: r.id, aggregateVersion: 1, type: `${r.kind}.created`, occurredAt: r.createdAt, deliveryStatus: 'pending'}}]);
+    const gets: string[] = [];
+    const client = {send: async (command: InstanceType<typeof GetCommand> | InstanceType<typeof QueryCommand>) => {
+      if (command instanceof GetCommand) {
+        assert.equal(command.input.Key?.PK, 'TENANT#A');
+        const key = String(command.input.Key?.SK); gets.push(key);
+        const data = [...vehicles, ...customers].find(r => `${'kind' in r ? 'CUSTOMER' : 'VEHICLE'}#${r.id}` === key);
+        return data ? {Item: {data}} : {};
+      }
+      assert.equal(command.input.ExpressionAttributeValues?.[':prefix'], 'DEAL#');
+      assert.equal(command.input.ExpressionAttributeValues?.[':pk'], 'TENANT#A');
+      return {Items: deals.map(data => ({data}))};
+    }} as unknown as import('@aws-sdk/lib-dynamodb').DynamoDBDocumentClient;
+    const dynamo = new DynamoRepositories('table', client).forTenant('A');
+    if (fault === 'none') {
+      const actual = await salesReport(memory, range);
+      assert.deepEqual(actual.rows.map(r => [r.dealId, r.soldDate]), [['from', '2026-10-02'], ['to', '2026-10-03']]);
+      assert.deepEqual(await salesReport(dynamo, range), actual);
+      assert.equal(gets.length, 2); assert.ok(gets.every(id => !id.endsWith('#missing')));
+    } else {
+      for (const backend of [memory, dynamo]) await assert.rejects(salesReport(backend, range), {status: 404, code: 'NOT_FOUND', message: 'Record not found.'});
+    }
+  }
 });

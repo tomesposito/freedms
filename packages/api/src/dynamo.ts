@@ -7,7 +7,7 @@ import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, type VehicleQuery, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, type VehicleQuery, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   constructor(private table: string, private client = DynamoDBDocumentClient.from(new DynamoDBClient({}))) {}
@@ -132,6 +132,28 @@ export class DynamoRepositories implements RepositoryFactory {
           } while (cursor);
         }
         return selection.finish();
+      },
+      salesReportRows: async range => {
+        const selection = salesReportSelection(range);
+        let cursor: Record<string, unknown> | undefined;
+        // Read every deal page, but retain only in-range sold deals and their references.
+        do {
+          const result = await this.client.send(new QueryCommand({TableName: this.table,
+            KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+            ExpressionAttributeValues: {':pk': PK, ':prefix': 'DEAL#'}, ConsistentRead: true, ExclusiveStartKey: cursor}));
+          selection.add((function* () { for (const item of result.Items ?? []) yield item.data as CrmEntity; })());
+          cursor = result.LastEvaluatedKey;
+        } while (cursor);
+        const vehicles: Vehicle[] = [], customers: Customer[] = [];
+        for (const id of selection.vehicleIds) {
+          const row = await get<Vehicle>(`VEHICLE#${requireId(id)}`);
+          if (row) vehicles.push(row);
+        }
+        for (const id of selection.customerIds) {
+          const row = await get<Customer>(`CUSTOMER#${requireId(id)}`);
+          if (row) customers.push(row);
+        }
+        return {deals: selection.deals, vehicles, customers};
       },
       leadSummary: async () => {
         const summary = countLeads([]);

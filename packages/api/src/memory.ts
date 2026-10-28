@@ -5,7 +5,7 @@ import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import type { Customer, CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
-import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 interface State { serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
@@ -66,6 +66,20 @@ export class MemoryRepositories implements RepositoryFactory {
         const selection = serviceBoardSelection(day);
         selection.add(s.crm.values());
         return structuredClone(selection.finish());
+      },
+      salesReportRows: async range => {
+        const selection = salesReportSelection(range);
+        selection.add(s.crm.values());
+        const vehicles: Vehicle[] = [], customers: Customer[] = [];
+        for (const id of selection.vehicleIds) {
+          const row = s.vehicles.get(id);
+          if (row) vehicles.push(row);
+        }
+        for (const id of selection.customerIds) {
+          const row = s.crm.get(`customer#${id}`);
+          if (row?.kind === 'customer') customers.push(row);
+        }
+        return structuredClone({deals: selection.deals, vehicles, customers});
       },
       leadSummary: async () => countLeads(s.crm.values()),
       leadListPage: async query => {
