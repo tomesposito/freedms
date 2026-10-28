@@ -38,8 +38,8 @@ export function inventoryCsvRows(source: string): string[][] {
 }
 export const inventoryCsvHeaders: Record<string, string> = {
   year: 'year', make: 'make', model: 'model', trim: 'trim', vin: 'vin',
-  stocknumber: 'stockNumber', 'stock #': 'stockNumber', 'stock number': 'stockNumber', stock_number: 'stockNumber', stock: 'stockNumber',
-  cost: 'cost', 'acquisition cost': 'cost', price: 'listPrice', listprice: 'listPrice', 'list price': 'listPrice', list_price: 'listPrice',
+  stocknumber: 'stockNumber', 'stock #': 'stockNumber', 'stock#': 'stockNumber', 'stock number': 'stockNumber', stock_number: 'stockNumber', stock: 'stockNumber',
+  cost: 'cost', 'our cost': 'cost', 'vehicle cost': 'cost', 'acquisition cost': 'cost', price: 'listPrice', 'asking price': 'listPrice', 'retail price': 'listPrice', 'sale price': 'listPrice', retail: 'listPrice', listprice: 'listPrice', 'list price': 'listPrice', list_price: 'listPrice',
   mileage: 'mileage', miles: 'mileage', odometer: 'mileage', status: 'status',
   datestocked: 'dateStocked', 'date stocked': 'dateStocked', date_stocked: 'dateStocked', location: 'location', notes: 'notes'
 };

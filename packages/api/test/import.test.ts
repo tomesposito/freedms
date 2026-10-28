@@ -62,7 +62,7 @@ test('import preview classifies all errors and duplicates without writing; confi
 });
 test('file errors reject preview and confirm before any writes', async () => {
   const {call, repositories} = await setup();
-  const bad = ['', 'year,make', headers.join(','), csv().slice(0, -3), csv([base], headers.map(h => h === 'vin' ? 'unknown' : h)), csv(Array.from({length: 1001}, () => base)), csv() + 'extra,fields', csv().replace('"Honda"', '"Honda"junk')];
+  const bad = ['', 'year,make', headers.join(','), csv().slice(0, -3), csv([[...base, '1']], [...headers, 'asking price']), csv(Array.from({length: 1001}, () => base)), csv() + 'extra,fields', csv().replace('"Honda"', '"Honda"junk')];
   for (const path of ['/vehicles/import', '/vehicles/import/preview']) {
     for (const source of bad) { const r = await call({csv: source}, path); assert.equal(r.status, 400, source.slice(0, 70)); assert.equal(r.error.code, 'VALIDATION'); }
     for (const body of [{}, {csv: csv(), enrich: 'yes'}, {csv: csv(), tenantId: 'B'}, {csv: 'x'.repeat(IMPORT_BODY_LIMIT)}]) assert.equal((await call(body, path)).status, 400);
@@ -125,4 +125,64 @@ test('Dynamo import records use scoped append-only keys and atomic metadata even
   assert.deepEqual(items.map(i => i.Put?.Item?.SK), ['IMPORT#import', 'EVENT#event']); assert.ok(items.every(i => i.Put?.Item?.PK === 'TENANT#A' && i.Put.ConditionExpression === 'attribute_not_exists(PK)'));
   assert.deepEqual((commands[1] as QueryCommand).input.ExpressionAttributeValues, {':pk': 'TENANT#A', ':prefix': 'IMPORT#'});
   await assert.rejects(repo.appendImport({...record, tenantId: 'B'}, event), /scope/); await assert.rejects(repo.appendImport(record, {...event, tenantId: 'B'}), /scope/); await assert.rejects(repo.appendImport({...record, id: 'bad#id'}, {...event, aggregateId: 'bad#id'})); assert.equal(commands.length, 2);
+});
+
+test('issue #45 dealer export previews new and duplicate VINs and imports only the Camry', async () => {
+  const {call, repositories} = await setup();
+  await call({csv: csv([row({3: '1FTEW1E50KFA12345'})])}, '/vehicles/import');
+  const source = 'year,make,model,vin,mileage,cost,price\n2021,Toyota,Camry,4T1C11AK8MU123456,38100,18900,22495\n2019,Ford,F-150,1FTEW1E50KFA12345,62400,24500,28995';
+  const preview = await call({csv: source}); assert.equal(preview.status, 200);
+  const p: ImportPreview = preview.data;
+  assert.deepEqual([p.validCount, p.errorCount, p.duplicateCount], [1, 0, 1]);
+  assert.equal(p.rows[0].status, 'valid');
+  const camry = p.rows[0].vehicle!;
+  assert.equal(camry.stockNumber, 'IMP-MU123456'); assert.equal(camry.mileage, 38100);
+  assert.equal(camry.cost, 1890000); assert.equal(camry.listPrice, 2249500);
+  assert.equal(p.rows[1].duplicate?.field, 'vin');
+  const confirmed = await call({csv: source}, '/vehicles/import'); assert.equal(confirmed.status, 201);
+  assert.equal(confirmed.data.importedCount, 1); assert.equal(confirmed.data.importedVehicleIds.length, 1);
+  const saved = (await repositories.forTenant('A').get(confirmed.data.importedVehicleIds[0]))!;
+  assert.equal(saved.vin, camry.vin); assert.equal(saved.stockNumber, camry.stockNumber);
+  assert.equal((await repositories.forTenant('A').list({})).length, 2);
+});
+test('missing required columns produce errors naming every row', async () => {
+  const {call} = await setup();
+  for (const field of ['vin', 'make', 'cost', 'year', 'model', 'price']) {
+    const preview = await call({csv: csv([base, base], headers.map(h => h === field ? 'unknown' : h))});
+    assert.equal(preview.status, 200); assert.equal(preview.data.validCount, 0);
+    const p: ImportPreview = preview.data;
+    assert.deepEqual(p.rows.map(r => [r.rowNumber, r.status, r.errors.map(e => e.field)]), [[1, 'error', [field === 'price' ? 'listPrice' : field]], [2, 'error', [field === 'price' ? 'listPrice' : field]]]);
+  }
+});
+test('blank stock cells use uppercase valid VINs; invalid VINs only report VIN errors', async () => {
+  const {call} = await setup();
+  const p: ImportPreview = (await call({csv: csv([row({3: base[3].toLowerCase(), 4: '  '}), row({3: 'bad', 4: ''})])})).data;
+  assert.equal(p.rows[0].status, 'valid'); assert.equal(p.rows[0].vehicle?.stockNumber, 'IMP-3A004352');
+  assert.deepEqual(p.rows[1].errors.map(e => e.field), ['vin']);
+});
+test('dealer asking/retail/sale price, stock# and cost aliases work', async () => {
+  const {call} = await setup();
+  for (const price of ['asking price', 'retail price', 'sale price', 'retail']) {
+    for (const cost of ['our cost', 'vehicle cost']) {
+      const p: ImportPreview = (await call({csv: csv([base], headers.map(h => h === 'price' ? price : h === 'stock #' ? 'stock#' : h === 'cost' ? cost : h))})).data;
+      assert.equal(p.validCount, 1); assert.equal(p.rows[0].vehicle?.stockNumber, 'S1');
+      assert.equal(p.rows[0].vehicle?.listPrice, 1500000); assert.equal(p.rows[0].vehicle?.cost, 1299900);
+    }
+  }
+});
+test('assigned stocks avoid tenant inventory and earlier file rows without false duplicates', async () => {
+  const {call, repositories} = await setup();
+  await call({csv: csv([row({3: '1HGCM82633A004353', 4: 'imp-3a004352'})])}, '/vehicles/import');
+  const source = csv([row({4: ''}), row({3: '2HGCM82633A004352', 4: ''}), row({4: ''})]);
+  const p: ImportPreview = (await call({csv: source})).data;
+  assert.deepEqual(p.rows.map(r => r.vehicle?.stockNumber), ['IMP-3A004352-2', 'IMP-3A004352-3', 'IMP-3A004352-4']);
+  assert.deepEqual(p.rows.map(r => r.status), ['valid', 'valid', 'duplicate']);
+  assert.equal(p.rows[2].duplicate?.field, 'vin');
+  assert.equal((await call({csv: source}, '/vehicles/import')).data.importedCount, 2);
+  assert.equal((await repositories.forTenant('A').list({})).length, 3);
+  const otherTenant = await call({csv: csv([row({4: ''})])}, '/vehicles/import/preview', 'B');
+  assert.equal(otherTenant.data.rows[0].vehicle.stockNumber, 'IMP-3A004352');
+  const earlierProvided = await call({csv: csv([row({3: '1HGCM82633A004353', 4: 'IMP-3A004352'}), row({4: ''})])}, '/vehicles/import/preview', 'B');
+  assert.equal(earlierProvided.data.rows[1].vehicle.stockNumber, 'IMP-3A004352-2');
+  assert.equal(earlierProvided.data.validCount, 2);
 });

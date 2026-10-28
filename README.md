@@ -274,7 +274,10 @@ of draft.
 ![AI quick entry from a photo](docs/screenshots/quick-entry-photo.png)
 
 **Inventory import** — the preview shows every row's verdict (valid, error,
-duplicate) before anything is written.
+duplicate) before anything is written. Common CSV header aliases are accepted;
+missing required values appear as row errors. Stock number is optional: absent
+or blank values become `IMP-` plus the uppercase VIN’s last 8 characters, with
+`-2`, `-3`, … appended to avoid existing tenant or earlier file-row stock numbers.
 
 ![Import preview](docs/screenshots/import-preview.png)
 

@@ -13,16 +13,16 @@ async function preview(csv: string, enrich: boolean, repo: TenantRepository, now
   try { parsed = inventoryCsvRows(csv); } catch (error) { throw invalid(error instanceof Error ? error.message : 'Invalid CSV.'); }
   const [header, ...data] = parsed;
   const columns = header.map(h => { const key = h.trim().toLowerCase(); return Object.hasOwn(inventoryCsvHeaders, key) ? inventoryCsvHeaders[key] : undefined; });
-  for (const required of ['year', 'make', 'model', 'vin', 'stockNumber', 'cost', 'listPrice']) if (!columns.includes(required)) throw invalid(`Missing required header: ${required}.`);
   if (columns.filter(Boolean).some((c, i, all) => all.indexOf(c) !== i)) throw invalid('Duplicate recognized CSV header.');
   if (data.some(row => row.length !== header.length)) throw invalid('CSV rows must have the same number of fields as the header.');
   const existing = await repo.list({});
   const vins = new Set(existing.map(v => v.vin.toUpperCase()));
   const stocks = new Set(existing.map(v => v.stockNumber.trim().toLowerCase()));
+  const assignedOrProvidedStocks = new Set(stocks);
   const seenVins = new Map<string, number>(), seenStocks = new Map<string, number>();
   const rows: ImportRowResult[] = [];
   for (const [index, cells] of data.entries()) {
-    const raw: Record<string, string> = {};
+    const raw: Record<string, string> = {year: '', make: '', model: '', vin: '', stockNumber: '', cost: '', listPrice: ''};
     columns.forEach((key, i) => { if (key) raw[key] = cells[i].trim(); });
     const result: ImportRowResult = {rowNumber: index + 1, status: 'valid', errors: []};
     const check = <T>(field: string, validate: () => T): T | undefined => {
@@ -33,8 +33,16 @@ async function preview(csv: string, enrich: boolean, repo: TenantRepository, now
       try { const decoded = await decoder.decode(validVin); for (const key of ['year', 'make', 'model', 'trim'] as const) if (!raw[key]) raw[key] = String(decoded[key] ?? ''); }
       catch { /* Decoder failure leaves normal row validation in charge. */ }
     }
+    // Missing/blank stock numbers use IMP- plus the uppercased VIN's last 8 characters.
+    // Reserve earlier rows too; append -2, -3, ... until unique within this tenant/file.
+    if (!raw.stockNumber && validVin) {
+      const base = `IMP-${validVin.slice(-8)}`;
+      raw.stockNumber = base;
+      for (let suffix = 2; assignedOrProvidedStocks.has(raw.stockNumber.toLowerCase()); suffix++) raw.stockNumber = `${base}-${suffix}`;
+    }
+    if (raw.stockNumber) assignedOrProvidedStocks.add(raw.stockNumber.toLowerCase());
     const value: Record<string, unknown> = {vin: validVin, reconCosts: [], mileage: null};
-    for (const [key, max, optional] of [['stockNumber', 50, false], ['make', 120, false], ['model', 120, false], ['trim', 120, true], ['location', 200, true], ['notes', 10000, true]] as const) value[key] = check(key, () => text(raw[key] ?? '', key, max, optional));
+    for (const [key, max, optional] of [['stockNumber', 50, true], ['make', 120, false], ['model', 120, false], ['trim', 120, true], ['location', 200, true], ['notes', 10000, true]] as const) value[key] = check(key, () => text(raw[key] ?? '', key, max, optional));
     value.year = check('year', () => { const year = Number(raw.year); if (!/^\d+$/.test(raw.year) || !Number.isInteger(year) || year < 1886 || year > now.getUTCFullYear() + 2) throw invalid('Invalid model year.'); return year; });
     for (const key of ['cost', 'listPrice']) value[key] = check(key, () => { const cents = dollarCents(raw[key]); if (cents === undefined) throw invalid('Use a dollar amount from 0 to $100,000,000 with at most two decimal places.'); return cents; });
     value.status = check('status', () => { const status = raw.status?.toLowerCase() || 'available'; if (!vehicleStatuses.includes(status as VehicleInput['status'])) throw invalid('Invalid vehicle status.'); return status; });
