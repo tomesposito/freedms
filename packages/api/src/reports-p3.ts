@@ -3,7 +3,7 @@ import { departmentalStatement } from './accounting.js';
 import { ApiError, missing } from './errors.js';
 import { response, type ApiRequest } from './handler.js';
 import type { TenantRepository } from './repository.js';
-import { dateRange, soldDate } from './reports.js';
+import { dateRange } from './reports.js';
 type Range = ReturnType<typeof dateRange>;
 const within = (date: string, range: Range) => (!range.from || date.slice(0,10) >= range.from) && (!range.to || date.slice(0,10) <= range.to);
 const dayMs = 86400000;
@@ -58,28 +58,26 @@ export async function forecasts(repo: TenantRepository, range: Range, now: Date)
     return {inventory:{...empty},service:{...empty},parts:{...empty}};
   }
   const window = {from,to}, days = (Date.parse(to) - Date.parse(from)) / dayMs + 1;
-  const [vehicles, deals, appointments, parts, sales, ros] = await Promise.all([repo.list({}), repo.crmList('deal'), repo.crmList('service-appointment'), repo.crmList('part'), repo.crmList('parts-sale'), repo.crmList('repair-order')]);
+  const {currentStock, soldDates: sold, scheduledStarts: history, parts, usage} = await repo.forecastRows(window, now.toISOString());
   const result = <T>(sampleSize: number, method: string, projection: T | null, reason: string): Projection<T> => ({projection,basis:{...window,sampleSize},method,insufficientReason:projection === null ? reason : null});
-  const sold = deals.filter(d => d.status === 'sold' && within(soldDate(d), window));
   const midpoint = new Date(Date.parse(from) + Math.floor(days / 2) * dayMs).toISOString().slice(0,10);
-  const earlier = sold.filter(d => soldDate(d) < midpoint).length, recent = sold.length - earlier;
-  const currentStock = vehicles.filter(v => v.status !== 'sold').length;
+  const earlier = sold.filter(date => date < midpoint).length, recent = sold.length - earlier;
   const earlierDaysSupply = earlier ? rounded(currentStock * Math.floor(days / 2) / earlier) : null;
   const daysSupply = recent ? rounded(currentStock * (days - Math.floor(days / 2)) / recent) : null;
   const inventory = result(sold.length, 'Current unsold stock / daily sales pace in each half of basis window; trend holds current stock constant, not historical inventory.', days >= 14 && sold.length >= 2 && daysSupply !== null ? {currentStock,daysSupply,earlierDaysSupply,changeDays:earlierDaysSupply === null ? null : rounded(daysSupply-earlierDaysSupply)} : null, 'Need at least 14 days, two sold deals, and a sale in the recent half.');
-  const history = appointments.filter(a => within(a.scheduledStart, window) && a.scheduledStart <= now.toISOString() && a.status !== 'no-show');
   const weekdays = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   const demand = weekdays.map((day,index) => {
     const firstDay = new Date(from).getUTCDay();
     const offset = (index-firstDay+7)%7, occurrences = offset < days ? Math.floor((days-1-offset)/7)+1 : 0;
-    const count = history.filter(a => new Date(a.scheduledStart).getUTCDay() === index).length;
+    const count = history.filter(date => new Date(date).getUTCDay() === index).length;
     return {day,appointments:count,occurrences,projectedAppointments:occurrences ? rounded(count/occurrences) : 0};
   });
   const service = result(history.length, 'Mean appointments per UTC weekday occurrence (including zero-booking days); excludes no-shows and future appointments.', days >= 14 && history.length >= 2 ? demand : null, 'Need at least 14 days and two past appointments.');
   // Current net stock-applied ROs avoid double counting reopen/recomplete cycles. Creation date is the available history date.
-  const usage = [...sales.filter(s => within(s.createdAt,window)).map(s => ({partId:s.partId,quantity:s.quantity})), ...ros.filter(r => r.stockApplied && within(r.createdAt,window)).flatMap(r => r.lineItems.filter(l => l.kind === 'parts' && l.partId).map(l => ({partId:l.partId!,quantity:l.quantity!})))];
+  const unitsByPart = new Map<string, number>();
+  for (const {partId, quantity} of usage) unitsByPart.set(partId, (unitsByPart.get(partId) ?? 0) + quantity);
   const reorder = parts.flatMap(p => {
-    const unitsUsed = usage.filter(u => u.partId === p.id).reduce((s,u) => s+u.quantity,0);
+    const unitsUsed = unitsByPart.get(p.id) ?? 0;
     if (!unitsUsed) return [];
     const dailyUse = unitsUsed/days, available = Math.max(0,p.quantityOnHand-(p.quantityReserved ?? 0));
     return [{partId:p.id,partNumber:p.partNumber,location:p.location || 'No location',unitsUsed,dailyUse:rounded(dailyUse),available,daysSupply:rounded(available/dailyUse),reorderNext30Days:Math.max(0,Math.ceil(dailyUse*30)+p.reorderPoint-available)}];

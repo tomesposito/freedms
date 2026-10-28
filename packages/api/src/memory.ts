@@ -5,7 +5,7 @@ import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import type { Customer, CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
-import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 interface State { serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
@@ -65,6 +65,15 @@ export class MemoryRepositories implements RepositoryFactory {
       serviceBoard: async day => {
         const selection = serviceBoardSelection(day);
         selection.add(s.crm.values());
+        return structuredClone(selection.finish());
+      },
+      forecastRows: async (window, now) => {
+        const selection = forecastSelection(window, now);
+        function* scoped<T extends {tenantId: string}>(rows: Iterable<T>) {
+          for (const row of rows) { assertScope(tenantId, row); yield row; }
+        }
+        selection.addVehicles(scoped(s.vehicles.values()));
+        selection.add(scoped(s.crm.values()));
         return structuredClone(selection.finish());
       },
       salesReportRows: async range => {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { RepairOrderLineItem } from '@freedms/shared';
+import type { CrmEntity, Vehicle, RepairOrderLineItem } from '@freedms/shared';
 import { MemoryRepositories } from '../src/memory.js';
 import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
@@ -89,7 +89,8 @@ test('P3 inventory days supply compares pace halves and responds to additional s
   const {forecasts}=await import('../src/reports-p3.js');
   const sold=(date:string)=>({status:'sold',history:[{status:'sold',timestamp:date}],updatedAt:date});
   const deals=[sold('2026-10-03'),sold('2026-10-20')];
-  const repo={leadListPage: async () => { throw new Error('Unexpected lead page read'); }, listPage:async()=>{throw new Error('Unexpected vehicle page read');},list:async()=>[{status:'available'},{status:'available'}],crmList:async(kind:string)=>kind==='deal'?deals:[]};
+  const repo={forecastRows:async()=>({currentStock:2,soldDates:deals.map(d=>d.updatedAt),scheduledStarts:[],parts:[],usage:[]}),
+    list:async()=>{throw new Error('Unexpected full vehicle read');},crmList:async()=>{throw new Error('Unexpected full CRM read');}};
   const run=()=>forecasts(repo as any,{from:'2026-10-01',to:'2026-10-24'},new Date('2026-10-24T12:00:00Z'));
   assert.deepEqual((await run()).inventory.projection,{currentStock:2,daysSupply:24,earlierDaysSupply:24,changeDays:0});
   deals.push(sold('2026-10-22')); const data=(await run()).inventory;
@@ -117,4 +118,74 @@ test('P3 endpoints isolate tenants, validate range/method and preserve saved-def
   }
   assert.equal((await s.call('GET','/reports/saved')).data.length,3);
   assert.deepEqual((await s.call('GET','/reports/saved',undefined,'B')).data,[]);
+});
+
+test('forecast reads select compact inputs with exact boundaries, detached parts and tenant isolation in both backends', async t => {
+  const {DynamoRepositories} = await import('../src/dynamo.js');
+  const {QueryCommand} = await import('@aws-sdk/lib-dynamodb');
+  const {forecasts} = await import('../src/reports-p3.js');
+  const window = {from:'2026-10-01',to:'2026-10-24'}, now = '2026-10-24T12:00:00.000Z';
+  const base = {tenantId:'A',version:1,createdAt:now,updatedAt:now};
+  const records = [
+    {kind:'deal',id:'first',status:'sold',history:[{status:'sold',timestamp:'2026-09-30T23:00:00-02:00'}]},
+    {kind:'deal',id:'last',status:'sold',history:[{status:'sold',timestamp:'2026-09-01'},{status:'sold',timestamp:now}]},
+    {kind:'deal',id:'fallback',status:'sold',history:[]},
+    {kind:'deal',id:'old',status:'sold',history:[],updatedAt:'2026-09-30'},
+    {kind:'deal',id:'future',status:'sold',history:[],updatedAt:'2026-10-25'},
+    {kind:'deal',id:'working',status:'working',history:[]},
+    ...['2026-09-30T23:59:59Z','2026-10-01T00:00:00Z',now,'2026-10-24T12:00:00.001Z','2026-10-25T00:00:00Z'].map((scheduledStart,i)=>({kind:'service-appointment',id:`a${i}`,status:'scheduled',scheduledStart})),
+    {kind:'service-appointment',id:'no-show',status:'no-show',scheduledStart:now},
+    {kind:'part',id:'p',...input,quantityReserved:2,location:'North'},
+    // Insert RO before counter sales to check the old counter-then-RO ordering.
+    {kind:'repair-order',id:'ro',stockApplied:true,lineItems:[line('p',3),labor,line(undefined)]},
+    {kind:'repair-order',id:'reopened',stockApplied:false,lineItems:[line('p',99)]},
+    {kind:'repair-order',id:'old-ro',createdAt:'2026-09-30',stockApplied:true,lineItems:[line('p',99)]},
+    ...['2026-09-30','2026-10-01T00:00:00Z','2026-10-24T23:59:59Z','2026-10-25'].map((createdAt,i)=>({kind:'parts-sale',id:`s${i}`,createdAt,partId:'p',quantity:2})),
+    {kind:'parts-sale',id:'missing-part',partId:'missing',quantity:1}
+  ].map(row=>({...base,...row})) as CrmEntity[];
+  const vehicles = ['available','sold','in-recon'].map((status,i)=>({...base,id:`v${i}`,status})) as Vehicle[];
+  const memory = new MemoryRepositories();
+  const repo = memory.forTenant('A');
+  for (const record of records) await repo.crmWrite([{record,expectedVersion:0,event:{id:record.id,tenantId:'A',actorId:'u',aggregateId:record.id,aggregateVersion:1,type:`${record.kind}.created` as 'deal.created',occurredAt:now,deliveryStatus:'pending'}}]);
+  for (const vehicle of vehicles) await repo.create(vehicle,{id:vehicle.id,tenantId:'A',actorId:'u',aggregateId:vehicle.id,aggregateVersion:1,type:'vehicle.created',occurredAt:now,deliveryStatus:'pending'});
+  let pages = 0;
+  const dynamo = new DynamoRepositories('offline', {send:async(command: InstanceType<typeof QueryCommand>)=>{
+    assert.ok(command instanceof QueryCommand);
+    assert.equal(command.input.ConsistentRead,true);
+    const values = command.input.ExpressionAttributeValues!;
+    assert.ok(['TENANT#A','TENANT#B'].includes(values[':pk']));
+    const prefix = values[':prefix'];
+    const selected = values[':pk'] === 'TENANT#B' ? [] : prefix === 'VEHICLE#' ? vehicles : records.filter(r=>`${r.kind.toUpperCase()}#`===prefix);
+    const offset = command.input.ExclusiveStartKey ? 1 : 0;
+    pages++;
+    return {Items:selected.slice(offset,offset ? undefined : 1).map(data=>({data})),...(!offset && selected.length>1 ? {LastEvaluatedKey:{PK:values[':pk'],SK:prefix}} : {})};
+  }} as any);
+  const expected = {currentStock:2,soldDates:['2026-10-01','2026-10-24','2026-10-24'],scheduledStarts:['2026-10-01T00:00:00Z',now],parts:[records.find(r=>r.kind==='part')],usage:[{partId:'p',quantity:2},{partId:'p',quantity:2},{partId:'missing',quantity:1},{partId:'p',quantity:3}]};
+  const clone = structuredClone;
+  const spy = t.mock.method(globalThis,'structuredClone',(value:unknown)=>{
+    assert.deepEqual(value,expected); // No full collections or discarded rows reach cloning.
+    return clone(value);
+  });
+  assert.deepEqual(await repo.forecastRows(window,now),expected);
+  spy.mock.restore();
+  let report: string | undefined;
+  for (const repositories of [memory,dynamo]) {
+    const scoped = repositories.forTenant('A');
+    assert.deepEqual(await scoped.forecastRows(window,now),expected);
+    const guarded = new Proxy(scoped,{get(target,property){
+      if (property==='list' || property==='crmList') return ()=>{throw new Error('Full collection read');};
+      return Reflect.get(target,property);
+    }});
+    const result = await forecasts(guarded,window,new Date(now));
+    assert.equal(result.parts.basis.sampleSize,4);
+    assert.equal(result.parts.projection![0].unitsUsed,7);
+    if (report) assert.equal(JSON.stringify(result),report);
+    report = JSON.stringify(result);
+    assert.deepEqual(await repositories.forTenant('B').forecastRows(window,now),{currentStock:0,soldDates:[],scheduledStarts:[],parts:[],usage:[]});
+  }
+  assert.ok(pages>6);
+  const detached = await repo.forecastRows(window,now); detached.parts[0].quantityOnHand=-1;
+  assert.deepEqual(await repo.forecastRows(window,now),expected);
+  const corrupt = new DynamoRepositories('offline',{send:async()=>({Items:[{data:{...vehicles[0],tenantId:'B'}}]})} as any);
+  await assert.rejects(corrupt.forTenant('A').forecastRows(window,now),/scope/);
 });

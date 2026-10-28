@@ -3,7 +3,7 @@ import type { MfaRecord } from '@freedms/shared';
 import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
-import type { CrmEntity, Deal, Lead, Customer, ServiceAppointment, RepairOrder, SignatureRecord, Technician } from '@freedms/shared';
+import type { CrmEntity, Deal, Lead, Customer, ServiceAppointment, RepairOrder, SignatureRecord, Technician, Part } from '@freedms/shared';
 import type { Membership, OutboxEvent, Tenant, User, Vehicle, VehicleStatus } from '@freedms/shared';
 export interface VehicleQuery { status?: VehicleStatus; search?: string }
 export interface LeadQuery { search?: string; stage?: Lead['stage']; assignee?: string | null; limit: number; offset: number }
@@ -35,6 +35,7 @@ export interface TenantRepository {
   users(): Promise<User[]>;
   serviceBoardEpoch(): Promise<number>;
   serviceBoard(day: string): Promise<ServiceBoardRows>;
+  forecastRows(window: ForecastWindow, now: string): Promise<ForecastRows>;
   salesReportRows(range: SalesReportRange): Promise<SalesReportRows>;
   leadSummary(): Promise<LeadReport>;
   leadListPage(query: LeadQuery): Promise<LeadPage>;
@@ -263,5 +264,42 @@ export function salesReportSelection(range: SalesReportRange) {
         deals.push(deal); vehicleIds.add(deal.vehicleId); customerIds.add(deal.customerId);
       }
     }
+  };
+}
+
+export interface ForecastWindow { from: string; to: string }
+export interface ForecastRows {
+  currentStock: number;
+  soldDates: string[];
+  scheduledStarts: string[];
+  parts: Part[];
+  usage: {partId: string; quantity: number}[];
+}
+
+/** Reduce raw rows once; retain no vehicle or historical CRM records except catalog parts. */
+export function forecastSelection(window: ForecastWindow, now: string) {
+  const rows: ForecastRows = {currentStock: 0, soldDates: [], scheduledStarts: [], parts: [], usage: []};
+  const within = (date: string) => date.slice(0, 10) >= window.from && date.slice(0, 10) <= window.to;
+  // Preserve counter-sale then RO usage order, regardless of memory insertion order.
+  const roUsage: ForecastRows['usage'] = [];
+  return {
+    addVehicles(vehicles: Iterable<Vehicle>) {
+      for (const vehicle of vehicles) if (vehicle.status !== 'sold') rows.currentStock++;
+    },
+    add(records: Iterable<CrmEntity>) {
+      for (const row of records) {
+        if (row.kind === 'deal' && row.status === 'sold') {
+          const date = soldDate(row);
+          if (within(date)) rows.soldDates.push(date);
+        } else if (row.kind === 'service-appointment' && within(row.scheduledStart) && row.scheduledStart <= now && row.status !== 'no-show') {
+          rows.scheduledStarts.push(row.scheduledStart);
+        } else if (row.kind === 'part') rows.parts.push(row);
+        else if (row.kind === 'parts-sale' && within(row.createdAt)) rows.usage.push({partId: row.partId, quantity: row.quantity});
+        else if (row.kind === 'repair-order' && row.stockApplied && within(row.createdAt)) {
+          for (const line of row.lineItems) if (line.kind === 'parts' && line.partId) roUsage.push({partId: line.partId, quantity: line.quantity!});
+        }
+      }
+    },
+    finish(): ForecastRows { return {...rows, usage: [...rows.usage, ...roUsage]}; }
   };
 }

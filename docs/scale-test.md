@@ -329,3 +329,24 @@ build a report with no rows. The report no longer loads either set.
 
 These are local in-memory measurements on one shared 2-core box, not
 hosted (DynamoDB) capacity evidence.
+
+## Forecast date-bounded read (#56)
+
+`GET /reports/forecasts` uses `forecastRows(window, now)` with the effective
+inclusive basis window computed by the report. Both backends share a selector
+that counts unsold vehicles, retains only sold dates and past non-no-show
+appointment timestamps in the window, and projects counter sales and current
+stock-applied RO parts lines into part-id/quantity pairs. The parts catalog is
+retained for reorder output. Sold history fallback and the full appointment
+timestamp cutoff preserve the existing report semantics.
+
+Previously every request cloned all vehicles, deals, appointments, parts sales
+and repair orders, including irrelevant history. Memory now scans raw tenant
+rows once and clones only the compact result. Dynamo reduces each tenant-prefix
+page before fetching the next; it still reads all rows of those prefixes, so
+this bounds retained data, not Dynamo-side query work. Usage totals are computed
+in one Map pass instead of filtering all usage for each catalog part. Projection
+rounding, sample sizes, methods, insufficient-history messages and ordering are
+unchanged. The #49 harness is unchanged; validation is local and offline.
+
+Local check: results will be filled in after measurement by the supervisor.
