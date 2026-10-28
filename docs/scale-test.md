@@ -1,0 +1,139 @@
+# Scale test: seed generator + latency harness
+
+Issue #49. Local only. This tooling seeds synthetic data through the HTTP
+API and measures hot-path latency against pre-set budgets. It reports
+budget failures; it does not fix endpoints.
+
+Files: `scripts/scale-lib.ts` (pure profiles, generators, percentile and
+budget helpers), `scripts/scale-seed.ts`, `scripts/scale-measure.ts`.
+Unit tests for the pure helpers: `packages/api/test/scale.test.ts`.
+
+## Run it
+
+Start the local API first (in-memory stack on `http://127.0.0.1:3001`),
+then:
+
+```sh
+node --import tsx packages/api/src/local.ts # run in a separate terminal
+node --import tsx scripts/scale-seed.ts --profile smoke
+node --import tsx scripts/scale-measure.ts --state scale-state.json --out scale-results.json --report scale-report.md
+```
+
+The default state path is `scale-state.json` for both local CLIs.
+`--state`, `--out` (default `scale-results.json`) and `--report` select
+output paths; markdown is always printed.
+
+`npm run scale:seed` / `npm run scale:measure` do the same. Both CLIs
+accept `--help`. Base URL: `--base-url` or `FREEDMS_SCALE_BASE_URL`
+(default `http://127.0.0.1:3001`). Against a hosted environment, set
+`FREEDMS_SCALE_TOKEN` as well; `/local/session` is then never called.
+A token seeds/measures only its own tenant; light tenants are skipped.
+No credentials are stored. Tokens are supplied through the environment only.
+
+## Profiles
+
+- `--profile full` (default): heavy tenant = 10,000 lifetime vehicles
+  (100 left in stock), 150,000 leads, 30,000 customers, 8,000 deals,
+  50,000 repair orders, 250 parts, 12 appointments; plus 1,000 light
+  tenants with 30 vehicles, 200 leads, 200 repair orders, 20 parts each.
+- `--profile smoke`: heavy = 60 vehicles, 120 leads, 15 deals, 40 repair
+  orders; 3 light tenants with 10 vehicles, 25 leads, 10 repair orders
+  each. Proves the whole pipeline in a couple of minutes.
+
+Count flags, with either `--heavy-` or `--light-` prefixes, are
+`vehicles` (alias `lifetime-vehicles`), `in-stock`, `leads`, `customers`,
+`deals`, `repair-orders` (alias `ros`), `parts`, and `appointments`.
+`--light-tenants` controls tenant count. Every count can be overridden, e.g.
+`--heavy-leads 12000 --light-tenants 25 --heavy-repair-orders 500`.
+Other flags: `--concurrency <n>` (seed, default 1), `--maxMinutes <n>`
+(alias `--max-minutes`; seed soft cap: stops cleanly and still prints/writes actual counts),
+`--requests <n>` / `--peak <n>` / `--ten-x <n>` / `--light-sample <n>`
+(measure; defaults 100 requests per endpoint per level, peak 5, 10x 50,
+up to 5 light tenants sampled).
+
+## How seeding works
+
+Tenants are created with `POST /local/session` using the onboarding
+variant (`{onboarding: true, name, email, dealership, address, phone,
+dealerType, invites: []}`), deliberately: it stores the admin's email, so
+later `POST /local/session {tenantId, email}` re-session works when a
+token expires (local tokens last 1 hour; on 401 the client re-sessions
+and retries once). The seed CLI writes `scale-state.json` with tenant
+ids, admin emails and actual created counts. It never stores or prints
+tokens. The measure CLI re-sessions from that state file at run time.
+
+Per tenant, in order: vehicles, a customer pool (roughly leads/5
+distinct customers, reused for leads, deals and repair orders), leads,
+follow-up tasks on every fifth lead (plus a stage advance on a share via
+the lead PUT), deals, parts, repair orders, and a few appointments dated
+today for the service board.
+
+Details worth knowing:
+
+- Deal vehicles are sold through deals: create, PUT `approved`, PUT
+  `sold` (which writes the GL deal posting). All seeded deals are sold,
+  preserving the exact in-stock target.
+  Deal counts must not exceed lifetime vehicles minus in-stock vehicles or
+  the lead count; leads and service records require a nonempty customer pool.
+- Surplus lifetime vehicles (lifetime − in-stock − sold-through-deals)
+  are created directly with status `sold`. The vehicle input accepts
+  `sold` (it is one of the app's vehicle statuses), so no API was
+  invented for this.
+- Every second repair order is finalized with PUT status `completed`,
+  so service GL postings exist at scale.
+- Money is integer cents everywhere. Names and emails are synthetic
+  (`Scale Buyer 000123`, `scale-buyer-123@example.test`). No real data.
+
+## Budgets and output
+
+- Read endpoints: p95 < 300 ms. Report endpoints (trial balance,
+  department statement, sales/inventory/forecast reports): p95 < 1,000 ms.
+- Pencil calculation is a write path (`PUT /deals/:id` on a scratch deal
+  the harness creates, changing the working pencil's `down` by a few
+  cents). It uses the 300 ms read budget, is labelled `pencil`, and is
+  run at the requested concurrency using one scratch deal per worker,
+  with sequential version-checked updates within each worker. Setup adds
+  up to max(peak, 10x) vehicles, customers and deals, reported separately
+  from seed counts. Scratch records remain in the tenant after measurement.
+- Percentiles are nearest-rank (in `scale-lib.ts`, unit-tested).
+- Any non-200 response counts as an error and fails that endpoint.
+- The measure CLI prints a self-contained markdown report (environment,
+  dataset actually seeded, per-endpoint p50/p95/max at peak and 10x,
+  PASS/FAIL per endpoint, explicit failure list) and writes the same
+  results as JSON with `--out`. That markdown is what gets posted on the
+  issue. Failures list endpoint, budget and measured p95 so follow-up
+  issues can be filed from it.
+
+Measured endpoints on the heavy tenant: `GET /vehicles`,
+`GET /reports/inventory`, `GET /leads`, `GET /reports/leads`,
+`GET /service/board?date=<today>`, `GET /accounting/trial-balance`,
+`GET /accounting/departmental`, `GET /reports/sales`,
+`GET /reports/forecasts`, and the
+pencil PUT. Accounting, sales and forecast requests use `from=2000-01-01`
+and `to=<today>`; other reports use their defaults. Light-tenant samples
+run the GET endpoints only. Each endpoint runs 100 requests at each level
+before the next endpoint starts; JSON retains every latency and status
+(status 0 means a transport failure). Budget failures remain in the output
+and do not set a failing exit code; setup failures do.
+
+## Honest limits
+
+- Local seeding cost grows with tenant size: creating records through
+  the API on the local in-memory stack gets slower per write as a tenant
+  grows (measured before this harness existed at roughly 2 ms per lead
+  on an empty tenant and roughly 10 ms each at 3,000 customers). A full
+  local seed is therefore a long run — hours, not minutes. Use
+  `--profile smoke` or count overrides plus `--maxMinutes` for bounded
+  probes; the seed summary always reports actual counts created, and
+  the state file records whether a run was truncated.
+- The local stack is an in-memory implementation on one machine.
+  Numbers from it are a local measurement, not hosted capacity evidence.
+  Re-run against a hosted environment with only `--base-url` and
+  `FREEDMS_SCALE_TOKEN` changed.
+- The harness does not check for cross-tenant reads or unbounded scans
+  in endpoint code; it measures latency and errors only.
+
+API-created records have current creation/posting timestamps: the full
+profile models ten years of record volume, not ten years of dated history.
+Surplus sold vehicles have no associated deal posting; parts lines are
+unlinked synthetic charges, with stocked parts seeded separately.

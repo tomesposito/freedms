@@ -14,7 +14,9 @@
     "typecheck": "tsc -p packages/shared && tsc -p packages/api && tsc -p packages/web && tsc -p scripts",
     "test": "node --import tsx scripts/test.ts",
     "dev": "node scripts/dev.mjs",
-    "pilot": "node --import tsx scripts/pilot.ts"
+    "pilot": "node --import tsx scripts/pilot.ts",
+    "scale:seed": "node --import tsx scripts/scale-seed.ts",
+    "scale:measure": "node --import tsx scripts/scale-measure.ts"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",

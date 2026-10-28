@@ -58,4 +58,5 @@ import '../packages/api/test/signatures.test.js';
 import '../packages/api/test/privacy.test.js';
 
 import '../packages/api/test/hosted.test.js';
+import '../packages/api/test/scale.test.js';
 import '../packages/web/test/hosted.test.js';
