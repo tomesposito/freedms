@@ -302,4 +302,30 @@ cent totals, accounting callers and CSV outputs retain their existing contracts.
 The #49 scale harness is unchanged; these checks are local and offline, not
 hosted capacity evidence.
 
-Local check: results will be filled in after measurement by the supervisor.
+Local check on 2026-10-28 (Node v24.22.1), using the unchanged #49 harness:
+
+```sh
+node --import tsx scripts/scale-seed.ts --profile smoke --heavy-vehicles 2000 --heavy-in-stock 100 --heavy-leads 12000 --heavy-customers 2400 --heavy-deals 400 --heavy-repair-orders 2500 --heavy-parts 60 --heavy-appointments 12 --light-tenants 0 --state /tmp/issue55-state-a.json --maxMinutes 40
+node --import tsx scripts/scale-measure.ts --state /tmp/issue55-state-a.json
+node --import tsx scripts/scale-seed.ts --profile smoke --heavy-vehicles 10000 --heavy-in-stock 100 --heavy-leads 1200 --heavy-customers 30000 --heavy-deals 0 --heavy-repair-orders 0 --heavy-parts 0 --heavy-appointments 0 --light-tenants 0 --state /tmp/issue55-state-b.json --maxMinutes 40
+node --import tsx scripts/scale-measure.ts --state /tmp/issue55-state-b.json
+```
+
+Dataset A (heavy tenant only, no light tenants), 100 requests per level:
+sales report p95 **86.0 ms at peak (concurrency 5) — PASS** and **538.1 ms
+at 10x (concurrency 50) — PASS** against the 1,000 ms report budget, zero
+errors at both levels. Before this fix the same dataset measured p95
+202 ms at peak and 1,439 ms at 10x. A sequential full-range read took
+30.3 ms and returned all 400 sold deals; a year-2000 range returned zero
+rows, and the CSV export carried the same 400 rows.
+
+Dataset B profile for this endpoint (10,000 vehicles, 30,000 customers,
+zero deals; 1,200 leads stood in for the original 49,271 because leads do
+not touch the sales report's scaffolding): sales report p95 **31.8 ms at
+peak — PASS** and **88.4 ms at 10x — PASS**, zero errors. Before this fix
+that profile measured p50 570 ms / p95 1,295 ms at peak and p95 3,721 ms
+at 10x — the cost was loading 10,000 vehicles and 30,000 customers to
+build a report with no rows. The report no longer loads either set.
+
+These are local in-memory measurements on one shared 2-core box, not
+hosted (DynamoDB) capacity evidence.
