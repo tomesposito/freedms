@@ -2,11 +2,29 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AuthClaims, OutboxEvent, VehicleInput, VehicleView } from '@freedms/shared';
 import { MemoryRepositories } from '../src/memory.js';
+import { vehiclePage } from '../src/repository.js';
 import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens, validateClaims } from '../src/auth.js';
 const now = new Date('2026-10-19T12:00:00Z');
 // Synthetic test fixtures only; never imported by runtime code or seeded into local storage.
 const input: VehicleInput = {mileage: null, stockNumber: 'test-stock', vin: '1HGCM82633A004352', year: 2003, make: 'Test make', model: 'Test model', trim: '', status: 'available', listPrice: 129999, cost: 100000, reconCosts: [{description: 'Test work', amount: 1999}, {description: 'Test labor', amount: 5000}], dateStocked: '2026-10-01', location: '', notes: ''};
+test('vehicle windows match full ordering across ties, input orders, and deep offsets', () => {
+  const rows = Array.from({length: 401}, (_, i) => ({...input,
+    id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, tenantId: 'A', version: 1,
+    createdAt: new Date(now.getTime() + (i % 13) * 1000).toISOString(), updatedAt: now.toISOString(),
+  }));
+  const expected = [...rows].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+  for (const source of [rows, [...rows].reverse(), expected, [...expected].reverse()]) {
+    for (const offset of [0, 1, 73, 199, 350, 401, Number.MAX_SAFE_INTEGER]) {
+      for (const limit of [1, 17, 100, 500]) {
+        assert.deepEqual(vehiclePage([...source], {offset, limit}), {
+          vehicles: expected.slice(offset, offset + limit), total: rows.length,
+        });
+      }
+    }
+  }
+});
+
 async function setup(role: 'admin' | 'staff' = 'admin', active = true) {
   const repositories = new MemoryRepositories();
   const tokens = new LocalTokens('test-secret-must-be-at-least-32-characters', () => now.getTime());

@@ -105,6 +105,36 @@ export function assertMfa(tenantId: string, record: MfaRecord, expectedVersion: 
 }
 
 export function vehiclePage(vehicles: Vehicle[], {limit, offset}: {limit: number; offset: number}): {vehicles: Vehicle[]; total: number} {
-  vehicles.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
-  return {vehicles: vehicles.slice(offset, offset + limit), total: vehicles.length};
+  // UTC ISO timestamps and UUIDs sort lexicographically; avoid localeCompare overhead on this hot path.
+  const compare = (a: Vehicle, b: Vehicle): number => a.createdAt > b.createdAt ? -1 : a.createdAt < b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  const total = vehicles.length;
+  if (offset >= total) return {vehicles: [], total};
+  const end = Math.min(offset + limit, total);
+  // Keep only the first offset + limit rows in a max heap, with the latest-sorting row at the root.
+  // Deep pages use the full sort when retaining a heap would offer little benefit.
+  if (end < total / 2) {
+    // Scan recent insertions first: they usually already contain the newest page.
+    const heap = vehicles.slice(total - end);
+    const siftDown = (start: number): void => {
+      let parent = start;
+      while (parent * 2 + 1 < heap.length) {
+        let child = parent * 2 + 1;
+        if (child + 1 < heap.length && compare(heap[child + 1], heap[child]) > 0) child++;
+        if (compare(heap[parent], heap[child]) >= 0) break;
+        [heap[parent], heap[child]] = [heap[child], heap[parent]];
+        parent = child;
+      }
+    };
+    for (let i = Math.floor(heap.length / 2) - 1; i >= 0; i--) siftDown(i);
+    for (let i = total - end - 1; i >= 0; i--) {
+      if (compare(vehicles[i], heap[0]) < 0) {
+        heap[0] = vehicles[i];
+        siftDown(0);
+      }
+    }
+    heap.sort(compare);
+    return {vehicles: heap.slice(offset), total};
+  }
+  vehicles.sort(compare);
+  return {vehicles: vehicles.slice(offset, end), total};
 }
