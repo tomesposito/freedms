@@ -493,3 +493,31 @@ departmental evidence either way (the issue says the same).
 
 These are local in-memory measurements on one shared 2-core box, not
 hosted (DynamoDB) capacity evidence.
+
+## Pencil calculation (#59)
+
+Memory `crmWrite` previously copied the entire tenant CRM map and scanned all
+rows for duplicate part numbers on every transaction, including deal-only
+pencil saves. It now maintains a tenant-local part-number-to-part-id index.
+Part writes stage releases before reservations, allowing same-transaction
+swaps while rejecting duplicate final numbers. All uniqueness, version and
+event checks finish before synchronous application of rows and index changes.
+
+Part-number validation and index updates cost O(P) expected time and O(P)
+temporary space for P parts in the transaction, using map lookups instead of
+scanning tenant records. The persistent index holds one entry per part.
+Transactions without parts perform no index work and never copy the CRM map;
+work remains proportional to the transaction records and their clone sizes.
+Vehicle writes, outbox events and accounting/service-board/forecast epoch
+bumps retain their existing behavior. Dynamo already reserves part numbers
+transactionally with `PART-NUMBER#` writes and is unchanged.
+
+**Measurements pending — Muse verification placeholder:** re-run the unchanged
+#49 `scripts/scale-seed.ts` and `scripts/scale-measure.ts` harness against
+Dataset-B-scale volume (~89,000 tenant CRM records). Record exact commands,
+actual dataset counts, errors and pencil PUT p95 at peak (5) and 10x (50)
+concurrency here. Both must be below 300 ms. No latency measurements were run
+for this change; the budget remains unverified until that run. Offline tests
+cover uniqueness, renames, swaps, rejected-transaction atomicity, non-part
+writes and tenant isolation. This removes the identified memory write scan;
+it does not establish end-to-end latency or hosted Dynamo capacity.

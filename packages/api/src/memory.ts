@@ -9,13 +9,13 @@ import type { Customer, CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicl
 import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 const forecastKinds = new Set<CrmEntity['kind']>(['deal', 'service-appointment', 'part', 'parts-sale', 'repair-order']);
-interface State { accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
+interface State { accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
   private states = new Map<string, State>();
   forTenant(tenantId: string): TenantRepository {
     requireId(tenantId);
     let state = this.states.get(tenantId);
-    if (!state) { state = {accountingEpoch: 0, accountingCache: new Map(), forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
+    if (!state) { state = {accountingEpoch: 0, accountingCache: new Map(), forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), partNumbers: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
     const s = state;
     const check = (event: OutboxEvent) => { assertScope(tenantId, event); if (s.events.has(event.id)) throw conflict(); };
     // Synchronous validation followed by synchronous map writes: no interleaved await or partial commits.
@@ -126,16 +126,28 @@ export class MemoryRepositories implements RepositoryFactory {
           if (s.vehicles.get(record.id)?.version !== expectedVersion) throw conflict();
         }
         assertCrmWrites(tenantId, writes);
-        const finalRows = new Map(s.crm);
-        for (const {record} of writes) finalRows.set(`${record.kind}#${record.id}`, record);
-        const numbers = new Set<string>();
-        for (const record of finalRows.values()) if (record.kind === 'part') {
-          if (numbers.has(record.partNumber)) throw conflict();
-          numbers.add(record.partNumber);
+        const parts = writes.flatMap(({record}) => record.kind === 'part' ? [record] : []);
+        let partNumbers: Map<string, string | undefined> | undefined;
+        if (parts.length) {
+          // Stage releases before reservations so final-state swaps remain valid.
+          partNumbers = new Map();
+          for (const record of parts) {
+            const old = s.crm.get(`part#${record.id}`);
+            if (old?.kind === 'part') partNumbers.set(old.partNumber, undefined);
+          }
+          for (const record of parts) {
+            const owner = partNumbers.has(record.partNumber) ? partNumbers.get(record.partNumber) : s.partNumbers.get(record.partNumber);
+            if (owner !== undefined && owner !== record.id) throw conflict();
+            partNumbers.set(record.partNumber, record.id);
+          }
         }
         for (const {record, expectedVersion, event} of writes) {
           requireId(record.id); check(event);
           if ((s.crm.get(`${record.kind}#${record.id}`)?.version ?? 0) !== expectedVersion) throw conflict();
+        }
+        if (partNumbers) for (const [number, id] of partNumbers) {
+          if (id === undefined) s.partNumbers.delete(number);
+          else s.partNumbers.set(number, id);
         }
         for (const {record, event} of vehicles) { s.vehicles.set(record.id, structuredClone(record)); s.events.set(event.id, structuredClone(event)); }
         for (const {record, event} of writes) {

@@ -115,6 +115,44 @@ test('Concurrent catalog creates and stock sales cannot duplicate part numbers o
   const {part,call,stock}=await setup(); const created=await Promise.all([part(),part()]); assert.deepEqual(created.map(r=>r.status).sort(),[201,409]); const p=created.find(r=>r.status===201)!.data;
   const sold=await Promise.all([call('POST','/parts/sales',{partId:p.id,quantity:15}),call('POST','/parts/sales',{partId:p.id,quantity:15})]); assert.deepEqual(sold.map(r=>r.status).sort(),[201,409]); assert.equal(await stock(p.id),5); assert.equal((await call('GET','/parts/sales')).data.length,1);
 });
+test('Memory part-number index preserves final-state uniqueness, renames, swaps and non-part writes',async()=>{
+  const {part,ro,repositories}=await setup(),repo=repositories.forTenant('A');
+  const p:Part=(await part()).data,q:Part=(await part({partNumber:'SECOND'})).data;
+  const principal:Principal={tenantId:'A',userId:'userA',role:'staff'},time=p.updatedAt;
+  const write=(record:Part)=>({record,expectedVersion:record.version-1,event:stockEvent(principal,time,record)});
+  const duplicate={...p,id:'duplicate'};
+  await assert.rejects(repo.crmWrite([write(duplicate)]),{status:409});
+  await assert.rejects(repo.crmWrite([write({...p,version:2,partNumber:q.partNumber})]),{status:409});
+  await assert.rejects(repo.crmWrite([write({...p,version:2,partNumber:'SHARED'}),write({...q,version:2,partNumber:'SHARED'})]),{status:409});
+  const renamed={...p,version:2,partNumber:'NEW'};
+  await repo.crmWrite([write(renamed)]);
+  await repo.crmWrite([write(duplicate)]);
+  await assert.rejects(repo.crmWrite([write({...p,id:'new-duplicate',partNumber:'NEW'})]),{status:409});
+  const swappedP={...renamed,version:3,partNumber:q.partNumber},swappedQ={...q,version:2,partNumber:renamed.partNumber};
+  await repo.crmWrite([write(swappedP),write(swappedQ)]);
+  assert.deepEqual(await repo.crmGet('part',p.id),swappedP);assert.deepEqual(await repo.crmGet('part',q.id),swappedQ);
+  await repo.crmWrite([write({...swappedP,version:4})]);
+  assert.equal((await ro([])).status,201);
+  for(const partNumber of [p.partNumber,q.partNumber,renamed.partNumber]) await assert.rejects(repo.crmWrite([write({...p,id:'after-ro',partNumber})]),{status:409});
+  assert.equal((await part({partNumber:'NEW'},'B')).status,201);
+});
+test('Memory rejected part transactions leave rows, reservations and events untouched',async()=>{
+  const {part,repositories}=await setup(),repo=repositories.forTenant('A');
+  const p:Part=(await part()).data,q:Part=(await part({partNumber:'SECOND'})).data;
+  const principal:Principal={tenantId:'A',userId:'userA',role:'staff'},time=p.updatedAt;
+  const write=(record:Part)=>({record,expectedVersion:record.version-1,event:stockEvent(principal,time,record)});
+  const before=await repo.events();
+  const rename=write({...p,version:2,partNumber:'FRESH'});
+  const stale=write({...q,version:3,partNumber:'STALE'});
+  const reusedEvent={...write({...q,version:2,partNumber:'EVENT'}),event:{...write({...q,version:2}).event,id:before[0].id}};
+  for(const second of [stale,reusedEvent,write({...q,version:2,partNumber:'FRESH'})]) {
+    await assert.rejects(repo.crmWrite([rename,second]),{status:409});
+    assert.deepEqual(await repo.crmGet('part',p.id),p);assert.deepEqual(await repo.crmGet('part',q.id),q);
+    assert.deepEqual(await repo.events(),before);
+    for(const partNumber of [p.partNumber,q.partNumber]) await assert.rejects(repo.crmWrite([write({...p,id:'duplicate',partNumber})]),{status:409});
+  }
+  for(const partNumber of ['FRESH','STALE','EVENT']) await repo.crmWrite([write({...p,id:partNumber,partNumber})]);
+});
 test('Dynamo reserves and releases unique part numbers atomically with versioned records and events',async()=>{
   const time='2026-10-24T12:00:00Z', principal:Principal={tenantId:'A',userId:'userA',role:'staff'};
   const p:Part={...input,location:'',quantityReserved:0,kind:'part',id:'part',tenantId:'A',version:1,createdAt:time,updatedAt:time}; const commands:TransactWriteCommand[]=[];
