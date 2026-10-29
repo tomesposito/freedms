@@ -512,12 +512,31 @@ Vehicle writes, outbox events and accounting/service-board/forecast epoch
 bumps retain their existing behavior. Dynamo already reserves part numbers
 transactionally with `PART-NUMBER#` writes and is unchanged.
 
-**Measurements pending — Muse verification placeholder:** re-run the unchanged
-#49 `scripts/scale-seed.ts` and `scripts/scale-measure.ts` harness against
-Dataset-B-scale volume (~89,000 tenant CRM records). Record exact commands,
-actual dataset counts, errors and pencil PUT p95 at peak (5) and 10x (50)
-concurrency here. Both must be below 300 ms. No latency measurements were run
-for this change; the budget remains unverified until that run. Offline tests
-cover uniqueness, renames, swaps, rejected-transaction atomicity, non-part
-writes and tenant isolation. This removes the identified memory write scan;
-it does not establish end-to-end latency or hosted Dynamo capacity.
+A second tenant-size scan sat in the same request path: memory `crmList`
+materialized every CRM record in the tenant and filtered it by kind, and the
+jacket-completion check wrapped around every deal PUT calls
+`crmList('document')` twice per request. Memory now keeps a per-kind index
+(`crmByKind`) in sync with the CRM map at the only two mutation points
+(`crmWrite` and invite acceptance), so `crmList(kind)` reads and clones only
+that kind's records, in the same insertion order as before. Dynamo `crmList`
+already queries a kind prefix and is unchanged.
+
+Local check on 2026-10-29 (Node v24.22.1): seeded the smoke profile with
+`--heavy-vehicles 10000 --heavy-in-stock 100 --heavy-leads 49271
+--heavy-customers 30000 --heavy-deals 15 --heavy-repair-orders 40
+--heavy-parts 60 --light-tenants 0` (Dataset B's counts: 30,000 customers,
+49,271 leads, 9,855 follow-ups, ~89,000 CRM records; seed not truncated) and
+ran the unchanged measure CLI with 100 requests per endpoint, peak 5 and
+10x 50. With only the part-number index in place, pencil measured p95
+**140.5 ms at peak — PASS** and **1,198.1 ms at 10x — FAIL**, with zero
+errors; a sequential pencil PUT on the heavy tenant still cost ~20 ms
+against ~3.5 ms on a fresh tiny tenant on the same server, which isolated
+the `crmList` scan above. With both fixes, pencil measured p95 **9.7 ms at
+peak — PASS** and **25.9 ms at 10x — PASS**, zero errors at both levels
+(issue's Dataset B measurements: 461 ms peak, 1,163 ms 10x). An in-process
+profile at 79,000 CRM records put the handler-level pencil PUT at 0.30 ms
+median after both fixes, against 5.23 ms before the `crmList` fix.
+The same measure run still failed lead-pipeline-board (peak and 10x) and
+inventory-aging-report (10x) against their budgets; those are tracked by
+their own follow-up issues (#62, #60), not by this one. This is a local
+in-memory measurement, not hosted (DynamoDB) capacity evidence.
