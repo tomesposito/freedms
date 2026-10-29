@@ -60,6 +60,13 @@ of Service and Privacy Notice before creating the workspace.
 
 ![Onboarding review](docs/screenshots/onboarding-review.png)
 
+**Terms and privacy** — both documents are readable in the app before signup,
+flagged as drafts pending final legal review. The accepted versions and the
+effective sharing policy are recorded at workspace creation; admins can see
+the record on the Users screen.
+
+![Terms of Service page](docs/screenshots/terms-of-service.png)
+
 **Invite links** — copy and share links yourself. No email is sent.
 
 ![Onboarding finish and invite links](docs/screenshots/onboarding-finish.png)

@@ -25,7 +25,7 @@ export function signupPayload(data: Onboarding) {
   return {...data, onboarding: true as const, acceptance: {termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION}};
 }
 export function acceptanceHtml(accepted: boolean): string {
-  return `<p><strong>Draft — pending final legal review</strong></p><p>By accepting, you represent that the dealership exists and you have authority to bind it. If no dealership is bound because it does not exist or you lack authority, you agree personally to be bound as the Dealer, as described in Section 1.1.</p><label><input type="checkbox" name="termsAccepted" ${accepted ? 'checked' : ''}> I agree to the <a href="#/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a> and <a href="#/privacy" target="_blank" rel="noopener noreferrer">Privacy Notice</a></label>`;
+  return `<p><strong>Draft — pending final legal review</strong></p><p>By accepting, you represent that the dealership exists and you have authority to bind it. If no dealership is bound because it does not exist or you lack authority, you agree personally to be bound as the Dealer, as described in Section 1.1.</p><label class="check terms-accept"><input type="checkbox" name="termsAccepted" ${accepted ? 'checked' : ''}><span>I agree to the <a href="#/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a> and <a href="#/privacy" target="_blank" rel="noopener noreferrer">Privacy Notice</a></span></label>`;
 }
 export function mountOnboarding(root: HTMLElement, finish: (data: ReturnType<typeof signupPayload>) => Promise<{invites: Invite[]}>, enter: () => void): void {
   const data: Onboarding = {name: '', email: '', dealership: '', address: '', phone: '', dealerType: '', invites: []};
