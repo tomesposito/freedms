@@ -27,10 +27,19 @@ export function mockCognito(port = 9229) {
       if(body.ChallengeName==='PASSWORD_VERIFIER') {
         if(username.startsWith('newpass')) return send({ChallengeName:'NEW_PASSWORD_REQUIRED',Session:username,ChallengeParameters:{userAttributes:JSON.stringify({email:username}),requiredAttributes:'[]'}});
         if(username.startsWith('totp')) return send({ChallengeName:'SOFTWARE_TOKEN_MFA',Session:username,ChallengeParameters:{}});
-        if(username.startsWith('unsupported')) return send({ChallengeName:'MFA_SETUP',Session:username,ChallengeParameters:{}});
+        if(username.startsWith('setup')) return send({ChallengeName:'MFA_SETUP',Session:username,ChallengeParameters:{MFAS_CAN_SETUP:'["SOFTWARE_TOKEN_MFA"]'}});
+        if(username.startsWith('unsupported')) return send({ChallengeName:'MFA_SETUP',Session:username,ChallengeParameters:{MFAS_CAN_SETUP:'["SMS_MFA"]'}});
       }
+      if(body.ChallengeName==='NEW_PASSWORD_REQUIRED' && username.startsWith('newpasssetup')) return send({ChallengeName:'MFA_SETUP',Session:username,ChallengeParameters:{MFAS_CAN_SETUP:'["SOFTWARE_TOKEN_MFA"]'}});
       if(body.ChallengeName==='SOFTWARE_TOKEN_MFA' && body.ChallengeResponses.SOFTWARE_TOKEN_MFA_CODE!=='123456') return fail('CodeMismatchException');
+      if(body.ChallengeName==='MFA_SETUP' && body.Session!=='verified:'+username) return fail('NotAuthorizedException');
       return send({AuthenticationResult:tokens()});
+    }
+    if(operation==='AssociateSoftwareToken') return send({SecretCode:'JBSWY3DPEHPK3PXP',Session:'associated:'+body.Session});
+    if(operation==='VerifySoftwareToken') {
+      if(body.UserCode!=='123456') return fail('CodeMismatchException');
+      if(!body.Session?.startsWith('associated:')) return fail('NotAuthorizedException');
+      return send({Status:'SUCCESS',Session:'verified:'+body.Session.slice('associated:'.length)});
     }
     if(operation==='ForgotPassword') return send({CodeDeliveryDetails:{DeliveryMedium:'EMAIL'}});
     if(operation==='ConfirmForgotPassword' && body.ConfirmationCode!=='123456') return fail('CodeMismatchException');

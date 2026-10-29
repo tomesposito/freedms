@@ -197,6 +197,12 @@ Publishing does not deploy. The public repository has no AWS trust or access key
 The build uses repository variables `VITE_COGNITO_DOMAIN` and
 `VITE_COGNITO_CLIENT_ID`, plus optional `VITE_COGNITO_USER_POOL_ID`
 (format `us-east-1_xxx`) and `VITE_AUTH_FLOW=redirect` for rollback; these are public browser configuration, not credentials.
+The release workflow defaults to `VITE_AUTH_FLOW=inapp` and requires the pool ID.
+The manifest configuration digest binds both the pool ID and selected login flow;
+switching either requires an independently verified operator baseline update before
+approval. Production packaging rejects test Cognito endpoints and region overrides
+outside `us-east-1`. The in-app page supports initial authenticator enrollment as
+well as password changes and existing authenticator challenges; MFA remains required.
 Every release also packages `site/` with content-addressed screenshots under
 `marketing/` in `web.tar.gz`. The version-2 manifest binds both frontends. The
 marketing page describes the invite-only pilot and links sign-in to the app;

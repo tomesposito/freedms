@@ -11,11 +11,13 @@ test('auth flow defaults, rollback and missing pool ID', () => {
   assert.equal(selectAuthFlow({...config,poolId:undefined}),'redirect'); assert.equal(selectAuthFlow({}),'redirect');
 });
 test('all login states are accessible and escape errors', () => {
-  for(const state of ['sign-in','new-password','totp','forgot','forgot-confirm','error'] as const) {
+  for(const state of ['sign-in','new-password','totp','totp-setup','forgot','forgot-confirm','error'] as const) {
     const html=loginHtml(state,'<script>'); assert.ok(html.includes('freeDMS')); assert.ok(html.includes('&lt;script&gt;'));
     assert.ok(!html.includes('<script>')); if(state!=='sign-in') assert.ok(html.includes('Back to sign in'));
   }
   assert.match(loginHtml(),/autocomplete="current-password"/); assert.match(loginHtml('new-password'),/autocomplete="new-password"/);
+  assert.match(loginHtml('totp-setup', '', '<setup-key>'), /&lt;setup-key&gt;/);
+  assert.ok(!loginHtml('sign-in').includes('JBSWY3DPEHPK3PXP'));
 });
 test('real Cognito SDK offline SRP, challenges, reset, refresh and revoke', async () => {
   const mock=await mockCognito(0);
@@ -32,6 +34,17 @@ test('real Cognito SDK offline SRP, challenges, reset, refresh and revoke', asyn
     if('challenge' in first) assert.ok('tokens' in await client.respondNewPassword(first.session,'NewPassword123!'));
     const totp=await client.signIn('totp@example.test','Password123!'); assert.ok('challenge' in totp && totp.challenge==='totp');
     if('challenge' in totp) {await assert.rejects(client.respondTotp(totp.session,'000000'),/code is incorrect/);assert.ok('tokens' in await client.respondTotp(totp.session,'123456'));}
+    for (const username of ['setup@example.test','newpasssetup@example.test']) {
+      let setup = await client.signIn(username,'Password123!');
+      if ('challenge' in setup && setup.challenge === 'new-password') setup = await client.respondNewPassword(setup.session,'NewPassword123!');
+      assert.ok('challenge' in setup && setup.challenge === 'totp-setup');
+      if ('challenge' in setup) {
+        assert.equal(setup.session.secretCode, 'JBSWY3DPEHPK3PXP');
+        await assert.rejects(client.completeTotpSetup(setup.session,'000000'), /code is incorrect/);
+        assert.ok('tokens' in await client.completeTotpSetup(setup.session,'123456'));
+      }
+    }
+    assert.ok(mock.calls.includes('AssociateSoftwareToken')); assert.ok(mock.calls.includes('VerifySoftwareToken'));
     await assert.rejects(client.signIn('unsupported@example.test','Password123!'),/not supported/);
     await client.forgotPassword('pilot@example.test'); await assert.rejects(client.confirmForgotPassword('pilot@example.test','000000','NewPassword123!'),/code is incorrect/);
     await client.confirmForgotPassword('pilot@example.test','123456','NewPassword123!');

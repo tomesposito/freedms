@@ -14,8 +14,9 @@ fake JWTs, refresh, revocation and password-reset responses. The actual Cognito
 SDK performs SRP in the browser. This fixture does **not** verify SRP proofs and
 is not an identity service. Any nonempty password works for success fixtures.
 `wrong@…` and `unknown@…` simulate rejected credentials, `newpass@…` requests a
-new password, `totp@…` requests code `123456`, and `unsupported@…` requests MFA
-setup (reported as unsupported). Reset confirmation also uses `123456`.
+new password, and `totp@…` requests code `123456`. `setup@…` enrolls an authenticator,
+and `newpasssetup@…` requires both a new password and enrollment. Setup verification
+and reset confirmation use `123456`. `unsupported@…` requests unsupported SMS setup.
 No AWS connection is made. Never configure this endpoint in a production build.
 
 ```sh
