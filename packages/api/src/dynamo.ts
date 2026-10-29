@@ -274,10 +274,11 @@ export class DynamoRepositories implements RepositoryFactory {
         await transact([{Delete: {TableName: this.table, Key: key(`VEHICLE#${requireId(id)}`),
           ConditionExpression: '#d.#v = :v', ExpressionAttributeNames: {'#d': 'data', '#v': 'version'}, ExpressionAttributeValues: {':v': version}}}, eventPut(event)]);
       },
-      provision: async (tenant, user, membership, event) => {
+      provision: async (tenant, user, membership, event, acceptance) => {
+        if (acceptance) assertCrmWrites(tenantId, [acceptance]);
         assertScope(tenantId, membership); assertEvent(tenantId, 1, event, 'tenant.created');
         if (tenant.id !== tenantId || membership.userId !== user.id) throw new Error('Invalid provisioning scope');
-        await transact([put('PROFILE', tenant), put(`USER#${requireId(user.id)}`, user), put(`MEMBER#${user.id}`, membership), eventPut(event)]);
+        await transact([put('PROFILE', tenant), put(`USER#${requireId(user.id)}`, user), put(`MEMBER#${user.id}`, membership), eventPut(event), ...(acceptance ? [put(`${acceptance.record.kind.toUpperCase()}#${acceptance.record.id}`, acceptance.record), eventPut(acceptance.event)] : [])]);
       }
     };
   }

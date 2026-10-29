@@ -65,3 +65,27 @@ test('local admins can create invitations from an empty Users page separately fr
   assert.match(hosted, /Pilot accounts are created by your pilot operator/);
   for (const hosted of [false, true]) assert.equal(usersHtml([], false, [], undefined, hosted), '<h1>Users</h1><p>Only administrators can manage workspace users.</p>');
 });
+
+test('finish requires assent and sends current document versions without client checkbox state', async () => {
+  const {signupPayload, acceptanceHtml} = await import('../src/onboarding.js');
+  const {TERMS_VERSION, PRIVACY_VERSION} = await import('@freedms/shared');
+  assert.ok(onboardingError(data, 3)); assert.equal(onboardingError(data, 3, true), '');
+  const html = acceptanceHtml(false);
+  assert.doesNotMatch(html, /checked/); assert.match(html, /Draft — pending final legal review/);
+  assert.equal((html.match(/target="_blank" rel="noopener noreferrer"/g) ?? []).length, 2);
+  assert.match(acceptanceHtml(true), /checked/);
+  assert.deepEqual(signupPayload(data), {...data, onboarding: true, acceptance: {termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION}});
+});
+
+test('public legal pages render the complete operative drafts safely without counsel notes', async () => {
+  const {legalPageHtml, legalMarkdown, acceptanceRecordHtml} = await import('../src/legal.js');
+  const {TERMS_DOCUMENT, PRIVACY_DOCUMENT} = await import('@freedms/shared');
+  for (const [kind, doc] of [['terms', TERMS_DOCUMENT], ['privacy', PRIVACY_DOCUMENT]] as const) {
+    const html = legalPageHtml(kind);
+    assert.match(html, /Draft — pending final legal review/); assert.match(html, /v1-draft/);
+    assert.doesNotMatch(html, /Counsel notes|Review authorities|Pre-incorporation residual risk/);
+    assert.ok(html.includes(legalMarkdown(doc.text))); assert.match(html, /<h1>freeDMS/); assert.match(html, /<h2>/);
+  }
+  assert.equal(legalMarkdown('# <script>\n\n- <img onerror=x>\n- **bold**'), '<h1>&lt;script&gt;</h1>\n<ul><li>&lt;img onerror=x&gt;</li><li><strong>bold</strong></li></ul>');
+  assert.match(acceptanceRecordHtml(null), /No acceptance recorded/);
+});

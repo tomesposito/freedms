@@ -1,3 +1,4 @@
+import { TERMS_VERSION, PRIVACY_VERSION } from '@freedms/shared';
 /**
  * Scale seed generator (issue #49). Creates synthetic tenants/records through
  * the HTTP API like a user would. Run:
@@ -77,7 +78,7 @@ async function provision(label: string, dealership: string): Promise<{ client: C
   const email = `scale-${label}@example.test`;
   const anon = new Client({}, '');
   const created = await anon.request<any>('POST', '/local/session', {
-    onboarding: true, name: 'Scale Admin', email, dealership,
+    acceptance: {termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION}, onboarding: true, name: 'Scale Admin', email, dealership,
     address: '1 Scale Way', phone: '555-0100', dealerType: 'independent', invites: [],
   });
   const client = new Client({}, created.token);

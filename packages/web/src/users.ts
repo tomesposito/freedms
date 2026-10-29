@@ -1,5 +1,6 @@
 import { inviteLinksHtml, bindInviteCopies } from './invites';
-import type { PublicWorkspaceUser, Invite } from '@freedms/shared';
+import { acceptanceRecordHtml } from './legal';
+import type { TermsAcceptance, PublicWorkspaceUser, Invite } from '@freedms/shared';
 import { escapeHtml as e } from './format';
 import type { UI } from './desking';
 export function usersHtml(users: PublicWorkspaceUser[], admin: boolean, invites: Invite[] = [], linkBase?: string, hosted = false): string {
@@ -12,9 +13,9 @@ export async function usersRoute(ui: UI, tenantId: string, hosted = false): Prom
   if (!ui.admin) { ui.shell(usersHtml([], false)); return; }
   ui.shell('<p>Loading workspace users…</p>');
   try {
-    const [users, invites] = await Promise.all([ui.api<PublicWorkspaceUser[]>('/admin/users'), ui.api<Invite[]>('/admin/invites')]);
+    const [users, invites, acceptance] = await Promise.all([ui.api<PublicWorkspaceUser[]>('/admin/users'), ui.api<Invite[]>('/admin/invites'), ui.api<TermsAcceptance | null>('/admin/terms-acceptance')]);
     if (!ui.current()) return;
-    ui.shell(usersHtml(users, true, invites, undefined, hosted) + (hosted ? '' : `<p class="muted">For local sign-in, share this workspace ID with the added user: <code>${e(tenantId)}</code></p>`));
+    ui.shell(usersHtml(users, true, invites, undefined, hosted) + acceptanceRecordHtml(acceptance) + (hosted ? '' : `<p class="muted">For local sign-in, share this workspace ID with the added user: <code>${e(tenantId)}</code></p>`));
     const run = async (button: HTMLButtonElement, path: string, body: unknown) => {
       button.disabled = true;
       try { await ui.api(path, 'POST', body); if (ui.current()) ui.refresh(); }

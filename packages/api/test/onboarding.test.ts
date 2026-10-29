@@ -1,3 +1,4 @@
+import { TERMS_VERSION, PRIVACY_VERSION } from '@freedms/shared';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -8,7 +9,7 @@ import { localSession } from '../src/local-session.js';
 import { localAuth } from '../src/local-auth.js';
 import { createHandler } from '../src/handler.js';
 const now = new Date('2026-10-25T12:00:00Z');
-const payload = () => ({onboarding: true, name: 'Owner', email: 'OWNER@example.test', dealership: 'Test Motors', address: '123 Main Street', phone: '555-0100', dealerType: 'independent', invites: [{name: 'Staff', email: 'staff@example.test', role: 'staff'}, {name: 'Admin', email: 'admin@example.test', role: 'admin'}]});
+const payload = () => ({acceptance: {termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION}, onboarding: true, name: 'Owner', email: 'OWNER@example.test', dealership: 'Test Motors', address: '123 Main Street', phone: '555-0100', dealerType: 'independent', invites: [{name: 'Staff', email: 'staff@example.test', role: 'staff'}, {name: 'Admin', email: 'admin@example.test', role: 'admin'}]});
 async function setup() {
   const repositories = new MemoryRepositories(), tokens = new LocalTokens('local-test-secret-at-least-32-characters', () => now.getTime());
   let clock = now;
@@ -215,4 +216,58 @@ test('fresh onboarding session preserves the entered owner identity for the side
   assert.equal(session.status, 200);
   assert.deepEqual(session.data.user, {id: s.tokens.verify(token).sub, name: 'Olivia Owner', email: 'owner@example.test'});
   assert.equal(session.data.tenant.name, 'Test Motors');
+});
+
+test('both signup branches require current versions before any repository access', async () => {
+  const s = await setup();
+  for (const base of [payload(), {dealership: 'Local Motors', name: 'Owner'}]) {
+    for (const [acceptance, status] of [[undefined, 400], [null, 400], [{}, 400], [{termsVersion: TERMS_VERSION}, 400], [{...payload().acceptance, extra: true}, 400], [{...payload().acceptance, termsVersion: 'old'}, 409], [{...payload().acceptance, privacyVersion: 'old'}, 409]] as const) {
+      await assert.rejects(localSession(JSON.stringify({...base, acceptance}), {forTenant: () => { assert.fail('No repository access before validation'); }}, s.tokens, now), error => (error as {status: number}).status === status);
+    }
+    await assert.rejects(localSession(JSON.stringify({...base, acceptance: payload().acceptance, extra: true}), {forTenant: () => { assert.fail('No repository access before validation'); }}, s.tokens, now), error => (error as {status: number}).status === 400);
+  }
+});
+
+test('signup acceptance is immutable, exact, admin-only and tenant isolated', async () => {
+  const s = await setup(), a = await s.create([]), b = await s.create([]);
+  const claims = s.tokens.verify(a.token), tenantId = claims['custom:tenant_id'];
+  const repo = s.repositories.forTenant(tenantId), records = await repo.crmList('terms-acceptance');
+  assert.deepEqual(records, [{id: 'signup', kind: 'terms-acceptance', tenantId, version: 1, createdAt: now.toISOString(), updatedAt: now.toISOString(), acceptedAt: now.toISOString(), userId: claims.sub, name: 'Owner', email: 'owner@example.test', termsVersion: TERMS_VERSION, privacyVersion: PRIVACY_VERSION, sharingPolicy: 'standard'}]);
+  assert.deepEqual((await s.call('/admin/terms-acceptance', a.token)).data, records[0]);
+  const other = await s.call('/admin/terms-acceptance', b.token);
+  assert.notEqual(other.data.tenantId, tenantId); assert.notEqual(other.data.userId, claims.sub);
+  assert.equal((await s.call('/admin/terms-acceptance', b.token, 'GET', undefined)).status, 200);
+  const staff = (await s.call('/admin/users', a.token, 'POST', {name: 'Staff', email: 'staff@example.test', role: 'staff'})).data;
+  assert.equal((await s.call('/admin/terms-acceptance', s.tokens.issue(staff.userId, tenantId))).status, 403);
+  assert.equal((await s.call('/admin/terms-acceptance', a.token, 'POST', {})).status, 405);
+  const events = (await repo.events()).filter(e => e.type === 'terms-acceptance.created');
+  assert.equal(events.length, 1); assert.equal(events[0].actorId, claims.sub); assert.equal(events[0].aggregateId, 'signup');
+  assert.doesNotMatch(JSON.stringify(events), /email|example.test|token/);
+  await assert.rejects(repo.crmWrite([{record: {...records[0], version: 2}, expectedVersion: 1, event: {...events[0], aggregateVersion: 2}}]), /immutable/);
+  await assert.rejects(repo.crmWrite([{record: records[0], expectedVersion: 0, event: events[0]}]));
+  assert.deepEqual(await repo.crmList('terms-acceptance'), records);
+});
+
+test('simple local signup records acceptance with an explicit absent email', async () => {
+  const s = await setup();
+  const result = await localSession(JSON.stringify({dealership: 'Local', name: 'Owner', acceptance: payload().acceptance}), s.repositories, s.tokens, now);
+  const token = JSON.parse(result.body).data.token;
+  const acceptance = (await s.call('/admin/terms-acceptance', token)).data;
+  assert.equal(acceptance.email, null); assert.equal(acceptance.sharingPolicy, 'standard'); assert.equal(acceptance.termsVersion, TERMS_VERSION);
+});
+
+test('Dynamo signup writes identity, acceptance and metadata event in one conditional transaction', async () => {
+  const {DynamoRepositories} = await import('../src/dynamo.js');
+  const {TransactWriteCommand} = await import('@aws-sdk/lib-dynamodb');
+  const commands: any[] = [];
+  const client = {send: async (command: any) => { commands.push(command); return {}; }} as unknown as import('@aws-sdk/lib-dynamodb').DynamoDBDocumentClient;
+  const s = await setup();
+  await localSession(JSON.stringify({...payload(), invites: []}), new DynamoRepositories('table', client), s.tokens, now);
+  assert.equal(commands.length, 1); assert.ok(commands[0] instanceof TransactWriteCommand);
+  const items = commands[0].input.TransactItems!;
+  assert.equal(items.length, 6);
+  const record = items.find(i => i.Put?.Item?.SK === 'TERMS-ACCEPTANCE#signup')!.Put!.Item!.data;
+  assert.equal(record.email, 'owner@example.test');
+  assert.ok(items.every((i: any) => i.Put.Item.PK === `TENANT#${record.tenantId}` && i.Put.ConditionExpression === 'attribute_not_exists(PK)'));
+  assert.equal(items.filter((i: any) => i.Put.Item.data.type === 'terms-acceptance.created').length, 1);
 });

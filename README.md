@@ -55,7 +55,8 @@ invites. Nothing is created until Finish; the workspace starts empty.
 
 ![Onboarding account step](docs/screenshots/onboarding-wizard.png)
 
-**Review and finish** — check the dealership and team before creating the workspace.
+**Review and finish** — check the dealership and team, then accept the draft Terms
+of Service and Privacy Notice before creating the workspace.
 
 ![Onboarding review](docs/screenshots/onboarding-review.png)
 

@@ -11,7 +11,7 @@ function credentials(tenantId: string) {
   return {token, tokenHash: hash(token)};
 }
 export function validateOnboarding(input: Record<string, unknown>) {
-  onlyKeys(input, ['onboarding', 'name', 'email', 'dealership', 'address', 'phone', 'dealerType', 'invites']);
+  onlyKeys(input, ['acceptance', 'onboarding', 'name', 'email', 'dealership', 'address', 'phone', 'dealerType', 'invites']);
   text(input.name, 'Your name'); text(input.dealership, 'Dealership');
   const email = emailAddress(input.email);
   if (!['independent', 'franchise', 'other'].includes(String(input.dealerType))) throw invalid('Choose a dealer type.');

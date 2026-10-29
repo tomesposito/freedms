@@ -199,10 +199,12 @@ export class MemoryRepositories implements RepositoryFactory {
         s.vehicles.delete(id); s.events.set(event.id, structuredClone(event));
         s.forecastEpoch++;
       },
-      provision: async (tenant, user, membership, event) => {
+      provision: async (tenant, user, membership, event, acceptance) => {
+        if (acceptance) assertCrmWrites(tenantId, [acceptance]);
         assertScope(tenantId, membership); check(event); assertEvent(tenantId, 1, event, 'tenant.created');
         if (tenant.id !== tenantId || membership.userId !== user.id) throw new Error('Invalid provisioning scope');
         if (s.tenant) throw conflict();
+        if (acceptance) { check(acceptance.event); storeCrm(acceptance.record); s.events.set(acceptance.event.id, structuredClone(acceptance.event)); }
         s.tenant = structuredClone(tenant); s.users.set(user.id, structuredClone(user));
         s.memberships.set(user.id, structuredClone(membership)); s.events.set(event.id, structuredClone(event));
       }

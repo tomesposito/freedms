@@ -53,7 +53,7 @@ export interface TenantRepository {
   create(vehicle: Vehicle, event: OutboxEvent): Promise<void>;
   update(vehicle: Vehicle, expectedVersion: number, event: OutboxEvent): Promise<void>;
   delete(id: string, expectedVersion: number, event: OutboxEvent): Promise<void>;
-  provision(tenant: Tenant, user: User, membership: Membership, event: OutboxEvent): Promise<void>;
+  provision(tenant: Tenant, user: User, membership: Membership, event: OutboxEvent, acceptance?: CrmWrite): Promise<void>;
 }
 export interface RepositoryFactory { forTenant(tenantId: string): TenantRepository }
 export function matches(vehicle: Vehicle, query: VehicleQuery): boolean {
@@ -78,8 +78,8 @@ export function assertCrmWrites(tenantId: string, writes: CrmWrite[]): void {
   if (!writes.length || writes.length > 39 || writes.filter(w=>w.record.kind!=='parts-reservation').length > 10) throw new Error('Invalid CRM transaction');
   for (const {record, expectedVersion, event} of writes) {
     assertScope(tenantId, record, event);
-    if (['signature', 'parts-return', 'parts-sale', 'compliance-check', 'journal-entry', 'payoff-quote', 'share-response'].includes(record.kind) && expectedVersion !== 0) throw new Error('Signatures, parts sales, journal entries, payoff quotes, share responses and compliance checks are immutable');
-    assertEvent(record.id, expectedVersion + 1, event, record.kind === 'signature' ? 'signature.created' : record.kind === 'parts-return' ? 'parts-return.created' : record.kind === 'parts-sale' ? 'parts-sale.created' : record.kind === 'compliance-check' ? 'compliance-check.created' : record.kind === 'share-response' ? 'share-response.created' : record.kind === 'payoff-quote' ? 'payoff-quote.created' : record.kind === 'journal-entry' ? 'journal-entry.created' : record.kind === 'document' && record.status === 'disposed' ? 'document.disposed' : `${record.kind}.${expectedVersion ? 'updated' : 'created'}`);
+    if (['terms-acceptance', 'signature', 'parts-return', 'parts-sale', 'compliance-check', 'journal-entry', 'payoff-quote', 'share-response'].includes(record.kind) && expectedVersion !== 0) throw new Error('Signatures, parts sales, journal entries, payoff quotes, share responses and compliance checks are immutable');
+    assertEvent(record.id, expectedVersion + 1, event, record.kind === 'terms-acceptance' ? 'terms-acceptance.created' : record.kind === 'signature' ? 'signature.created' : record.kind === 'parts-return' ? 'parts-return.created' : record.kind === 'parts-sale' ? 'parts-sale.created' : record.kind === 'compliance-check' ? 'compliance-check.created' : record.kind === 'share-response' ? 'share-response.created' : record.kind === 'payoff-quote' ? 'payoff-quote.created' : record.kind === 'journal-entry' ? 'journal-entry.created' : record.kind === 'document' && record.status === 'disposed' ? 'document.disposed' : `${record.kind}.${expectedVersion ? 'updated' : 'created'}`);
     if (record.version !== expectedVersion + 1 || expectedVersion < 0 || !Number.isInteger(expectedVersion)) throw new Error('Invalid CRM version');
     const key = `${record.kind}#${record.id}`;
     if (keys.has(key) || events.has(event.id)) throw new Error('Duplicate CRM transaction item');

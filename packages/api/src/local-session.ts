@@ -1,11 +1,12 @@
 /** Loopback development only. Never imported by Lambda. */
+import { TERMS_VERSION, PRIVACY_VERSION, type TermsAcceptance } from '@freedms/shared';
 import { validateOnboarding, newInvite, inviteWrite } from './invites.js';
 import { randomUUID } from 'node:crypto';
 import type { RepositoryFactory } from './repository.js';
 import { LocalTokens, authorize } from './auth.js';
 import { ApiError, requireId } from './errors.js';
 import { parseBody, response } from './handler.js';
-import { onlyKeys, text } from './validation.js';
+import { onlyKeys, text, object } from './validation.js';
 import { emailAddress } from './users.js';
 import { mfa } from './mfa.js';
 export async function localSession(body: string, repositories: RepositoryFactory, tokens: LocalTokens, now = new Date()) {
@@ -20,13 +21,18 @@ export async function localSession(body: string, repositories: RepositoryFactory
     if ((await repo.mfa(row.user.id))?.enabled) await mfa({path: '/account/mfa/verify', method: 'POST', body: JSON.stringify({code: input.code})}, principal, repo, now);
     return response(200, {data: {token: tokens.issue(row.user.id, tenantId)}});
   }
+  const acceptance = object(input.acceptance);
+  onlyKeys(acceptance, ['termsVersion', 'privacyVersion']);
+  const termsVersion = text(acceptance.termsVersion, 'Terms version'), privacyVersion = text(acceptance.privacyVersion, 'Privacy version');
+  if (termsVersion !== TERMS_VERSION || privacyVersion !== PRIVACY_VERSION) throw new ApiError(409, 'CONFLICT', 'Accept the current Terms of Service and Privacy Notice.');
   const wizard = input.onboarding === true;
   const details = wizard ? validateOnboarding(input) : undefined;
-  if (!wizard) onlyKeys(input, ['dealership', 'name']);
+  if (!wizard) onlyKeys(input, ['dealership', 'name', 'acceptance']);
   const name = text(input.name, 'Your name'), dealership = text(input.dealership, 'Dealership');
   const tenantId = randomUUID(), userId = randomUUID(), createdAt = now.toISOString();
+  const record: TermsAcceptance = {id: 'signup', kind: 'terms-acceptance', tenantId, version: 1, createdAt, updatedAt: createdAt, acceptedAt: createdAt, userId, name, email: details?.email ?? null, termsVersion, privacyVersion, sharingPolicy: 'standard'};
   await repositories.forTenant(tenantId).provision({id: tenantId, name: dealership, createdAt, ...details?.profile}, {id: userId, name, ...(details ? {email: details.email} : {})},
-    {tenantId, userId, role: 'admin', active: true}, {id: randomUUID(), tenantId, actorId: userId, aggregateId: tenantId, aggregateVersion: 1, type: 'tenant.created', occurredAt: createdAt, deliveryStatus: 'pending'});
+    {tenantId, userId, role: 'admin', active: true}, {id: randomUUID(), tenantId, actorId: userId, aggregateId: tenantId, aggregateVersion: 1, type: 'tenant.created', occurredAt: createdAt, deliveryStatus: 'pending'}, {record, expectedVersion: 0, event: {id: randomUUID(), tenantId, actorId: userId, aggregateId: record.id, aggregateVersion: 1, type: 'terms-acceptance.created', occurredAt: createdAt, deliveryStatus: 'pending'}});
   const invites = (details?.invites ?? []).map(row => newInvite(tenantId, row, now));
   if (invites.length) await repositories.forTenant(tenantId).crmWrite(invites.map(row => inviteWrite(row, userId)));
   return response(201, {data: {token: tokens.issue(userId, tenantId), invites}});

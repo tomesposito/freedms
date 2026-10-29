@@ -1,4 +1,5 @@
 import { brandIconUrl, brandLogoUrl, brandReversedLogoUrl } from './brand';
+import { legalPageHtml } from './legal';
 import { mountOnboarding } from './onboarding';
 import { inviteLandingHtml, invitedEmailMatches, inviteSignInHtml, welcomeHtml, welcomeDismissed, dismissWelcome, type InviteView } from './invites';
 import { publicApi } from './retail';
@@ -194,6 +195,7 @@ async function form(id: string | undefined, sequence: number): Promise<void> {
   });
 }
 async function route(): Promise<void> {
+  if (location.hash === '#/terms' || location.hash === '#/privacy') { ++routeSequence; app.innerHTML = legalPageHtml(location.hash === '#/terms' ? 'terms' : 'privacy'); return; }
   if (location.hash.startsWith('#/join')) { ++routeSequence; await login(); return; }
   if (location.hash.startsWith('#/invite/')) {
     const sequence = ++routeSequence;
@@ -272,6 +274,7 @@ async function route(): Promise<void> {
 }
 async function start(): Promise<void> {
   try {
+    if (location.hash === '#/terms' || location.hash === '#/privacy') { await route(); return; }
     await finishSignIn();
     if (location.hash.startsWith('#/share/') || location.hash.startsWith('#/invite/')) { await route(); return; }
     if (!getToken()) { await login(); return; }

@@ -79,6 +79,12 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (/^\/compliance(\/|$)/.test(path) || /^\/deals\/[^/]+\/(compliance|compliance-checks)(\/|$)/.test(path)) return await compliance(request, principal, repository, now());
         if (/^\/documents(\/|$)/.test(path)) return await documentControls(request, principal, repository, now(), documents);
         if (/^\/admin\/invites(\/|$)/.test(path)) return await manageInvites(request, principal, repository, now());
+        if (path === '/admin/terms-acceptance') {
+          if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can view acceptance.');
+          if (method !== 'GET') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+          onlyKeys(request.query ?? {}, []);
+          return response(200, {data: await repository.crmGet('terms-acceptance', 'signup') ?? null});
+        }
         if (/^\/admin\/users(\/|$)/.test(path)) return await manageUsers(request, principal, repository, now());
         if (/^\/(account|admin)\/mfa(\/|$)/.test(path)) return await mfa(request, principal, repository, now());
         if (/^\/webhooks(\/|$)/.test(path)) return await webhooks(request, principal, repository, now(), webhookSender);
