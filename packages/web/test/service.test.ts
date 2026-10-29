@@ -30,7 +30,7 @@ test('Service navigation, history sections and form route are wired into vehicle
   assert.ok(sidebarNavigation(true).includes('href="#/service" title="Service"'));
   assert.ok(sidebarNavigation(true).includes('href="#/accounting" title="Accounting"'));
   for (const [source,scope] of [[main,'vehicleId'],[crm,'customerId']]) { assert.ok(source.includes(`/service/repair-orders?${scope}=`)); assert.match(source,/<h2>Service history<\/h2>\$\{serviceHistoryHtml\(serviceHistory\)\}/); }
-  assert.match(main,/serviceRoute\(parts/); assert.match(service,/repair-orders\/new\/\$\{encodeURIComponent\(a.id\)\}/); assert.doesNotMatch(service,/disabled/);
+  assert.match(main,/serviceRoute\(parts/); assert.match(service,/repair-orders\/new\/\$\{encodeURIComponent\(a.id\)\}/); assert.doesNotMatch(service.slice(service.indexOf("if (parts[1] === 'history'")),/disabled/);
 });
 
 test('Service depth shows honest inspection empty states and escaped durable decisions', async()=>{
@@ -54,4 +54,24 @@ test('RO reserved-stock acknowledgement renders escaped durable details and foll
   assert.match(source,/if\(override.hidden\) override.querySelector<HTMLInputElement>\('input'\)!.checked=false/);
   assert.match(source,/if\(ro && \['completed','picked-up'\].includes\(String\(body.status\)\) && data.has\('acknowledgeReservedStock'\)\) body.acknowledgeReservedStock=true/);
   assert.match(source,/\$\{reservedStockWarningHtml\(ro\)\}/);
+});
+
+test('Service board pagination shows counts and controls for first, middle, last and empty pages', () => {
+  for (const [offset,length,total,prevDisabled,nextDisabled] of [[0,100,205,true,false],[100,100,205,false,false],[200,5,205,false,true],[0,0,0,true,true]] as const) {
+    const day: ServiceBoardDay = {date:'2026-10-24',appointments:[],byStatus:Object.fromEntries(appointmentStatuses.map(s=>[s,[]])) as ServiceBoardDay['byStatus'],repairOrders:Array.from({length},()=>ro)};
+    const html = serviceBoardHtml(day,[],{total,offset});
+    assert.ok(html.includes(`Showing ${length ? offset+1 : 0}–${length ? offset+length : 0} of ${total} repair orders`));
+    assert.equal(/id="prev-service" disabled/.test(html),prevDisabled);
+    assert.equal(/id="next-service" disabled/.test(html),nextDisabled);
+    assert.equal((html.match(/href="#\/service\/repair-orders\/ro"/g) ?? []).length,length*2);
+  }
+  const source=readFileSync(new URL('../src/service.ts',import.meta.url),'utf8');
+  const main=readFileSync(new URL('../src/main.ts',import.meta.url),'utf8');
+  assert.match(main,/serviceRoute\(parts, \{api, apiEnvelope,/);
+  assert.match(source,/ui.apiEnvelope<ServiceBoardDay>/);
+  assert.match(source,/&limit=100&offset=\$\{offset\}/);
+  assert.match(source,/render\(date, Math.max\(0, offset - 100\)\)/);
+  assert.match(source,/render\(date, offset \+ 100\)/);
+  assert.match(source,/const render = async \(date: string, offset = 0\)/);
+  assert.match(source,/void render\(String\(new FormData\(event.currentTarget as HTMLFormElement\).get\('date'\)\)\)/);
 });

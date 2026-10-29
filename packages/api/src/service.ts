@@ -9,7 +9,7 @@ import { requireWrite } from './auth.js';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
 import { choice, timestamp } from './crm-validation.js';
-import { invalid, object, onlyKeys, text, money, version } from './validation.js';
+import { pageNumber, invalid, object, onlyKeys, text, money, version } from './validation.js';
 import type { CrmWrite, TenantRepository } from './repository.js';
 
 const boardCache = new Map<string, {epoch: number; body: string}>();
@@ -117,9 +117,10 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
     return response(201,{data:await view(record)});
   }
   if (path === '/service/board') {
-    if (method !== 'GET') throw methodError(); onlyKeys(q, ['date']); const day = date(q.date ?? time.slice(0,10));
+    if (method !== 'GET') throw methodError(); onlyKeys(q, ['date','limit','offset']); const day = date(q.date ?? time.slice(0,10));
+    const limit = pageNumber(q.limit, 100, 1, 500), offset = pageNumber(q.offset, 0, 0, Number.MAX_SAFE_INTEGER);
     const epoch = await repo.serviceBoardEpoch();
-    const key = `${principal.tenantId}|${day}`, hit = boardCache.get(key);
+    const key = `${principal.tenantId}|${day}|${limit}|${offset}`, hit = boardCache.get(key);
     if (hit?.epoch === epoch) return {...response(200, null), body: hit.body};
     const board = await repo.serviceBoard(day);
     const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
@@ -131,7 +132,7 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
     }));
     const byStatus = Object.fromEntries(appointmentStatuses.map(s => [s, appointments.filter(a => a.status === s)])) as ServiceBoardDay['byStatus'];
     const technicians = board.technicians.map(t=>({...t,dayLoad:[...appointments,...repairOrders].filter(r=>r.technicianId===t.id).length}));
-    const result = response(200, {data: {date: day, appointments, byStatus, repairOrders, technicians}});
+    const result = response(200, {data: {date: day, appointments, byStatus, repairOrders: repairOrders.slice(offset, offset + limit), technicians}, total: repairOrders.length, limit, offset});
     // Keep the epoch read BEFORE computation: concurrent writes invalidate this body.
     cacheBoard(key, epoch, result.body);
     return result;

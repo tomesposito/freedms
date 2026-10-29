@@ -257,7 +257,7 @@ async function route(): Promise<void> {
     else if (parts[0] === 'import') await importRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'reports') await reportsRoute({api, download, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'parts') await partsRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
-    else if (parts[0] === 'service') await serviceRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
+    else if (parts[0] === 'service') await serviceRoute(parts, {api, apiEnvelope, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'compliance') await complianceRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, parts[1]);
     else if (parts[0] === 'documents') await documentsRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'users') await usersRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void start(); }, admin: session.principal.role === 'admin'}, session.principal.tenantId, !localMode);

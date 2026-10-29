@@ -643,3 +643,30 @@ counts. Both after levels meet the strict 300 ms p95 budget with zero errors;
 all other endpoints in this run also passed their budgets with zero errors.
 This is local in-memory evidence, not hosted Dynamo capacity evidence. The
 full `npm test` suite passes (383 tests), and `npm run typecheck` passes.
+
+## Service board pagination (#63)
+
+`GET /service/board` accepts only `date`, `limit` and `offset`. The default
+limit is 100 (range 1–500); offset defaults to 0 and must be a nonnegative
+integer. Invalid pagination values and unknown query keys return 400.
+The response is `{data: {date, appointments, byStatus, repairOrders,
+technicians}, total, limit, offset}`. The total counts all repair orders for
+the tenant and day, before paging. Repair orders retain the nine-field summary
+and sort by `createdAt` ascending, then `id` ascending before slicing.
+A page beyond the end is empty with the full total.
+
+Appointments and their status groups remain complete for the selected day.
+Technician `dayLoad` counts all appointments plus all repair orders for that
+day, including orders outside the page. The web board displays 100 orders
+per page with counts and Prev/Next controls; changing days resets the offset.
+The epoch-validated body cache includes tenant, day, limit and offset in its
+key. Service writes invalidate cached pages; unrelated writes do not. Gzip
+compression remains enabled for eligible responses.
+
+The unchanged #49 harness measures the bounded first page for Dataset A
+(2,000 vehicles, 2,400 customers, 12,000 leads, 400 deals, 2,500 repair orders),
+with 100 requests at peak concurrency 5 and 10x concurrency 50. Both levels
+must meet p95 < 300 ms with zero errors.
+
+**Measurement pending supervisor verification:** peak p95: TBD; 10x p95: TBD;
+errors: TBD. No new performance measurements are claimed here.

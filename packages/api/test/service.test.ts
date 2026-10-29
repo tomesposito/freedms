@@ -385,3 +385,42 @@ test('Board body cache invalidates for service writes and reuses bodies across n
   assert.equal((await call('A','POST','/service/board',{})).status,405);
   assert.equal(epochReads,epochs);
 });
+
+test('Board pages preserve ordering, full-day loads, tenant totals and cache invalidation', async () => {
+  const {call,ro,appointment,setTime} = await setup();
+  const tech = (await call('A','POST','/service/technicians',{name:'Page technician',skills:[]})).data;
+  await appointment({technicianId:tech.id});
+  const rows: RepairOrderView[] = [];
+  for (let i=0;i<205;i++) {
+    // Insert later timestamps first and tie timestamps to exercise both sort keys.
+    setTime(i<105 ? '2026-10-24T13:00:00Z' : '2026-10-24T12:00:00Z');
+    const created = await ro({technicianId:tech.id});
+    assert.equal(created.status,201); rows.push(created.data);
+  }
+  const compare = (a:string,b:string) => a<b ? -1 : a>b ? 1 : 0;
+  rows.sort((a,b)=>compare(a.createdAt,b.createdAt)||compare(a.id,b.id));
+  const board = (query?: ApiRequest['query'], tenant='A') => call(tenant,'GET','/service/board',undefined,query);
+  const first = await board();
+  assert.deepEqual([first.total,first.limit,first.offset],[205,100,0]);
+  assert.deepEqual(first.data.repairOrders.map((r:ServiceBoardRepairOrder)=>r.id),rows.slice(0,100).map(r=>r.id));
+  for (const [limit,offset] of [[100,100],[100,200],[7,98],[500,0],[100,300]]) {
+    const page = await board({limit:String(limit),offset:String(offset)});
+    assert.equal(page.status,200); assert.deepEqual([page.total,page.limit,page.offset],[205,limit,offset]);
+    assert.deepEqual(page.data.repairOrders.map((r:ServiceBoardRepairOrder)=>r.id),rows.slice(offset,offset+limit).map(r=>r.id));
+    assert.equal(page.data.technicians[0].dayLoad,206);
+    assert.deepEqual(page.data.appointments,first.data.appointments); assert.deepEqual(page.data.byStatus,first.data.byStatus);
+  }
+  assert.deepEqual(await board(),first);
+  for (const query of [{limit:'0'},{limit:'501'},{limit:'-1'},{limit:'bad'},{limit:'1.5'},{offset:'-1'},{offset:'bad'},{offset:'1.5'},{extra:'bad'}]) {
+    assert.equal((await board(query)).status,400,JSON.stringify(query));
+  }
+  for (const offset of ['0','100']) {
+    const other = await board({offset},'B');
+    assert.equal(other.total,0); assert.deepEqual(other.data.repairOrders,[]); assert.deepEqual(other.data.appointments,[]); assert.deepEqual(other.data.technicians,[]);
+  }
+  const changed = rows[100];
+  assert.equal((await call('A','PUT',`/service/repair-orders/${changed.id}`,{version:changed.version,concern:'Updated on page two'})).status,200);
+  const second = await board({limit:'100',offset:'100'});
+  assert.equal(second.data.repairOrders[0].concern,'Updated on page two');
+  assert.equal(second.total,205); assert.equal(second.data.technicians[0].dayLoad,206);
+});
