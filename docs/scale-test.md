@@ -363,4 +363,34 @@ later today. The shared report applies `scheduledStart <= now` on every request
 before computing service sample size and weekday demand, so time advancing without
 a write cannot freeze the cutoff in a cached result.
 
-Local check: results will be filled in after measurement by the supervisor.
+Local check on 2026-10-28 (Node v24.22.1), using the unchanged #49 harness:
+
+```sh
+node --import tsx scripts/scale-seed.ts --profile smoke --heavy-vehicles 2000 --heavy-in-stock 100 --heavy-leads 12000 --heavy-customers 2400 --heavy-deals 400 --heavy-repair-orders 2500 --heavy-parts 60 --heavy-appointments 12 --light-tenants 0 --state /tmp/issue56-state-a.json --maxMinutes 40
+node --import tsx scripts/scale-measure.ts --state /tmp/issue56-state-a.json
+node --import tsx scripts/scale-seed.ts --profile smoke --heavy-vehicles 10000 --heavy-in-stock 100 --heavy-leads 1200 --heavy-customers 30000 --heavy-deals 0 --heavy-repair-orders 0 --heavy-parts 0 --heavy-appointments 0 --light-tenants 0 --state /tmp/issue56-state-b.json --maxMinutes 40
+node --import tsx scripts/scale-measure.ts --state /tmp/issue56-state-b.json
+```
+
+Dataset A (heavy tenant only, no light tenants), 100 requests per level:
+forecasts p95 **11.2 ms at peak (concurrency 5) — PASS** and **83.4 ms
+at 10x (concurrency 50) — PASS** against the 1,000 ms report budget, zero
+errors at both levels. Before this fix the same dataset measured p95
+375 ms at peak and p50 2,172 ms / p95 2,215 ms at 10x. The bounded read
+alone (before the epoch cache) measured p95 53.9 ms at peak and 350.0 ms
+at 10x on this dataset.
+
+Dataset B profile for this endpoint (10,000 vehicles, 29,317 customers
+seeded before the 40-minute cap stopped the run — leads phase not
+reached, as in the original B attempt; zero deals/ROs): forecasts p95
+**24.3 ms at peak — PASS** and **50.0 ms at 10x — PASS**, zero errors.
+Before this fix that profile measured p95 688 ms at peak and p95
+1,773 ms at 10x; the bounded read alone measured p95 299.9 ms at peak
+and still failed 10x at 1,361.3 ms, because each request still scanned
+all 10,000 vehicles and 30,000+ CRM rows. The epoch cache removes that
+repeat scan between writes. Dataset B was measured on a fresh server
+holding only that tenant; Dataset A was measured after, in the same
+process.
+
+These are local in-memory measurements on one shared 2-core box, not
+hosted (DynamoDB) capacity evidence.
