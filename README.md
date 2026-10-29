@@ -130,7 +130,8 @@ here is signed in store; the record shows the signer, time, and document hash.
 ![Deal jacket](docs/screenshots/deal-jacket.png)
 
 **Service board** — the day's appointments grouped by status, with the day's
-repair orders, totals, assigned technicians, and per-technician day loads.
+repair orders (paged 100 at a time), totals, assigned technicians, and
+per-technician day loads.
 
 ![Service board](docs/screenshots/service-board.png)
 

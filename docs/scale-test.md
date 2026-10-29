@@ -668,5 +668,14 @@ The unchanged #49 harness measures the bounded first page for Dataset A
 with 100 requests at peak concurrency 5 and 10x concurrency 50. Both levels
 must meet p95 < 300 ms with zero errors.
 
-**Measurement pending supervisor verification:** peak p95: TBD; 10x p95: TBD;
-errors: TBD. No new performance measurements are claimed here.
+Local check on 2026-10-29 (Node v24.22.1): seeded Dataset A exactly as
+above (2,500 repair orders, no light tenants) and ran the unchanged measure
+CLI with 100 requests per endpoint, peak 5 and 10x 50. Service board
+measured p50 5.8 ms / p95 **16.2 ms at peak — PASS** and p50 48.6 ms /
+p95 **81.1 ms at 10x — PASS**, with zero errors at both levels. Before
+pagination (summary view only, same dataset) the board measured p95
+65.9 ms at peak and 607.3 ms at 10x. The default first page is 47,656
+bytes for 100 summary rows, against 813,521 bytes for all 2,500 rows
+before pagination. Every other endpoint in this run also passed its
+budget with zero errors. This is local in-memory evidence, not hosted
+Dynamo capacity evidence.
