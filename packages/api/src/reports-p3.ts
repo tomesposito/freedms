@@ -58,7 +58,9 @@ export async function forecasts(repo: TenantRepository, range: Range, now: Date)
     return {inventory:{...empty},service:{...empty},parts:{...empty}};
   }
   const window = {from,to}, days = (Date.parse(to) - Date.parse(from)) / dayMs + 1;
-  const {currentStock, soldDates: sold, scheduledStarts: history, parts, usage} = await repo.forecastRows(window, now.toISOString());
+  const {currentStock, soldDates: sold, scheduledStarts, parts, usage} = await repo.forecastRows(window);
+  const cutoff = now.toISOString();
+  const history = scheduledStarts.filter(start => start <= cutoff);
   const result = <T>(sampleSize: number, method: string, projection: T | null, reason: string): Projection<T> => ({projection,basis:{...window,sampleSize},method,insufficientReason:projection === null ? reason : null});
   const midpoint = new Date(Date.parse(from) + Math.floor(days / 2) * dayMs).toISOString().slice(0,10);
   const earlier = sold.filter(date => date < midpoint).length, recent = sold.length - earlier;

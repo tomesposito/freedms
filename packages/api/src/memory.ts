@@ -5,15 +5,16 @@ import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import type { Customer, CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
-import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, type ForecastRows, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
-interface State { serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
+const forecastKinds = new Set<CrmEntity['kind']>(['deal', 'service-appointment', 'part', 'parts-sale', 'repair-order']);
+interface State { forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
   private states = new Map<string, State>();
   forTenant(tenantId: string): TenantRepository {
     requireId(tenantId);
     let state = this.states.get(tenantId);
-    if (!state) { state = {serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
+    if (!state) { state = {forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
     const s = state;
     const check = (event: OutboxEvent) => { assertScope(tenantId, event); if (s.events.has(event.id)) throw conflict(); };
     // Synchronous validation followed by synchronous map writes: no interleaved await or partial commits.
@@ -67,14 +68,20 @@ export class MemoryRepositories implements RepositoryFactory {
         selection.add(s.crm.values());
         return structuredClone(selection.finish());
       },
-      forecastRows: async (window, now) => {
-        const selection = forecastSelection(window, now);
+      forecastRows: async window => {
+        const key = JSON.stringify([s.forecastEpoch, window.from, window.to]);
+        const cached = s.forecastCache.get(key);
+        if (cached) return structuredClone(cached);
+        const selection = forecastSelection(window);
         function* scoped<T extends {tenantId: string}>(rows: Iterable<T>) {
           for (const row of rows) { assertScope(tenantId, row); yield row; }
         }
         selection.addVehicles(scoped(s.vehicles.values()));
         selection.add(scoped(s.crm.values()));
-        return structuredClone(selection.finish());
+        const rows = structuredClone(selection.finish());
+        s.forecastCache.set(key, rows);
+        if (s.forecastCache.size > 4) s.forecastCache.delete(s.forecastCache.keys().next().value!);
+        return structuredClone(rows);
       },
       salesReportRows: async range => {
         const selection = salesReportSelection(range);
@@ -121,6 +128,7 @@ export class MemoryRepositories implements RepositoryFactory {
           s.crm.set(`${record.kind}#${record.id}`, structuredClone(record)); s.events.set(event.id, structuredClone(event));
         }
         if (writes.some(({record}) => serviceBoardKinds.has(record.kind))) s.serviceBoardEpoch++;
+        if (vehicles.length || writes.some(({record}) => forecastKinds.has(record.kind))) s.forecastEpoch++;
       },
       membership: async id => structuredClone(s.memberships.get(id)),
       tenant: async () => structuredClone(s.tenant),
@@ -134,16 +142,19 @@ export class MemoryRepositories implements RepositoryFactory {
         assertScope(tenantId, v); check(event); assertEvent(v.id, v.version, event, 'vehicle.created');
         if (s.vehicles.has(v.id)) throw conflict();
         s.vehicles.set(v.id, structuredClone(v)); s.events.set(event.id, structuredClone(event));
+        s.forecastEpoch++;
       },
       update: async (v, version, event) => {
         assertScope(tenantId, v); check(event); assertEvent(v.id, version + 1, event, 'vehicle.updated');
         if (s.vehicles.get(v.id)?.version !== version || v.version !== version + 1) throw conflict();
         s.vehicles.set(v.id, structuredClone(v)); s.events.set(event.id, structuredClone(event));
+        s.forecastEpoch++;
       },
       delete: async (id, version, event) => {
         check(event); assertEvent(id, version + 1, event, 'vehicle.deleted');
         if (s.vehicles.get(id)?.version !== version) throw conflict();
         s.vehicles.delete(id); s.events.set(event.id, structuredClone(event));
+        s.forecastEpoch++;
       },
       provision: async (tenant, user, membership, event) => {
         assertScope(tenantId, membership); check(event); assertEvent(tenantId, 1, event, 'tenant.created');

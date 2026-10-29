@@ -133,8 +133,8 @@ export class DynamoRepositories implements RepositoryFactory {
         }
         return selection.finish();
       },
-      forecastRows: async (window, now) => {
-        const selection = forecastSelection(window, now);
+      forecastRows: async window => {
+        const selection = forecastSelection(window);
         // Page through tenant prefixes; discard excluded rows before fetching the next page.
         for (const prefix of ['VEHICLE#', 'DEAL#', 'SERVICE-APPOINTMENT#', 'PART#', 'PARTS-SALE#', 'REPAIR-ORDER#']) {
           let cursor: Record<string, unknown> | undefined;

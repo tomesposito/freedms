@@ -160,32 +160,98 @@ test('forecast reads select compact inputs with exact boundaries, detached parts
     pages++;
     return {Items:selected.slice(offset,offset ? undefined : 1).map(data=>({data})),...(!offset && selected.length>1 ? {LastEvaluatedKey:{PK:values[':pk'],SK:prefix}} : {})};
   }} as any);
-  const expected = {currentStock:2,soldDates:['2026-10-01','2026-10-24','2026-10-24'],scheduledStarts:['2026-10-01T00:00:00Z',now],parts:[records.find(r=>r.kind==='part')],usage:[{partId:'p',quantity:2},{partId:'p',quantity:2},{partId:'missing',quantity:1},{partId:'p',quantity:3}]};
+  const expected = {currentStock:2,soldDates:['2026-10-01','2026-10-24','2026-10-24'],scheduledStarts:['2026-10-01T00:00:00Z',now,'2026-10-24T12:00:00.001Z'],parts:[records.find(r=>r.kind==='part')],usage:[{partId:'p',quantity:2},{partId:'p',quantity:2},{partId:'missing',quantity:1},{partId:'p',quantity:3}]};
   const clone = structuredClone;
   const spy = t.mock.method(globalThis,'structuredClone',(value:unknown)=>{
     assert.deepEqual(value,expected); // No full collections or discarded rows reach cloning.
     return clone(value);
   });
-  assert.deepEqual(await repo.forecastRows(window,now),expected);
+  assert.deepEqual(await repo.forecastRows(window),expected);
   spy.mock.restore();
   let report: string | undefined;
   for (const repositories of [memory,dynamo]) {
     const scoped = repositories.forTenant('A');
-    assert.deepEqual(await scoped.forecastRows(window,now),expected);
+    assert.deepEqual(await scoped.forecastRows(window),expected);
     const guarded = new Proxy(scoped,{get(target,property){
       if (property==='list' || property==='crmList') return ()=>{throw new Error('Full collection read');};
       return Reflect.get(target,property);
     }});
     const result = await forecasts(guarded,window,new Date(now));
+    assert.equal(result.service.basis.sampleSize,2);
     assert.equal(result.parts.basis.sampleSize,4);
     assert.equal(result.parts.projection![0].unitsUsed,7);
     if (report) assert.equal(JSON.stringify(result),report);
     report = JSON.stringify(result);
-    assert.deepEqual(await repositories.forTenant('B').forecastRows(window,now),{currentStock:0,soldDates:[],scheduledStarts:[],parts:[],usage:[]});
+    assert.deepEqual(await repositories.forTenant('B').forecastRows(window),{currentStock:0,soldDates:[],scheduledStarts:[],parts:[],usage:[]});
   }
   assert.ok(pages>6);
-  const detached = await repo.forecastRows(window,now); detached.parts[0].quantityOnHand=-1;
-  assert.deepEqual(await repo.forecastRows(window,now),expected);
+  const detached = await repo.forecastRows(window); detached.parts[0].quantityOnHand=-1;
+  assert.deepEqual(await repo.forecastRows(window),expected);
   const corrupt = new DynamoRepositories('offline',{send:async()=>({Items:[{data:{...vehicles[0],tenantId:'B'}}]})} as any);
-  await assert.rejects(corrupt.forTenant('A').forecastRows(window,now),/scope/);
+  await assert.rejects(corrupt.forTenant('A').forecastRows(window),/scope/);
+});
+
+test('forecast cache refreshes after every relevant CRM kind and vehicle write', async () => {
+  const repositories = new MemoryRepositories(), repo = repositories.forTenant('A');
+  const window = {from:'2026-10-01',to:'2026-10-24'}, now = '2026-10-24T12:00:00.000Z';
+  const base = {tenantId:'A',version:1,createdAt:now,updatedAt:now};
+  let sequence = 0;
+  const event = (id:string, version:number, type: import('@freedms/shared').OutboxEvent['type']) => ({id:`e${sequence++}`,tenantId:'A',actorId:'u',aggregateId:id,aggregateVersion:version,type,occurredAt:now,deliveryStatus:'pending' as const});
+  const read = () => repositories.forTenant('A').forecastRows(window);
+  const other = await repositories.forTenant('B').forecastRows(window);
+  const records = [
+    {kind:'deal',id:'d',status:'sold',history:[]},
+    {kind:'service-appointment',id:'a',status:'scheduled',scheduledStart:now},
+    {kind:'part',id:'p',...input},
+    {kind:'parts-sale',id:'s',partId:'p',quantity:2},
+    {kind:'repair-order',id:'r',stockApplied:true,lineItems:[line('p')]}
+  ].map(row=>({...base,...row})) as CrmEntity[];
+  for (const record of records) {
+    const before = await read();
+    await repo.crmWrite([{record,expectedVersion:0,event:event(record.id,1,`${record.kind}.created` as 'deal.created')}]);
+    assert.notDeepEqual(await read(),before,record.kind);
+    assert.deepEqual(await read(),await read());
+  }
+  const vehicle = {...base,id:'v',status:'available'} as Vehicle;
+  assert.equal((await read()).currentStock,0);
+  await repo.create(vehicle,event('v',1,'vehicle.created'));
+  assert.equal((await read()).currentStock,1);
+  await repo.update({...vehicle,version:2,status:'sold'},1,event('v',2,'vehicle.updated'));
+  assert.equal((await read()).currentStock,0);
+  await repo.update({...vehicle,version:3},2,event('v',3,'vehicle.updated'));
+  assert.equal((await read()).currentStock,1);
+  await repo.delete('v',3,event('v',4,'vehicle.deleted'));
+  assert.equal((await read()).currentStock,0);
+  assert.deepEqual(await repositories.forTenant('B').forecastRows(window),other);
+  // More windows than the cache retains must still return the correct rows.
+  for (let day=1;day<=6;day++) assert.deepEqual(await repo.forecastRows({...window,from:`2026-10-0${day}`}),await read());
+});
+
+test('cached forecast applies the appointment cutoff per request without intervening writes', async () => {
+  const s = await setup(), q = {from:'2026-10-01',to:'2026-10-24'};
+  for (const scheduledStart of ['2026-10-05T10:00:00.000Z','2026-10-24T12:00:00.001Z']) {
+    assert.equal((await s.call('POST','/service/appointments',{customerId:s.customers.A,scheduledStart,scheduledEnd:scheduledStart.replace(/T\d\d:/,'T13:'),concern:'Service'})).status,201);
+  }
+  const read = async () => (await s.call('GET','/reports/forecasts',undefined,'A',q)).data.service;
+  const before = await read();
+  assert.equal(before.basis.sampleSize,1); assert.equal(before.projection,null);
+  s.setTime('2026-10-24T12:00:00.001Z');
+  const after = await read();
+  assert.equal(after.basis.sampleSize,2);
+  assert.equal(after.insufficientReason,null);
+  assert.equal(after.projection.find((d:any)=>d.day==='Saturday').appointments,1);
+  assert.equal(after.projection.find((d:any)=>d.day==='Monday').appointments,1);
+  s.setTime('2026-10-24T12:00:00.000Z');
+  assert.deepEqual(await read(),before);
+});
+
+test('irrelevant lead writes leave a populated forecast unchanged', async () => {
+  const s = await setup();
+  const p = (await s.part()).data;
+  for (let i=0;i<2;i++) assert.equal((await s.call('POST','/parts/sales',{partId:p.id,quantity:2,unitPriceCents:899})).status,201);
+  const read = async () => (await s.call('GET','/reports/forecasts')).data;
+  const before = await read();
+  assert.ok(before.parts.projection);
+  assert.equal((await s.call('POST','/leads',{customerId:s.customers.A,source:'walk-in'})).status,201);
+  assert.deepEqual(await read(),before);
 });

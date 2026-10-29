@@ -332,9 +332,9 @@ hosted (DynamoDB) capacity evidence.
 
 ## Forecast date-bounded read (#56)
 
-`GET /reports/forecasts` uses `forecastRows(window, now)` with the effective
+`GET /reports/forecasts` uses `forecastRows(window)` with the effective
 inclusive basis window computed by the report. Both backends share a selector
-that counts unsold vehicles, retains only sold dates and past non-no-show
+that counts unsold vehicles, retains only sold dates and non-no-show
 appointment timestamps in the window, and projects counter sales and current
 stock-applied RO parts lines into part-id/quantity pairs. The parts catalog is
 retained for reorder output. Sold history fallback and the full appointment
@@ -348,5 +348,19 @@ this bounds retained data, not Dynamo-side query work. Usage totals are computed
 in one Map pass instead of filtering all usage for each catalog part. Projection
 rounding, sample sizes, methods, insufficient-history messages and ordering are
 unchanged. The #49 harness is unchanged; validation is local and offline.
+
+Memory caches the compact forecast rows by a per-tenant forecast epoch and basis
+window (from/to), retaining at most four entries and evicting the oldest first.
+Successful vehicle creates, updates and deletes (including CRM transaction vehicle
+updates), and writes to deals, service appointments, parts, parts sales or repair
+orders advance that tenant's epoch. Irrelevant kinds such as leads do not advance
+it. Returned rows remain detached from the cache. Dynamo has no forecast cache:
+its reads already use kind-scoped prefixes, avoiding the irrelevant customer scan
+that dominated the memory Dataset B profile.
+
+Selection retains non-no-show appointments throughout the window, including starts
+later today. The shared report applies `scheduledStart <= now` on every request
+before computing service sample size and weekday demand, so time advancing without
+a write cannot freeze the cutoff in a cached result.
 
 Local check: results will be filled in after measurement by the supervisor.

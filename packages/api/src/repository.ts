@@ -35,7 +35,7 @@ export interface TenantRepository {
   users(): Promise<User[]>;
   serviceBoardEpoch(): Promise<number>;
   serviceBoard(day: string): Promise<ServiceBoardRows>;
-  forecastRows(window: ForecastWindow, now: string): Promise<ForecastRows>;
+  forecastRows(window: ForecastWindow): Promise<ForecastRows>;
   salesReportRows(range: SalesReportRange): Promise<SalesReportRows>;
   leadSummary(): Promise<LeadReport>;
   leadListPage(query: LeadQuery): Promise<LeadPage>;
@@ -277,7 +277,7 @@ export interface ForecastRows {
 }
 
 /** Reduce raw rows once; retain no vehicle or historical CRM records except catalog parts. */
-export function forecastSelection(window: ForecastWindow, now: string) {
+export function forecastSelection(window: ForecastWindow) {
   const rows: ForecastRows = {currentStock: 0, soldDates: [], scheduledStarts: [], parts: [], usage: []};
   const within = (date: string) => date.slice(0, 10) >= window.from && date.slice(0, 10) <= window.to;
   // Preserve counter-sale then RO usage order, regardless of memory insertion order.
@@ -291,7 +291,7 @@ export function forecastSelection(window: ForecastWindow, now: string) {
         if (row.kind === 'deal' && row.status === 'sold') {
           const date = soldDate(row);
           if (within(date)) rows.soldDates.push(date);
-        } else if (row.kind === 'service-appointment' && within(row.scheduledStart) && row.scheduledStart <= now && row.status !== 'no-show') {
+        } else if (row.kind === 'service-appointment' && within(row.scheduledStart) && row.status !== 'no-show') {
           rows.scheduledStarts.push(row.scheduledStart);
         } else if (row.kind === 'part') rows.parts.push(row);
         else if (row.kind === 'parts-sale' && within(row.createdAt)) rows.usage.push({partId: row.partId, quantity: row.quantity});
