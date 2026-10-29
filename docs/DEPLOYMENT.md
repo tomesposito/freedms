@@ -82,7 +82,14 @@ account IDs, or generated stack outputs. Runtime dependencies use Apache-2.0/MIT
    Do not publish if that check fails. The template explicitly selects the Free plan;
    WAF/DNS may accrue standard charges if subscription creation fails.
 5. Build the web app with `VITE_API_URL=/api`, `VITE_COGNITO_DOMAIN`, and
-   `VITE_COGNITO_CLIENT_ID` from outputs. Upload hashed assets with long immutable
+   `VITE_COGNITO_CLIENT_ID` from outputs. Set `VITE_COGNITO_USER_POOL_ID` from
+   the `CognitoUserPoolId` output to enable in-app SRP sign-in.
+   `VITE_AUTH_FLOW=redirect` selects the retained hosted UI for rollback; without
+   a pool ID the app also falls back to redirect. `VITE_COGNITO_REGION` optionally
+   overrides the region derived from the pool ID. `VITE_COGNITO_ENDPOINT` is only
+   for the offline test harness and must be unset for production. Live SRP
+   verification happens after the operator deploys the template auth-flow change.
+   Upload hashed assets with long immutable
    caching; upload `index.html` last with `Cache-Control: no-store`. Keep previous
    release assets and a copy of each previous index for rollback. Package the marketing
    site with `ops/releases/marketing.mjs`: upload its content-addressed screenshots
@@ -188,7 +195,8 @@ runs on `master` also publish `build-<full-source-sha>` with `api.zip`,
 `web.tar.gz`, a manifest binding every file, and GitHub build provenance.
 Publishing does not deploy. The public repository has no AWS trust or access keys.
 The build uses repository variables `VITE_COGNITO_DOMAIN` and
-`VITE_COGNITO_CLIENT_ID`; these are public browser configuration, not credentials.
+`VITE_COGNITO_CLIENT_ID`, plus optional `VITE_COGNITO_USER_POOL_ID`
+(format `us-east-1_xxx`) and `VITE_AUTH_FLOW=redirect` for rollback; these are public browser configuration, not credentials.
 Every release also packages `site/` with content-addressed screenshots under
 `marketing/` in `web.tar.gz`. The version-2 manifest binds both frontends. The
 marketing page describes the invite-only pilot and links sign-in to the app;

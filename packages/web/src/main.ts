@@ -26,7 +26,8 @@ import { dealsRoute } from './desking';
 import { crmRoute } from './crm';
 import { vehicleStatuses, type ApiEnvelope, type DecodedVin, type Session, type VehicleInput, type VehicleView } from '@freedms/shared';
 import { cents, currency, escapeHtml as e } from './format';
-import { finishSignIn, getToken, localMode, setToken, signIn, signOut } from './auth';
+import { mountLogin } from './login';
+import { authFlow, cognito, storeTokens, freshToken, refreshSession, clearSession, finishSignIn, getToken, localMode, setToken, signIn, signOut } from './auth';
 import './style.css';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const base = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
@@ -35,11 +36,15 @@ let search = ''; let status = ''; let offset = 0; let routeSequence = 0;
 async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   return (await apiEnvelope<T>(path, method, body)).data;
 }
-async function apiEnvelope<T>(path: string, method = 'GET', body?: unknown): Promise<Extract<ApiEnvelope<T>, {data: T}>> {
+async function apiEnvelope<T>(path: string, method = 'GET', body?: unknown, retried = false): Promise<Extract<ApiEnvelope<T>, {data: T}>> {
+  await freshToken();
   const response = await fetch(`${base}${path}`, {method, headers: {'content-type': 'application/json', ...(getToken() ? {authorization: `Bearer ${getToken()}`} : {})}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
   const result = await response.json() as ApiEnvelope<T>;
+  if (response.status === 401 && !('error' in result && result.error.code === 'MFA_INVALID')) {
+    if (!retried && await refreshSession()) return apiEnvelope<T>(path, method, body, true);
+    if (localMode) sessionStorage.removeItem('freedms-token'); else clearSession();
+  }
   if ('error' in result) {
-    if (response.status === 401 && result.error.code !== 'MFA_INVALID') sessionStorage.removeItem('freedms-token');
     throw Object.assign(new Error(result.error.message), {status: response.status});
   }
   if (!response.ok) throw new Error('The request could not be completed.');
@@ -101,6 +106,7 @@ function shell(content: string): void {
 }
 function badge(value: string): string { return `<span class="badge ${value.replace(' ', '-')}">${e(value)}</span>`; }
 async function login(): Promise<void> {
+  if (authFlow === 'inapp') { mountLogin(app, cognito!, async tokens => { storeTokens(tokens); await start(); }); return; }
   app.innerHTML = `<main class="login"><a class="brand" href="#/"><img src="${brandLogoUrl}" alt="freeDMS"></a><h1>Your inventory, in one place.</h1><p>${localMode ? 'Create an empty local workspace to start stocking vehicles. This development session lasts one hour; data is cleared when the API restarts.' : 'Invite-only pilot. Sign in with the account provided by your pilot operator.'}</p><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${localMode ? '<section id="onboarding"></section><h2>Join an existing local workspace</h2><form id="join"><label>Workspace ID<input name="tenantId" required maxlength="128"></label><label>Email<input name="email" type="email" required maxlength="254"></label><label>Authenticator or recovery code (if MFA enabled)<input name="code" autocomplete="one-time-code" maxlength="32"></label><button>Sign in locally</button></form>' : '<button id="cognito" class="primary">Sign in</button>'}</main>`;
   if (localMode) mountOnboarding(document.querySelector<HTMLElement>('#onboarding')!, async data => {
     const result = await api<{token: string; invites: Invite[]}>('/local/session', 'POST', data);
@@ -204,7 +210,7 @@ async function route(): Promise<void> {
       const view = await publicApi<InviteView>(`/invite/${encodeURIComponent(location.hash.slice(9))}`);
       if (sequence !== routeSequence) return;
       app.innerHTML = inviteLandingHtml(view, !localMode, !!getToken());
-      document.querySelector('#invite-signin')?.addEventListener('click', () => { void signIn(); });
+      document.querySelector('#invite-signin')?.addEventListener('click', () => { if (authFlow === 'inapp') void login(); else void signIn().catch(flash); });
       if (view.valid) {
         const form = app.querySelector<HTMLFormElement>('#accept-invite')!;
         const email = form.querySelector<HTMLInputElement>('[name=email]')!;

@@ -248,3 +248,12 @@ button, .button { transition: background-color .15s, border-color .15s; }
 .legal-document h2 { margin-top: 2rem; }
 .terms-accept { align-items: flex-start; font-weight: 400; }
 .terms-accept input { width: 18px; height: 18px; min-height: 18px; margin: 2px 0 0; padding: 0; flex: none; }
+
+/* Hosted sign-in shares the product palette and Inter font stack. */
+.auth-view{max-width:none;margin:0;padding:0;min-height:100dvh;display:grid;grid-template-columns:1fr;background:#fff;color:#0B1F2C}
+.auth-panel{padding:32px 24px;display:flex;flex-direction:column;min-width:0}
+.auth-brand{display:block;width:170px}.auth-brand img{width:100%;height:auto}
+.auth-tagline{font-size:10px;letter-spacing:.15em;font-weight:700;margin-top:18px;color:#0B1F2C}
+.auth-form{width:100%;max-width:370px;margin:64px auto;flex:1}.auth-form h1{font-size:32px;letter-spacing:-.035em;margin:0 0 16px}.auth-form>p{color:#52636e;line-height:1.6;margin-bottom:28px}
+.auth-form form{display:grid;gap:20px}.auth-form label{display:grid;gap:8px;font-size:14px;font-weight:600}.auth-form input{width:100%;box-sizing:border-box;min-height:48px}.auth-form button.primary{background:#FF6A00;color:#0B1F2C;min-height:48px;font-weight:700;border:0}.auth-form>.quiet{margin-top:20px;padding-left:0}.auth-panel footer{font-size:12px;color:#52636e}.auth-photo{display:none;background-size:max(230%,191dvh) auto;background-position:right center}
+@media(min-width:800px){.auth-view{grid-template-columns:minmax(440px,44%) 1fr}.auth-panel{padding:48px 56px 30px}.auth-form{margin-top:90px}.auth-photo{display:block}}

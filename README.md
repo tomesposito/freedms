@@ -50,6 +50,10 @@ Real captures from the local app on the current build — the same screens the
 verification tours use. The sample dealership data is local-only; the app itself
 always starts empty.
 
+**Sign in** — in-app Cognito login, shown against the offline hosted-mode fixture.
+
+![freeDMS sign-in](docs/screenshots/login.png)
+
 **Local onboarding** — four steps collect account, dealership, and optional team
 invites. Nothing is created until Finish; the workspace starts empty.
 
@@ -923,7 +927,9 @@ are isolated by both tenant and user, including when the same user belongs to mo
 than one tenant. Staff can manage their own MFA; only admins can list workspace
 MFA status or reset another active member.
 
-**Sign-in boundary:** there is no password authentication in this repository.
+**Sign-in boundary:** hosted sign-in uses Cognito SRP in the browser, including
+first-sign-in password changes and authenticator challenges. The local flow remains
+passwordless.
 `POST /local/session` creates a brand-new tenant and admin with MFA off, or signs
 an added user into an existing local workspace using its ID and their email.
 Existing users with MFA enabled must supply a TOTP or recovery code before a

@@ -63,3 +63,4 @@ import '../packages/web/test/hosted.test.js';
 import '../packages/web/test/vehicles.test.js';
 
 import '../packages/api/test/compression.test.js';
+import '../packages/web/test/auth.test.js';

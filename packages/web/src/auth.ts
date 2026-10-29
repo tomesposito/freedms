@@ -1,11 +1,44 @@
-const domain = import.meta.env.VITE_COGNITO_DOMAIN as string | undefined;
-const client = import.meta.env.VITE_COGNITO_CLIENT_ID as string | undefined;
+import { createCognito, type Tokens } from './cognito';
+const env = import.meta.env || {};
+export function selectAuthFlow(config: {domain?: string; client?: string; poolId?: string; flow?: string}) { return config.domain && config.client && config.poolId && config.flow !== 'redirect' ? 'inapp' : 'redirect'; }
+const domain = env.VITE_COGNITO_DOMAIN as string | undefined;
+const client = env.VITE_COGNITO_CLIENT_ID as string | undefined;
 const redirect = () => `${location.origin}${location.pathname}`;
 const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-export const localMode = import.meta.env.DEV && !domain;
+export const authFlow = selectAuthFlow({domain, client, poolId: env.VITE_COGNITO_USER_POOL_ID, flow: env.VITE_AUTH_FLOW});
+export const cognito = authFlow === 'inapp' ? createCognito({poolId: env.VITE_COGNITO_USER_POOL_ID!, clientId: client!, region: env.VITE_COGNITO_REGION, endpoint: env.VITE_COGNITO_ENDPOINT}) : undefined;
+export const localMode = env.DEV && !domain;
 export const getToken = () => sessionStorage.getItem('freedms-token');
 export const setToken = (token: string) => sessionStorage.setItem('freedms-token', token);
-export function signOut(): void {
+export function storeTokens(tokens: Tokens): void {
+  setToken(tokens.id); sessionStorage.setItem('freedms-refresh-token', tokens.refresh); sessionStorage.setItem('freedms-access-token', tokens.access);
+}
+let sessionGeneration = 0;
+export function clearSession(): void {
+  sessionGeneration++;
+  for (const key of ['freedms-token', 'freedms-refresh-token', 'freedms-access-token', 'freedms-pkce', 'freedms-state', 'freedms-return']) sessionStorage.removeItem(key);
+}
+let refreshing: Promise<boolean> | undefined;
+export async function refreshSession(): Promise<boolean> {
+  const token = sessionStorage.getItem('freedms-refresh-token');
+  if (localMode || !cognito || !token) return false;
+  const generation = sessionGeneration;
+  return refreshing ||= cognito.refresh(token).then(tokens => { if (generation !== sessionGeneration) return false; storeTokens(tokens); return true; }).catch(() => false).finally(() => { refreshing = undefined; });
+}
+export function tokenExpired(token: string): boolean {
+  try { const exp = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp; return typeof exp !== 'number' || exp * 1000 <= Date.now(); } catch { return true; }
+}
+export async function freshToken(): Promise<string | null> {
+  if (!localMode && getToken() && tokenExpired(getToken()!) && !(await refreshSession())) clearSession();
+  return getToken();
+}
+export async function signOut(): Promise<void> {
+  const refresh = sessionStorage.getItem('freedms-refresh-token');
+  if (authFlow === 'inapp') {
+    clearSession();
+    try { if (refresh) await cognito!.revoke(refresh); } catch { /* best effort */ }
+    location.assign(location.origin + '/'); return;
+  }
   sessionStorage.removeItem('freedms-token');
   if (domain && client) location.assign(`${domain}/logout?client_id=${encodeURIComponent(client)}&logout_uri=${encodeURIComponent(redirect())}`);
   else location.assign(redirect());
@@ -22,6 +55,7 @@ export async function signIn(): Promise<void> {
 }
 export async function finishSignIn(): Promise<void> {
   const params = new URLSearchParams(location.search);
+  if (authFlow === 'inapp' && !params.has('code')) return;
   if (params.has('error')) { history.replaceState(null, '', location.pathname); throw new Error('Sign-in was not completed. Please try again.'); }
   const code = params.get('code'); if (!code) return;
   const verifier = sessionStorage.getItem('freedms-pkce'); const state = sessionStorage.getItem('freedms-state');
