@@ -61,3 +61,5 @@ import '../packages/api/test/hosted.test.js';
 import '../packages/api/test/scale.test.js';
 import '../packages/web/test/hosted.test.js';
 import '../packages/web/test/vehicles.test.js';
+
+import '../packages/api/test/compression.test.js';

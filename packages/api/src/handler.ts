@@ -1,3 +1,4 @@
+import { compressResponse } from './compression.js';
 import { signatures } from './signatures.js';
 import { reportsP3 } from './reports-p3.js';
 import { manageInvites, publicInvite } from './invites.js';
@@ -30,8 +31,8 @@ import { ApiError, conflict, missing, requireId } from './errors.js';
 import type { RepositoryFactory } from './repository.js';
 import type { VinDecoder } from './vin.js';
 import { pageNumber, invalid, object, onlyKeys, text, vehicleInput, version, view, vin } from './validation.js';
-export interface ApiRequest { method: string; path: string; query?: Record<string, string | undefined>; body?: string; claims?: AuthClaims; intakeToken?: string }
-export interface ApiResponse { statusCode: number; headers: Record<string, string>; body: string }
+export interface ApiRequest { method: string; path: string; query?: Record<string, string | undefined>; body?: string; claims?: AuthClaims; intakeToken?: string; acceptEncoding?: string }
+export interface ApiResponse { statusCode: number; headers: Record<string, string>; body: string; isBase64Encoded?: boolean }
 export function response(statusCode: number, body: unknown): ApiResponse {
   return {statusCode, headers: {'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff'}, body: JSON.stringify(body)};
 }
@@ -57,16 +58,16 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (result.statusCode >= 200 && result.statusCode < 300) {
           try { await dispatchWebhooks(repositories.forTenant(request.intakeToken!.split('.')[0]), webhookSender, now()); } catch { /* Preserve the committed intake. */ }
         }
-        return result;
+        return compressResponse(result, request.acceptEncoding);
       }
       if (request.path.replace(/\/$/, '').startsWith('/share/')) {
         const {result, tenantId} = await publicShare(request, repositories, now(), documents);
         if (request.method.toUpperCase() === 'POST' && result.statusCode >= 200 && result.statusCode < 300) {
           try { await dispatchWebhooks(repositories.forTenant(tenantId), webhookSender, now()); } catch { /* Preserve the committed buyer mutation. */ }
         }
-        return result;
+        return compressResponse(result, request.acceptEncoding);
       }
-      if (request.path.startsWith('/invite/')) return await publicInvite(request, repositories, now(), options.hosted);
+      if (request.path.startsWith('/invite/')) return compressResponse(await publicInvite(request, repositories, now(), options.hosted), request.acceptEncoding);
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
@@ -154,7 +155,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       if (result.statusCode >= 200 && result.statusCode < 300 && ['POST', 'PUT', 'DELETE'].includes(method) && !/^\/webhooks(\/|$)/.test(path) && !/^\/(account|admin)\/mfa(\/|$)/.test(path)) {
         try { await dispatchWebhooks(repository, webhookSender, now()); } catch { /* Delivery failures must never fail a committed mutation. */ }
       }
-      return result;
+      return compressResponse(result, request.acceptEncoding);
     } catch (error) { return errorResponse(error); }
   };
 }

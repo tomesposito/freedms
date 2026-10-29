@@ -32,9 +32,9 @@ const server = createServer(async (req, res) => {
       result = await localSession(body, repositories, tokens);
     } else {
       const token = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
-      result = await handle({method: req.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body, ...localAuth(url.pathname, isIntake, token, tokens)});
+      result = await handle({method: req.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body, acceptEncoding: req.headers['accept-encoding'], ...localAuth(url.pathname, isIntake, token, tokens)});
     }
   } catch (error) { result = errorResponse(error); }
-  res.writeHead(result.statusCode, result.headers); res.end(result.body);
+  res.writeHead(result.statusCode, result.headers); res.end(result.isBase64Encoded ? Buffer.from(result.body, 'base64') : result.body);
 });
 server.listen(3001, '127.0.0.1', () => console.log('freeDMS local API: http://127.0.0.1:3001 — empty, ephemeral storage; tokens expire after one hour'));
