@@ -99,6 +99,7 @@ export async function accounting(request: ApiRequest, principal: Principal, repo
     const debit = rows.reduce((s, r) => s + r.debit, 0), credit = rows.reduce((s, r) => s + r.credit, 0), totals = {debit, credit, balanced: debit === credit};
     return response(200, section === 'balances' ? {data: rows, totals} : {data: {...range, rows, totals}});
   }
+  if (section === 'departmental') return response(200, {data: {...range, ...departmentalFromBalances(await repo.accountingBalances(range))}});
   const lock = reverse ? await accountingLock(repo, principal, now) : undefined;
   const all = await repo.crmList('journal-entry');
   const reversed = new Set(all.map(e => e.reversesEntryId).filter(Boolean));
@@ -112,9 +113,6 @@ export async function accounting(request: ApiRequest, principal: Principal, repo
   }
   const period = entries.filter(e => (!range.from || e.date.slice(0, 10) >= range.from) && (!range.to || e.date.slice(0, 10) <= range.to));
   if (section === 'journal') return response(200, {data: period.filter(e => (!q.accountId || e.lines.some(l => l.accountId === q.accountId)) && (!q.dealId || e.dealId === q.dealId) && (!q.repairOrderId || e.repairOrderId === q.repairOrderId) && (!q.partsSaleId || e.partsSaleId === q.partsSaleId))});
-  if (section === 'departmental') {
-    return response(200, {data: {...range, ...departmentalStatement(accounts, period)}});
-  }
   const rateBps = (await repo.crmGet('settings', 'workspace'))?.commissionRateBps ?? 0;
   if (section === 'commissions') {
     const report = await salesReport(repo, range);
@@ -128,7 +126,11 @@ export async function accounting(request: ApiRequest, principal: Principal, repo
 }
 
 export function departmentalStatement(accounts: GlAccount[], entries: JournalEntry[]) {
-  const balances = accountBalances(accounts, entries).filter(r => ['income', 'expense'].includes(r.type) && (r.debit || r.credit));
+  return departmentalFromBalances(accountBalances(accounts, entries));
+}
+
+export function departmentalFromBalances(rows: AccountBalance[]) {
+  const balances = rows.filter(r => ['income', 'expense'].includes(r.type) && (r.debit || r.credit));
   const groups = departments.map(department => {
     const rows = balances.filter(r => accountDepartment(r.code) === department);
     const income = rows.filter(r => r.type === 'income').reduce((s,r) => s+r.balance,0);

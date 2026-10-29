@@ -288,3 +288,80 @@ test('Accounting cache is detached, bounded, tenant-local and invalidated only b
   evicted.mock.restore();
   assert.equal((await repo.accountingBalances(range))[0].debit, 123);
 });
+
+test('Departmental compact reads preserve legacy JSON, grouping, ranges, reversals and tenant scope', async () => {
+  const {write, ensureDefaultAccounts, accountBalances, departmentalStatement} = await import('../src/accounting.js');
+  const {DynamoRepositories} = await import('../src/dynamo.js');
+  const {QueryCommand} = await import('@aws-sdk/lib-dynamodb');
+  const memory = new MemoryRepositories(), repo = memory.forTenant('A');
+  const principal = {tenantId: 'A', userId: 'userA', role: 'admin'} as Principal;
+  await ensureDefaultAccounts(repo, principal, now);
+  const custom: GlAccount = {id: 'account-9000', tenantId: 'A', version: 1, createdAt: now.toISOString(), updatedAt: now.toISOString(), kind: 'gl-account', code: '9000', name: 'Custom expense', type: 'expense', active: true, system: false};
+  await repo.crmWrite([write(custom, principal)]);
+  const sale = (await repo.crmGet('gl-account', 'account-4000'))!;
+  await repo.crmWrite([write({...sale, name: 'Current sales name', active: false, version: 2}, principal, 1)]);
+  const accounts = await ensureDefaultAccounts(repo, principal, now);
+  const entry = (id: string, date: string, amounts: [string, number, number][]): JournalEntry => ({id, tenantId: 'A', version: 1, createdAt: now.toISOString(), updatedAt: now.toISOString(), kind: 'journal-entry', date, source: 'manual', dealId: null, memo: id, reversesEntryId: null, reversedByEntryId: null,
+    lines: amounts.map(([code, debit, credit]) => ({accountId: `account-${code}`, accountCode: code, accountName: 'Historical name', debit, credit, explanation: ''}))});
+  const original = entry('original', '2026-10-10T23:59:59Z', [['4000', 0, 1000], ['5000', 400, 0], ['5300', 200, 0], ['4500', 0, 300], ['9000', 50, 0], ['1000', 650, 0]]);
+  const reversed = entry('reversed', '2026-10-20T00:00:00Z', [['4100', 0, 70], ['1000', 70, 0]]);
+  const reversal: JournalEntry = {...reversed, id: 'reversal', source: 'reversal', reversesEntryId: reversed.id, lines: reversed.lines.map(l => ({...l, debit: l.credit, credit: l.debit}))};
+  // Deliberately unsorted dates and unknown-account lines exercise selection independently of journal sorting.
+  const entries = [entry('after', '2026-10-21', [['4000', 0, 11], ['1000', 11, 0]]), original, reversed, reversal,
+    entry('before', '2026-10-09', [['4000', 0, 7], ['1000', 7, 0]]), entry('unknown', '2026-10-20', [['missing', 0, 5], ['1000', 5, 0]])];
+  for (const e of entries) await repo.crmWrite([write(e, principal)]);
+  const other = {...principal, tenantId: 'B'};
+  const otherAccounts = await ensureDefaultAccounts(memory.forTenant('B'), other, now);
+  let pages = 0;
+  const dynamo = new DynamoRepositories('offline', {send: async (command: InstanceType<typeof QueryCommand>) => {
+    assert.ok(command instanceof QueryCommand);
+    assert.equal(command.input.ConsistentRead, true);
+    const values = command.input.ExpressionAttributeValues!;
+    assert.ok(['GL-ACCOUNT#', 'JOURNAL-ENTRY#'].includes(values[':prefix']));
+    assert.ok(['TENANT#A', 'TENANT#B'].includes(values[':pk']));
+    const rows = values[':prefix'] === 'GL-ACCOUNT#' ? values[':pk'] === 'TENANT#A' ? [...accounts].reverse() : otherAccounts : values[':pk'] === 'TENANT#A' ? entries : [];
+    const offset = Number(command.input.ExclusiveStartKey?.offset ?? 0); pages++;
+    return {Items: rows.slice(offset, offset + 2).map(data => ({data})), ...(offset + 2 < rows.length ? {LastEvaluatedKey: {offset: offset + 2}} : {})};
+  }} as any);
+  const guard = (scoped: ReturnType<MemoryRepositories['forTenant']>) => new Proxy(scoped, {get(target, property) {
+    if (property === 'list') return () => { throw new Error('Full collection read'); };
+    if (property === 'crmList') return (kind: string) => { assert.equal(kind, 'gl-account', 'Only seeding may list records'); return target.crmList('gl-account'); };
+    return Reflect.get(target, property);
+  }});
+  const read = (scoped: ReturnType<MemoryRepositories['forTenant']>, who = principal, query: ApiRequest['query'] = {}) => accounting({method: 'GET', path: '/accounting/departmental', query}, who, guard(scoped), now);
+  const range = {from: '2026-10-10', to: '2026-10-20'};
+  const row = (code: string, debit: number, credit: number, balance: number) => {
+    const a = accounts.find(a => a.code === code)!;
+    return {accountId: a.id, code, name: a.name, type: a.type, debit, credit, balance};
+  };
+  const expected = {data: {...range, departments: [
+    {department: 'sales', rows: [row('4000', 0, 1000, 1000), row('4100', 70, 70, 0), row('5000', 400, 0, 400)], income: 1000, expenses: 400, grossProfit: 600},
+    {department: 'service', rows: [row('5300', 200, 0, 200)], income: 0, expenses: 200, grossProfit: -200},
+    {department: 'parts', rows: [row('4500', 0, 300, 300)], income: 300, expenses: 0, grossProfit: 300},
+    {department: 'other', rows: [row('9000', 50, 0, 50)], income: 0, expenses: 50, grossProfit: -50}
+  ], totals: {income: 1300, expenses: 650, grossProfit: 650}}};
+  const empty = {departments: ['sales', 'service', 'parts', 'other'].map(department => ({department, rows: [], income: 0, expenses: 0, grossProfit: 0})), totals: {income: 0, expenses: 0, grossProfit: 0}};
+  for (const repositories of [memory, dynamo]) {
+    const scoped = repositories.forTenant('A');
+    assert.equal((await read(scoped, principal, range)).body, JSON.stringify(expected));
+    for (const query of [range, {}, {from: range.from}, {to: range.to}, {from: range.from, to: range.from}, {from: range.to, to: range.to}, {from: '2027-01-01'}]) {
+      const bounds = {from: query.from ?? null, to: query.to ?? null};
+      const period = entries.filter(e => (!bounds.from || e.date.slice(0, 10) >= bounds.from) && (!bounds.to || e.date.slice(0, 10) <= bounds.to)).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+      assert.deepEqual(await scoped.accountingBalances(bounds), accountBalances(accounts, period));
+      const result = await read(scoped, principal, query);
+      assert.equal(result.statusCode, 200);
+      assert.equal(result.body, JSON.stringify({data: {...bounds, ...departmentalStatement(accounts, period)}}));
+    }
+    assert.equal((await read(repositories.forTenant('B'), other)).body, JSON.stringify({data: {from: null, to: null, ...empty}}));
+    assert.equal((await read(scoped, principal, {from: '2027-01-01'})).body, JSON.stringify({data: {from: '2027-01-01', to: null, ...empty}}));
+  }
+  assert.ok(pages > 20);
+  for (const record of [accounts[0], entries[0]]) {
+    const corrupt = new DynamoRepositories('offline', {send: async (command: InstanceType<typeof QueryCommand>) => ({Items: command.input.ExpressionAttributeValues![':prefix'] === 'GL-ACCOUNT#' ? accounts.map(data => ({data: record.kind === 'gl-account' ? {...data, tenantId: 'B'} : data})) : [{data: {...record, tenantId: 'B'}}]})} as any);
+    await assert.rejects(read(corrupt.forTenant('A')), /scope/);
+  }
+  // Warm departmental reads must reflect the next successful journal write.
+  const before = JSON.parse((await read(repo)).body).data.totals;
+  await repo.crmWrite([write(entry('new', '2026-10-22', [['4500', 0, 123], ['1000', 123, 0]]), principal)]);
+  assert.deepEqual(JSON.parse((await read(repo)).body).data.totals, {income: before.income + 123, expenses: before.expenses, grossProfit: before.grossProfit + 123});
+});

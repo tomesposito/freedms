@@ -445,3 +445,29 @@ it carries no trial-balance evidence either way (the issue says the same).
 
 These are local in-memory measurements on one shared 2-core box, not
 hosted (DynamoDB) capacity evidence.
+
+## Departmental statement compact balances (#58)
+
+`GET /accounting/departmental` now seeds the default chart and returns early
+from `repo.accountingBalances(range)`, before the full-journal load, reversal
+annotation and sorting. Department grouping uses compact account rows; the
+shared legacy wrapper keeps `/reports/departments` behavior and data loading.
+
+Memory reuses the tenant-local cache of at most four results keyed by accounting
+epoch and date bounds. Successful journal-entry or GL-account writes advance
+the epoch; returned rows are detached clones. Cache misses visit each journal
+line once. Dynamo still reads all tenant-scoped `GL-ACCOUNT#` and
+`JOURNAL-ENTRY#` pages, reducing each before fetching the next: retained journal
+data is bounded, but Dynamo query work is not bounded independently of journal
+size. Default-account seeding still reads the chart.
+
+The response preserves inclusive date-slice bounds, unbounded ranges, current
+account metadata, code-ordered income/expense rows with nonzero debit or credit,
+debit-normal signs, all four departments in order, and integer-cent totals.
+Reversals remain ordinary entries, including zero-net rows with turnover.
+Offline tests compare exact legacy JSON and hand-computed groups across memory
+and paginated fake Dynamo, including tenant isolation, scope rejection, boundary
+dates, unknown accounts and a journal write after a cached departmental read.
+Other endpoints, mutation events and the #49 harness are unchanged.
+
+Local check: results will be filled in after measurement by the supervisor.
