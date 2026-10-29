@@ -1,3 +1,4 @@
+import { showLoadError } from './load-error';
 import { inviteLinksHtml, bindInviteCopies } from './invites';
 import { acceptanceRecordHtml } from './legal';
 import type { TermsAcceptance, PublicWorkspaceUser, Invite } from '@freedms/shared';
@@ -43,5 +44,5 @@ export async function usersRoute(ui: UI, tenantId: string, hosted = false): Prom
       if (action === 'deactivate' && !confirm(`Deactivate ${user.name}? Their access stops immediately.`)) return;
       void run(button, `/admin/users/${encodeURIComponent(user.userId)}/${action}`, {version: user.version, ...(action === 'role' ? {role: user.role === 'admin' ? 'staff' : 'admin'} : {})});
     }));
-  } catch (error) { if (ui.current()) ui.flash(error); }
+  } catch (error) { showLoadError(ui, error, () => { void usersRoute(ui, tenantId, hosted); }); }
 }

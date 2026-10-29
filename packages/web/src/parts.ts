@@ -1,3 +1,4 @@
+import { showLoadError } from './load-error';
 import { reservationsHtml, depthHtml, bindDepth, bindProposal } from './parts-depth';
 import type { PartsReservation, Part, PartsSale, Customer, JournalView, PartsPurchaseOrder, PartsReturn, PricingMatrix, RepairOrder } from '@freedms/shared';
 import { escapeHtml as e, currency, cents } from './format';
@@ -12,6 +13,10 @@ export function salesHtml(rows: PartsSale[], journal: JournalView[] = []): strin
 }
 const field=(label:string,name:string,value:unknown,attrs='')=>`<label>${label}<input name="${name}" value="${e(value)}" ${attrs}></label>`;
 export async function partsRoute(route: string[], ui: UI): Promise<void> {
+  try { await loadParts(route, ui); }
+  catch (error) { showLoadError(ui, error); }
+}
+async function loadParts(route: string[], ui: UI): Promise<void> {
   if (route[1]) {
     const part=route[1]==='new' ? undefined : await ui.api<Part>(`/parts/${encodeURIComponent(route[1])}`);
     if(!ui.current()) return;

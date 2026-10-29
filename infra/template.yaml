@@ -159,8 +159,8 @@ Resources:
     Properties:
       StageName: '$default'
       DefaultRouteSettings:
-        ThrottlingRateLimit: 5
-        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 100
+        ThrottlingBurstLimit: 200
       CorsConfiguration:
         AllowOrigins: [!Sub 'https://app.${RootDomain}']
         AllowHeaders: [Authorization, Content-Type]

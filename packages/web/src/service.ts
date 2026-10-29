@@ -1,3 +1,4 @@
+import { loadErrorHtml, showLoadError } from './load-error';
 import { fetchAllVehicles } from './vehicles.js';
 import { signatureCaptureHtml, bindSignatureCapture, signatureHistoryHtml, signatureStatusLabel } from './signatures';
 import { SERVICE_SIGNATURE_CONSENT } from '@freedms/shared';
@@ -30,18 +31,26 @@ export function rowHtml(i: RepairOrderLineItem, catalog: Part[] = []): string {
   return `<fieldset data-line="${e(i.id)}" data-kind="${i.kind}"><legend>${i.kind === 'labor' ? 'Labor' : 'Parts'}</legend>${i.kind === 'parts' ? `<label class="stock-picker">Stocked part<select name="partId"><option value="">Free-text part</option>${catalog.map(p=>`<option value="${e(p.id)}" ${p.id===i.partId ? 'selected' : ''}>${e(p.partNumber)} · ${e(p.description)}</option>`).join('')}</select></label><p data-stock-hint>${i.partId ? `${catalog.find(p=>p.id===i.partId)?.quantityOnHand ?? 'Unknown'} on hand, ${catalog.find(p=>p.id===i.partId)?.quantityReserved ?? 0} reserved` : 'Free-text lines do not affect stock.'}</p>` : ''}${input('Description','description',i.description,'required maxlength="200"')}${i.kind === 'labor' ? `<label>Skill / job type<select name="skill"><option value="">No grid rate</option>${skillOptions(i.skill)}</select></label>` + input('Hours','hours',(i.laborHoursHundredths! / 100).toFixed(2),'type="number" min="0.01" max="1000" step="0.01" required') + input('Flagged hours (blank if unknown)','flaggedHours',i.flaggedHoursHundredths == null ? '' : (i.flaggedHoursHundredths / 100).toFixed(2),'type="number" min="0" max="1000" step="0.01"') + input('Rate (USD/hour)','rate',(i.laborRateCents! / 100).toFixed(2),'type="number" min="0" step="0.01" required') : input('Quantity','quantity',i.quantity,'type="number" min="1" max="100000" step="1" required') + input('Unit price (USD)','price',(i.unitPriceCents! / 100).toFixed(2),'type="number" min="0" step="0.01" required')}<button type="button" data-remove>Remove line</button></fieldset>`;
 }
 export async function serviceRoute(parts: string[], ui: UI & {apiEnvelope: <T>(path: string) => Promise<{data: T; total?: number}>}): Promise<void> {
+  try { await loadService(parts, ui); }
+  catch (error) { showLoadError(ui, error); }
+}
+async function loadService(parts: string[], ui: UI & {apiEnvelope: <T>(path: string) => Promise<{data: T; total?: number}>}): Promise<void> {
   if (parts[1] === 'settings') { await catalogPage(ui); return; }
   if (!parts[1]) {
     let generation = 0;
     const render = async (date: string, offset = 0) => {
       const current = ++generation;
-      const [envelope,users] = await Promise.all([ui.apiEnvelope<ServiceBoardDay>(`/service/board?date=${encodeURIComponent(date)}&limit=100&offset=${offset}`),ui.api<User[]>('/users')]);
+      try {
+      const [board, userResult] = await Promise.allSettled([ui.apiEnvelope<ServiceBoardDay>(`/service/board?date=${encodeURIComponent(date)}&limit=100&offset=${offset}`),ui.api<User[]>('/users')]);
       if (!ui.current() || current !== generation) return;
-      const {data: day, total = 0} = envelope;
-      ui.shell(serviceBoardHtml(day,users,{total,offset}));
+      if (board.status === 'rejected') throw board.reason;
+      const users = userResult.status === 'fulfilled' ? userResult.value : [];
+      const {data: day, total = 0} = board.value;
+      ui.shell(serviceBoardHtml(day,users,{total,offset}) + (userResult.status === 'rejected' ? loadErrorHtml(userResult.reason, 'Users could not be loaded; assignments may be unavailable.', false) : ''));
       document.querySelector('#prev-service')?.addEventListener('click', () => { void render(date, Math.max(0, offset - 100)).catch(ui.flash); });
       document.querySelector('#next-service')?.addEventListener('click', () => { void render(date, offset + 100).catch(ui.flash); });
       document.querySelector<HTMLFormElement>('#service-date')!.onsubmit = event => { event.preventDefault(); void render(String(new FormData(event.currentTarget as HTMLFormElement).get('date'))).catch(ui.flash); };
+      } catch (error) { if (current === generation) showLoadError(ui, error, () => { void render(date, offset); }); }
     };
     await render(new Date().toISOString().slice(0,10)); return;
   }

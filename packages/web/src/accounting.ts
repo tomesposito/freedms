@@ -1,3 +1,4 @@
+import { showLoadError } from './load-error';
 import type { DepartmentalStatement } from '@freedms/shared';
 import { treasuryNav, treasuryRoute } from './treasury';
 import { accountTypes, type AccountBalance, type Commissions, type DealPack, type GlAccount, type JournalView, type TrialBalance } from '@freedms/shared';
@@ -36,6 +37,10 @@ function bindReversals(ui: UI) {
 }
 let filters = {from: '', to: '', accountId: '', dealId: ''};
 export async function accountingRoute(parts: string[], ui: UI): Promise<void> {
+  try { await loadAccounting(parts, ui); }
+  catch (error) { showLoadError(ui, error); }
+}
+async function loadAccounting(parts: string[], ui: UI): Promise<void> {
   if (['ap', 'ar', 'cash', 'reconciliations'].includes(parts[1])) return treasuryRoute(parts, ui);
   ui.shell('<p>Loading accounting…</p>');
   if (parts[1] === 'deals' && parts[2]) {

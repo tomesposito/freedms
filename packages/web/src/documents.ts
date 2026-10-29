@@ -1,3 +1,4 @@
+import { loadErrorHtml, showLoadError } from './load-error';
 import { signatureStatusLabel } from './signatures';
 import { documentTypes, type DocumentSearchResult } from '@freedms/shared';
 import { escapeHtml as e } from './format';
@@ -9,14 +10,21 @@ export function documentResultsHtml(docs: DocumentSearchResult[], disposal = fal
 }
 export async function documentsRoute(ui: UI, filters = new URLSearchParams()): Promise<void> {
   ui.shell('<p>Loading documents…</p>');
-  const [docs, settings, expired] = await Promise.all([
+  try {
+  const [search, retention, past] = await Promise.allSettled([
     ui.api<DocumentSearchResult[]>(`/documents${filters.size ? `?${filters}` : ''}`),
     ui.admin ? ui.api<Retention>('/documents/retention') : Promise.resolve(null),
     ui.admin ? ui.api<DocumentSearchResult[]>('/documents/past-retention') : Promise.resolve([])
   ]);
   if (!ui.current()) return;
+  if (search.status === 'rejected') throw search.reason;
+  const docs = search.value;
+  const extrasFailed = retention.status === 'rejected' || past.status === 'rejected';
+  const extraError = retention.status === 'rejected' ? retention.reason : past.status === 'rejected' ? past.reason : null;
+  const settings = retention.status === 'fulfilled' && past.status === 'fulfilled' ? retention.value : null;
+  const expired = past.status === 'fulfilled' ? past.value : [];
   ui.shell(`<h1>Documents</h1><section class="card"><h2>Search deal attachments</h2><form id="document-search"><div class="form-grid"><label>File name<input name="name" maxlength="160" value="${e(filters.get('name') ?? '')}"></label><label>Document type<select name="type"><option value="">All types</option>${documentTypes.map(t => `<option${filters.get('type') === t ? ' selected' : ''}>${e(t)}</option>`).join('')}</select></label><label>Buyer or deal ID<input name="buyer" maxlength="200" value="${e(filters.get('buyer') ?? '')}"></label><label>Uploaded from (UTC)<input name="from" type="date" value="${e(filters.get('from') ?? '')}"></label><label>Uploaded to (UTC)<input name="to" type="date" value="${e(filters.get('to') ?? '')}"></label></div><button>Search documents</button></form></section><section class="card"><h2>Results</h2>${documentResultsHtml(docs)}</section>
-    ${settings ? `<section class="card"><h2>Document retention</h2><p>${settings.retentionDays === null ? 'No retention period configured.' : `Current retention period: ${settings.retentionDays} days.`} Nothing is deleted automatically. Disposal is irreversible and removes the file permanently. The attachment record stays in the deal jacket.</p><form id="document-retention"><label>Retention period (days; leave blank to disable)<input name="days" type="number" min="1" max="36500" step="1" value="${settings.retentionDays ?? ''}"></label><button>Save retention period</button></form><h3>Past retention / pending disposal</h3>${documentResultsHtml(expired, true)}</section>` : ''}`);
+    ${settings ? `<section class="card"><h2>Document retention</h2><p>${settings.retentionDays === null ? 'No retention period configured.' : `Current retention period: ${settings.retentionDays} days.`} Nothing is deleted automatically. Disposal is irreversible and removes the file permanently. The attachment record stays in the deal jacket.</p><form id="document-retention"><label>Retention period (days; leave blank to disable)<input name="days" type="number" min="1" max="36500" step="1" value="${settings.retentionDays ?? ''}"></label><button>Save retention period</button></form><h3>Past retention / pending disposal</h3>${documentResultsHtml(expired, true)}</section>` : extrasFailed ? loadErrorHtml(extraError, 'Document retention could not be loaded.', false) : ''}`);
   const run = async (button: HTMLButtonElement, operation: () => Promise<unknown>) => {
     button.disabled = true;
     try { await operation(); if (ui.current()) await documentsRoute(ui, filters); }
@@ -39,4 +47,5 @@ export async function documentsRoute(ui: UI, filters = new URLSearchParams()): P
     if (!window.confirm(`Permanently dispose of “${doc.name}”? This is irreversible and removes the file permanently. The attachment record will remain in the deal jacket.`)) return;
     void run(button, () => ui.api(`/documents/${encodeURIComponent(doc.id)}/dispose`, 'POST', {version: doc.version, confirm: true}));
   }));
+  } catch (error) { showLoadError(ui, error, () => { void documentsRoute(ui, filters); }); }
 }

@@ -1,3 +1,5 @@
+import { fetchWithRetry } from './api-client';
+import { loadErrorHtml, bindLoadRetry } from './load-error';
 import { brandIconUrl, brandLogoUrl, brandReversedLogoUrl } from './brand';
 import { legalPageHtml } from './legal';
 import { mountOnboarding } from './onboarding';
@@ -38,7 +40,7 @@ async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
 }
 async function apiEnvelope<T>(path: string, method = 'GET', body?: unknown, retried = false): Promise<Extract<ApiEnvelope<T>, {data: T}>> {
   await freshToken();
-  const response = await fetch(`${base}${path}`, {method, headers: {'content-type': 'application/json', ...(getToken() ? {authorization: `Bearer ${getToken()}`} : {})}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
+  const response = await fetchWithRetry(`${base}${path}`, {method, headers: {'content-type': 'application/json', ...(getToken() ? {authorization: `Bearer ${getToken()}`} : {})}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
   const result = await response.json() as ApiEnvelope<T>;
   if (response.status === 401 && !('error' in result && result.error.code === 'MFA_INVALID')) {
     if (!retried && await refreshSession()) return apiEnvelope<T>(path, method, body, true);
@@ -52,7 +54,7 @@ async function apiEnvelope<T>(path: string, method = 'GET', body?: unknown, retr
 }
 async function download(path: string, filename: string): Promise<void> {
   const token = getToken();
-  const result = await fetch(`${base}${path}`, {headers: token ? {authorization: `Bearer ${token}`} : {}});
+  const result = await fetchWithRetry(`${base}${path}`, {headers: token ? {authorization: `Bearer ${token}`} : {}});
   if (!result.ok) {
     const body = await result.json() as {error?: {message: string}};
     throw new Error(body.error?.message || 'The download could not be completed.');
@@ -276,7 +278,7 @@ async function route(): Promise<void> {
     else if (parts[0] === 'new') await form(undefined, sequence);
     else if (parts[0] === 'vehicles' && parts[1]) { if (parts[2] === 'edit') await form(parts[1], sequence); else await detail(parts[1], sequence); }
     else await list(sequence);
-  } catch (error) { if (sequence === routeSequence) { if (!getToken()) await login(); flash(error); } }
+  } catch (error) { if (sequence === routeSequence) { if (!getToken()) await login(); else { shell(loadErrorHtml(error)); bindLoadRetry(() => { void route(); }); } flash(error); } }
 }
 async function start(): Promise<void> {
   try {
