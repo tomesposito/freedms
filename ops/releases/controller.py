@@ -15,6 +15,10 @@ import urllib.request
 import urllib.error
 import zipfile
 
+MARKETING_DOCUMENTS = {f'marketing/{name}': content_type for name, content_type in [
+    ('robots.txt', 'text/plain'), ('sitemap.xml', 'application/xml'), ('llms.txt', 'text/plain'),
+    ('dms-cost.html', 'text/html'), ('free-dealer-management-software.html', 'text/html')]}
+
 
 def require(condition, message):
     if not condition:
@@ -164,7 +168,19 @@ def inspect(aws, config, current):
     require(digest(index) == current['indexSha256'], 'Live frontend differs from recorded release')
     marketing, _ = aws.get('marketing/index.html', config['frontendBucket'])
     require(digest(marketing) == current['marketingIndexSha256'], 'Live marketing site differs from recorded release')
+    inspect_marketing_documents(aws, config, current)
     return info, index, etag
+
+
+def inspect_marketing_documents(aws, config, current):
+    hashes = current.get('marketingDocumentsSha256', {})
+    require(isinstance(hashes, dict) and set(hashes) <= set(MARKETING_DOCUMENTS), 'Invalid marketing document baseline')
+    documents = {}
+    for path, expected in hashes.items():
+        data, etag = aws.get(path, config['frontendBucket'])
+        require(digest(data) == expected, 'Live marketing document differs from recorded release')
+        documents[path] = (data, etag)
+    return documents
 
 
 def smoke(config, files):
@@ -214,6 +230,9 @@ def promote(aws, config, current, current_etag, config_digest, source, manifest_
         info, previous_index, index_etag = inspect(aws, config, current)
         previous_marketing, marketing_etag = aws.get('marketing/index.html', config['frontendBucket'])
         require(digest(previous_marketing) == current['marketingIndexSha256'], 'Marketing site changed before snapshot')
+        previous_documents = inspect_marketing_documents(aws, config, current)
+        documents = {path: data for path, data in files.items() if path in MARKETING_DOCUMENTS}
+        require(set(documents) == set(previous_documents), 'Marketing documents require an operator baseline migration')
         with urllib.request.urlopen(info['Code']['Location'], timeout=30) as response:
             previous_code = response.read(50_000_001)
         require(base64.b64encode(hashlib.sha256(previous_code).digest()).decode() == current['codeSha256'], 'Rollback code mismatch')
@@ -221,24 +240,26 @@ def promote(aws, config, current, current_etag, config_digest, source, manifest_
         aws.put(prefix + '/api.zip', previous_code, content_type='application/zip', create=True)
         aws.put(prefix + '/index.html', previous_index, content_type='text/html', create=True)
         aws.put(prefix + '/marketing.html', previous_marketing, content_type='text/html', create=True)
+        for path, (data, _) in previous_documents.items():
+            aws.put(prefix + '/frontend/' + path, data, content_type=MARKETING_DOCUMENTS[path], create=True)
         snapshot = {'previous': current, 'target': source, 'manifest': manifest_digest, 'operation': operation, 'prefix': prefix}
         aws.put(prefix + '/snapshot.json', encode(snapshot), create=True)
         for path, data in files.items():
-            if path not in ['index.html', 'marketing/index.html']:
+            if path not in ['index.html', 'marketing/index.html'] and path not in MARKETING_DOCUMENTS:
                 content_type = {'js': 'application/javascript', 'css': 'text/css', 'svg': 'image/svg+xml', 'png': 'image/png', 'jpg': 'image/jpeg', 'woff2': 'font/woff2', 'html': 'text/html', 'txt': 'text/plain', 'xml': 'application/xml'}[path.rsplit('.', 1)[1]]
-                if path.startswith('marketing/') and not path.startswith('marketing/assets/'):
-                    aws.put(path, data, bucket=config['frontendBucket'], content_type=content_type)
-                else:
-                    aws.asset(path, data, config['frontendBucket'], content_type)
+                aws.asset(path, data, config['frontendBucket'], content_type)
         # Changes are compatible application bytes only. Existing assets remain available.
         started = True
         code_sha = replace_code(aws, config, code, info['Configuration']['RevisionId'])
+        for path, data in documents.items():
+            aws.put(path, data, bucket=config['frontendBucket'], etag=previous_documents[path][1], content_type=MARKETING_DOCUMENTS[path])
         aws.put('index.html', files['index.html'], bucket=config['frontendBucket'], etag=index_etag, content_type='text/html')
         aws.put('marketing/index.html', files['marketing/index.html'], bucket=config['frontendBucket'], etag=marketing_etag, content_type='text/html')
-        live, _, _ = inspect(aws, config, {'codeSha256': code_sha, 'indexSha256': digest(files['index.html']), 'marketingIndexSha256': digest(files['marketing/index.html'])})
+        document_hashes = {path: digest(data) for path, data in documents.items()}
+        live, _, _ = inspect(aws, config, {'codeSha256': code_sha, 'indexSha256': digest(files['index.html']), 'marketingIndexSha256': digest(files['marketing/index.html']), 'marketingDocumentsSha256': document_hashes})
         smoke(config, files)
         record = {'source': source, 'manifest': manifest_digest, 'codeSha256': code_sha, 'indexSha256': digest(files['index.html']), 'marketingIndexSha256': digest(files['marketing/index.html']),
-                  'operation': operation, 'previous': prefix, 'deployedAt': time.time()}
+                  'marketingDocumentsSha256': document_hashes, 'operation': operation, 'previous': prefix, 'deployedAt': time.time()}
         aws.put('state/current.json', encode(record), etag=current_etag)
         aws.remove_lock(lock)
         return record
@@ -255,11 +276,17 @@ def promote(aws, config, current, current_etag, config_digest, source, manifest_
             require(digest(live_index) in [current['indexSha256'], digest(files['index.html'])], 'Unrecognized frontend change; operator recovery required')
             live_marketing, rollback_marketing_etag = aws.get('marketing/index.html', config['frontendBucket'])
             require(digest(live_marketing) in [current['marketingIndexSha256'], digest(files['marketing/index.html'])], 'Unrecognized marketing change; operator recovery required')
+            document_etags = {}
+            for path, (previous, _) in previous_documents.items():
+                live_document, document_etags[path] = aws.get(path, config['frontendBucket'])
+                require(digest(live_document) in [digest(previous), digest(documents[path])], 'Unrecognized marketing document change; operator recovery required')
             replace_code(aws, config, previous_code, live['Configuration']['RevisionId'])
+            for path, (previous, _) in previous_documents.items():
+                aws.put(path, previous, bucket=config['frontendBucket'], etag=document_etags[path], content_type=MARKETING_DOCUMENTS[path])
             aws.put('index.html', previous_index, bucket=config['frontendBucket'], etag=rollback_index_etag, content_type='text/html')
             aws.put('marketing/index.html', previous_marketing, bucket=config['frontendBucket'], etag=rollback_marketing_etag, content_type='text/html')
             inspect(aws, config, current)
-            smoke(config, {'index.html': previous_index, 'marketing/index.html': previous_marketing})
+            smoke(config, {'index.html': previous_index, 'marketing/index.html': previous_marketing, **{path: data for path, (data, _) in previous_documents.items()}})
             recovered = {**current, 'recoveredAt': time.time(), 'failedOperation': operation}
             aws.put('state/current.json', encode(recovered), etag=current_etag)
             aws.remove_lock(lock)

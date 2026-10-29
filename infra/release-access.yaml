@@ -83,6 +83,11 @@ Resources:
                   - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/assets/*'
                   - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/index.html'
                   - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/assets/*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/robots.txt'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/sitemap.xml'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/llms.txt'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/dms-cost.html'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/free-dealer-management-software.html'
 Outputs:
   OperationsBucket: {Value: !Ref Operations}
   DeployRoleArn: {Value: !GetAtt DeployRole.Arn}
