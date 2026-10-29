@@ -470,4 +470,26 @@ and paginated fake Dynamo, including tenant isolation, scope rejection, boundary
 dates, unknown accounts and a journal write after a cached departmental read.
 Other endpoints, mutation events and the #49 harness are unchanged.
 
-Local check: results will be filled in after measurement by the supervisor.
+Local check on 2026-10-28 (Node v24.22.1), using the unchanged #49 harness:
+
+```sh
+node --import tsx scripts/scale-seed.ts --profile smoke --heavy-vehicles 2000 --heavy-in-stock 100 --heavy-leads 12000 --heavy-customers 2400 --heavy-deals 400 --heavy-repair-orders 2500 --heavy-parts 60 --heavy-appointments 12 --light-tenants 0 --state /tmp/issue58-state-a.json --maxMinutes 40
+node --import tsx scripts/scale-measure.ts --state /tmp/issue58-state-a.json
+```
+
+Dataset A (heavy tenant only, no light tenants), 100 requests per level:
+department statement p95 **32.3 ms at peak (concurrency 5) — PASS** and
+**154.9 ms at 10x (concurrency 50) — PASS** against the 1,000 ms report
+budget, zero errors at both levels. Before this fix the same dataset
+measured p95 190 ms at peak and 1,330 ms at 10x. A warm sequential read
+took ~8 ms (median of 20) against 1,650 journal entries, and an
+independent recomputation from the raw journal matched the departmental
+statement exactly (totals 813,125,000 cents income, 657,900,000 cents
+expenses). The run overlapped an unrelated build on the same box (other
+endpoints in the same run measured slower than their own checks), so the
+departmental headroom is understated, not overstated. Dataset B was not
+re-measured: its journal was empty in the #49 run, so it carries no
+departmental evidence either way (the issue says the same).
+
+These are local in-memory measurements on one shared 2-core box, not
+hosted (DynamoDB) capacity evidence.
