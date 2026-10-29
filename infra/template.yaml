@@ -308,6 +308,7 @@ Resources:
       FunctionCode: !Sub |
         function handler(event) {
           var request = event.request;
+          var marketingFile = /^\/(robots\.txt|sitemap\.xml|llms\.txt|dms-cost\.html|free-dealer-management-software\.html)$/.test(request.uri);
           if (request.headers.host.value === '${RootDomain}') {
             if (request.uri === '/login' || request.uri === '/login/') {
               return {statusCode: 302, headers: {location: {value: 'https://app.${RootDomain}/'}, 'cache-control': {value: 'no-store'}}};
@@ -316,11 +317,12 @@ Resources:
               return {statusCode: 302, headers: {location: {value: 'https://${RootDomain}/#signup'}, 'cache-control': {value: 'no-store'}}};
             }
             if (request.uri === '/' || request.uri === '/index.html') request.uri = '/marketing/index.html';
-            else if (/^\/assets\/[A-Za-z0-9_-]+\.(png|svg|css|js|woff2)$/.test(request.uri)) request.uri = '/marketing' + request.uri;
+            else if (marketingFile) request.uri = '/marketing' + request.uri;
+            else if (/^\/assets\/[A-Za-z0-9_-]+\.(png|svg|jpg|css|js|woff2)$/.test(request.uri)) request.uri = '/marketing' + request.uri;
             else return {statusCode: 404, headers: {'cache-control': {value: 'no-store'}}};
             return request;
           }
-          if (request.headers.host.value !== 'app.${RootDomain}' || request.uri.indexOf('/marketing/') === 0) return {statusCode: 404};
+          if (request.headers.host.value !== 'app.${RootDomain}' || marketingFile || request.uri.indexOf('/marketing/') === 0) return {statusCode: 404};
           if (request.uri.indexOf('/api/') === 0) request.uri = request.uri.slice(4);
           return request;
         }

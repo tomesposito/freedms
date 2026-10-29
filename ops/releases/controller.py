@@ -94,7 +94,7 @@ def frontend_files(archive, entries):
     expected = {}
     for entry in entries:
         path = entry['path']
-        require(re.fullmatch(r'(marketing/)?index\.html', path) or re.fullmatch(r'(marketing/)?assets/[A-Za-z0-9_-]+\.(js|css|woff2|png|svg)', path), 'Unsafe frontend path')
+        require(re.fullmatch(r'(marketing/)?index\.html', path) or re.fullmatch(r'marketing/(robots\.txt|sitemap\.xml|llms\.txt|dms-cost\.html|free-dealer-management-software\.html)', path) or re.fullmatch(r'(marketing/)?assets/[A-Za-z0-9_-]+\.(js|css|woff2|png|svg|jpg)', path), 'Unsafe frontend path')
         require(path not in expected and 0 < entry['size'] <= 20_000_000, 'Invalid frontend entry')
         expected[path] = entry
     require(sum(entry['size'] for entry in entries) <= 50_000_000, 'Frontend exceeds release limit')
@@ -225,8 +225,11 @@ def promote(aws, config, current, current_etag, config_digest, source, manifest_
         aws.put(prefix + '/snapshot.json', encode(snapshot), create=True)
         for path, data in files.items():
             if path not in ['index.html', 'marketing/index.html']:
-                content_type = {'js': 'application/javascript', 'css': 'text/css', 'svg': 'image/svg+xml', 'png': 'image/png', 'woff2': 'font/woff2'}[path.rsplit('.', 1)[1]]
-                aws.asset(path, data, config['frontendBucket'], content_type)
+                content_type = {'js': 'application/javascript', 'css': 'text/css', 'svg': 'image/svg+xml', 'png': 'image/png', 'jpg': 'image/jpeg', 'woff2': 'font/woff2', 'html': 'text/html', 'txt': 'text/plain', 'xml': 'application/xml'}[path.rsplit('.', 1)[1]]
+                if path.startswith('marketing/') and not path.startswith('marketing/assets/'):
+                    aws.put(path, data, bucket=config['frontendBucket'], content_type=content_type)
+                else:
+                    aws.asset(path, data, config['frontendBucket'], content_type)
         # Changes are compatible application bytes only. Existing assets remain available.
         started = True
         code_sha = replace_code(aws, config, code, info['Configuration']['RevisionId'])

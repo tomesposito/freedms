@@ -17,7 +17,7 @@ function walk(dir, prefix = '') {
     const path = prefix + name;
     if (statSync(`${dir}/${name}`).isDirectory()) walk(`${dir}/${name}`, `${path}/`);
     else {
-      if (!(/^(marketing\/)?index\.html$/.test(path) || /^(marketing\/)?assets\/[A-Za-z0-9_-]+\.(js|css|woff2|png|svg)$/.test(path))) throw Error('Unexpected frontend file');
+      if (!(/^(marketing\/)?index\.html$/.test(path) || /^marketing\/(robots\.txt|sitemap\.xml|llms\.txt|dms-cost\.html|free-dealer-management-software\.html)$/.test(path) || /^(marketing\/)?assets\/[A-Za-z0-9_-]+\.(js|css|woff2|png|svg|jpg)$/.test(path))) throw Error('Unexpected frontend file');
       files.push({path, sha256: hash(readFileSync(`${dir}/${name}`)), size: statSync(`${dir}/${name}`).size});
     }
   }

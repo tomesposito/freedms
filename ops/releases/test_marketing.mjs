@@ -18,6 +18,24 @@ test('marketing image references match immutable packaged assets and pilot links
       assert.ok(path.endsWith(`-${hash}.${path.slice(path.lastIndexOf('.') + 1)}`));
     }
     assert.equal(readdirSync(`${destination}/assets`).length, readdirSync('site/assets').length);
+    assert.ok(readdirSync(`${destination}/assets`).some(name => /^og-image-[a-f0-9]{20}\.jpg$/.test(name)));
+    for (const page of ['index.html', 'dms-cost.html', 'free-dealer-management-software.html']) {
+      const content = readFileSync(`${destination}/${page}`, 'utf8');
+      const assets = [...content.matchAll(/(?:src|data-src|href|content)="(?:https:\/\/freedms\.co\/)?(assets\/[^"]+)"/g)].map(match => match[1]);
+      assert.ok(assets.length >= 5);
+      for (const path of assets) {
+        const hash = createHash('sha256').update(readFileSync(`${destination}/${path}`)).digest('hex').slice(0, 20);
+        assert.ok(path.endsWith(`-${hash}.${path.slice(path.lastIndexOf('.') + 1)}`));
+      }
+      for (const meta of ['property="og:image"', 'name="twitter:image"']) {
+        const path = content.match(new RegExp(`<meta ${meta} content="https://freedms\\.co/(assets/og-image-[a-f0-9]{20}\\.jpg)"`))?.[1];
+        assert.ok(path, `${page}: ${meta}`);
+        assert.deepEqual(readFileSync(`${destination}/${path}`), readFileSync('site/assets/og-image.jpg'));
+      }
+    }
+    for (const name of ['robots.txt', 'sitemap.xml', 'llms.txt']) {
+      assert.deepEqual(readFileSync(`${destination}/${name}`), readFileSync(`site/${name}`));
+    }
     assert.ok(html.includes('https://app.freedms.co/'));
     assert.ok(html.includes('invite-only'));
     assert.ok(!/href="\/(signup|login)"/.test(html));
@@ -35,6 +53,11 @@ const route = (host, uri) => handler({request: {headers: {host: {value: host}}, 
 test('apex routes to marketing objects without sharing the app asset cache keys', () => {
   for (const path of ['/', '/index.html']) assert.equal(route('freedms.co', path).uri, '/marketing/index.html');
   assert.equal(route('freedms.co', '/assets/hero-abc.png').uri, '/marketing/assets/hero-abc.png');
+  assert.equal(route('freedms.co', '/assets/og-image-abc.jpg').uri, '/marketing/assets/og-image-abc.jpg');
+  for (const path of ['/robots.txt', '/sitemap.xml', '/llms.txt', '/dms-cost.html', '/free-dealer-management-software.html']) {
+    assert.equal(route('freedms.co', path).uri, `/marketing${path}`);
+    assert.equal(route('app.freedms.co', path).statusCode, 404);
+  }
   assert.equal(route('app.freedms.co', '/assets/hero-abc.png').uri, '/assets/hero-abc.png');
   assert.equal(route('app.freedms.co', '/api/session').uri, '/session');
   assert.equal(route('app.freedms.co', '/').uri, '/');
