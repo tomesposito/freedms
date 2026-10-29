@@ -425,4 +425,23 @@ Validation uses offline tests, including guarded reads, cache behavior, exact
 response JSON and paginated Dynamo/memory equivalence. The #49 measurement
 harness is unchanged.
 
-Local check: results will be filled in after measurement by the supervisor.
+Local check on 2026-10-28 (Node v24.22.1), using the unchanged #49 harness:
+
+```sh
+node --import tsx scripts/scale-seed.ts --profile smoke --heavy-vehicles 2000 --heavy-in-stock 100 --heavy-leads 12000 --heavy-customers 2400 --heavy-deals 400 --heavy-repair-orders 2500 --heavy-parts 60 --heavy-appointments 12 --light-tenants 0 --state /tmp/issue57-state-a.json --maxMinutes 40
+node --import tsx scripts/scale-measure.ts --state /tmp/issue57-state-a.json
+```
+
+Dataset A (heavy tenant only, no light tenants), 100 requests per level:
+trial balance p95 **41.0 ms at peak (concurrency 5) — PASS** and
+**143.5 ms at 10x (concurrency 50) — PASS** against the 1,000 ms report
+budget, zero errors at both levels. Before this fix the same dataset
+measured p95 182 ms at peak and 2,460 ms at 10x. A warm sequential read
+took ~10 ms (median of 10) against 1,650 journal entries, and an
+independent recomputation from the raw journal matched every trial-balance
+row exactly (totals 1,471,025,000 cents debit = credit, balanced).
+Dataset B was not re-measured: its journal was empty in the #49 run, so
+it carries no trial-balance evidence either way (the issue says the same).
+
+These are local in-memory measurements on one shared 2-core box, not
+hosted (DynamoDB) capacity evidence.
