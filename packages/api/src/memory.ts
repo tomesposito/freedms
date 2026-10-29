@@ -9,14 +9,22 @@ import type { Customer, CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicl
 import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 const forecastKinds = new Set<CrmEntity['kind']>(['deal', 'service-appointment', 'part', 'parts-sale', 'repair-order']);
-interface State { accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
+interface State { accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
   private states = new Map<string, State>();
   forTenant(tenantId: string): TenantRepository {
     requireId(tenantId);
     let state = this.states.get(tenantId);
-    if (!state) { state = {accountingEpoch: 0, accountingCache: new Map(), forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), partNumbers: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
+    if (!state) { state = {accountingEpoch: 0, accountingCache: new Map(), forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), crmByKind: new Map(), partNumbers: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
     const s = state;
+    const storeCrm = (record: CrmEntity) => {
+      const stored = structuredClone(record);
+      let bucket = s.crmByKind.get(record.kind);
+      if (!bucket) { bucket = new Map(); s.crmByKind.set(record.kind, bucket); }
+      // Both maps share the stored clone; replacing a key preserves insertion order.
+      s.crm.set(`${record.kind}#${record.id}`, stored);
+      bucket.set(record.id, stored);
+    };
     const check = (event: OutboxEvent) => { assertScope(tenantId, event); if (s.events.has(event.id)) throw conflict(); };
     // Synchronous validation followed by synchronous map writes: no interleaved await or partial commits.
     return {
@@ -25,7 +33,7 @@ export class MemoryRepositories implements RepositoryFactory {
         if (!write) return 'already-member';
         const {record, member, event, memberEvent} = write;
         check(event); check(memberEvent);
-        s.crm.set(`invite#${invite.id}`, structuredClone(record)); s.users.set(user.id, structuredClone(user)); s.memberships.set(user.id, structuredClone(member));
+        storeCrm(record); s.users.set(user.id, structuredClone(user)); s.memberships.set(user.id, structuredClone(member));
         s.events.set(event.id, structuredClone(event)); s.events.set(memberEvent.id, structuredClone(memberEvent));
         return 'accepted';
       },
@@ -117,7 +125,7 @@ export class MemoryRepositories implements RepositoryFactory {
         for (const row of s.crm.values()) if (row.kind === 'customer') customers.set(row.id, row);
         return structuredClone(leadPage(s.crm.values(), customers, query));
       },
-      crmList: async kind => structuredClone([...s.crm.values()].filter(r => r.kind === kind)) as never,
+      crmList: async kind => structuredClone([...(s.crmByKind.get(kind)?.values() ?? [])]) as never,
       crmGet: async (kind, id) => structuredClone(s.crm.get(`${kind}#${requireId(id)}`)) as never,
       crmWrite: async (writes, vehicles = []) => {
         assertVehicleWrites(tenantId, vehicles, writes);
@@ -151,7 +159,7 @@ export class MemoryRepositories implements RepositoryFactory {
         }
         for (const {record, event} of vehicles) { s.vehicles.set(record.id, structuredClone(record)); s.events.set(event.id, structuredClone(event)); }
         for (const {record, event} of writes) {
-          s.crm.set(`${record.kind}#${record.id}`, structuredClone(record)); s.events.set(event.id, structuredClone(event));
+          storeCrm(record); s.events.set(event.id, structuredClone(event));
         }
         if (writes.some(({record}) => record.kind === 'journal-entry' || record.kind === 'gl-account')) s.accountingEpoch++;
         if (writes.some(({record}) => serviceBoardKinds.has(record.kind))) s.serviceBoardEpoch++;

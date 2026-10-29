@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { isOverdue, type CustomerInput, type Lead } from '@freedms/shared';
+import { defaultSettings, isOverdue, type CustomerInput, type Lead } from '@freedms/shared';
 import { MemoryRepositories } from '../src/memory.js';
 import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
@@ -125,6 +125,7 @@ test('CRM transaction conflicts and scope violations cannot partially write memo
   await assert.rejects(repo.crmWrite([{record: lead, expectedVersion: 0, event: {...event, tenantId: 'B'}}]), /scope/);
   const c = (await repo.crmGet('customer', lead.customerId))!;
   await assert.rejects(repo.crmWrite([{record: {...c, id: 'new-customer'}, expectedVersion: 0, event: {...event, id: 'new-event', type: 'customer.created', aggregateId: 'new-customer'}}, {record: {...lead, version: 2}, expectedVersion: 1, event: {...event, type: 'lead.updated', aggregateVersion: 2}}]));
+  assert.deepEqual(await repo.crmList('customer'), [c]); assert.deepEqual(await repo.crmList('lead'), [await repo.crmGet('lead', lead.id)]);
   assert.equal(await repo.crmGet('customer', 'new-customer'), undefined); assert.equal((await repo.crmGet('lead', lead.id))?.version, 1);
 });
 
@@ -211,4 +212,36 @@ test('memory service board selects day and linked rows once, preserves insertion
   assert.equal(reread.repairOrders[0].lineItems.length, 0); assert.equal(reread.appointments[0].customerName, 'Customer');
   assert.equal(reread.signatures[0].signerName, 'Customer'); assert.deepEqual(reread.technicians[0].skills, []);
   assert.deepEqual(await repositories.forTenant('B').serviceBoard(boardDay), {appointments: [], repairOrders: [], signatures: [], technicians: []});
+});
+
+test('memory crmList preserves per-kind order, replacement and clone isolation across tenants', async () => {
+  const {repositories, makeLead, call} = await setup();
+  const repo = repositories.forTenant('A'), other = repositories.forTenant('B');
+  assert.deepEqual(await repo.crmList('document'), []);
+  const first = await makeLead();
+  assert.equal((await call('A', 'PUT', '/settings', {...defaultSettings, version: 0})).status, 200);
+  const second = await makeLead();
+  const leads = await repo.crmList('lead'), customers = await repo.crmList('customer');
+  assert.deepEqual(leads.map(r => r.id), [first.id, second.id]);
+  assert.deepEqual(customers.map(r => r.id), [first.customerId, second.customerId]);
+  assert.equal((await repo.crmList('settings')).length, 1);
+  for (const kind of ['lead', 'customer', 'settings'] as const) assert.deepEqual(await other.crmList(kind), []);
+  const otherLead = await makeLead('B');
+  assert.deepEqual((await other.crmList('lead')).map(r => r.id), [otherLead.id]);
+
+  const updated = {...leads[0], version: 2};
+  await repo.crmWrite([{record: updated, expectedVersion: 1, event: {
+    id: 'replace-first', tenantId: 'A', actorId: 'userA', aggregateId: first.id,
+    aggregateVersion: 2, type: 'lead.updated', occurredAt: now.toISOString(), deliveryStatus: 'pending'
+  }}]);
+  const expected = structuredClone(updated);
+  updated.activities[0].actorId = 'mutated-input';
+  const listed = await repo.crmList('lead');
+  assert.deepEqual(listed, [expected, leads[1]]);
+  listed[0].activities[0].actorId = 'mutated-output';
+  listed.reverse();
+  assert.deepEqual(await repo.crmList('lead'), [expected, leads[1]]);
+  assert.deepEqual(await repo.crmGet('lead', first.id), expected);
+  assert.deepEqual(await repo.crmList('customer'), customers);
+  assert.deepEqual(await other.crmList('lead'), [await other.crmGet('lead', otherLead.id)]);
 });

@@ -82,6 +82,7 @@ test('acceptance is atomic, single-use, role-fixed, isolated and signs in as sta
   const s = await setup(), a = await s.create(), b = await s.create(), invite = a.invites[0];
   const repo = s.repositories.forTenant(invite.tenantId), other = s.repositories.forTenant(b.invites[0].tenantId);
   const before = await other.workspaceUsers(), otherInvites = await other.crmList('invite');
+  const invitesBefore = await repo.crmList('invite');
   const path = `/invite/${invite.token}/accept`, body = {name: 'New Name', email: 'STAFF@example.test'};
   for (const extra of [{role: 'admin'}, {tenantId: b.invites[0].tenantId}]) assert.equal((await s.call(path, '', 'POST', {...body, ...extra})).status, 400);
   assert.equal((await s.call(path, '', 'POST', {...body, email: 'wrong@example.test'})).data.outcome, 'email-mismatch');
@@ -93,6 +94,7 @@ test('acceptance is atomic, single-use, role-fixed, isolated and signs in as sta
   const accepted = (await repo.crmGet('invite', invite.id))!;
   assert.equal(accepted.status, 'accepted'); assert.equal(accepted.acceptedAt, now.toISOString()); assert.equal(accepted.acceptedName, 'New Name');
   assert.equal(accepted.token, ''); assert.equal(accepted.tokenHash, '');
+  assert.deepEqual(await repo.crmList('invite'), invitesBefore.map(row => row.id === accepted.id ? accepted : row));
   const rows = await repo.workspaceUsers(); assert.equal(rows.length, 2);
   assert.equal(rows[1].user.id, accepted.acceptedUserId); assert.equal(rows[1].membership.role, 'staff'); assert.equal(rows[1].membership.active, true);
   assert.deepEqual((await s.call(`/invite/${invite.token}`)).data, {valid: false, reason: 'accepted'});
