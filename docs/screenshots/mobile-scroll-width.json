@@ -1,0 +1,326 @@
+[
+  {
+    "path": "/",
+    "width": 390,
+    "heading": "Inventory",
+    "offenders": []
+  },
+  {
+    "path": "/welcome",
+    "width": 390,
+    "heading": "Welcome to Demo Motors",
+    "offenders": []
+  },
+  {
+    "path": "/new",
+    "width": 390,
+    "heading": "Add vehicle",
+    "offenders": []
+  },
+  {
+    "path": "/leads",
+    "width": 390,
+    "heading": "Leads",
+    "offenders": []
+  },
+  {
+    "path": "/leads/new",
+    "width": 390,
+    "heading": "Add lead",
+    "offenders": []
+  },
+  {
+    "path": "/leads/equity",
+    "width": 390,
+    "heading": "Equity mining",
+    "offenders": []
+  },
+  {
+    "path": "/leads/028f0b61-b017-432e-9f37-873bedd5284f",
+    "width": 390,
+    "heading": "Casey Sample",
+    "offenders": []
+  },
+  {
+    "path": "/vehicles/35e4efb4-4dbc-4bbe-8674-ec788d8bbdaf",
+    "width": 390,
+    "heading": "2020 Ford F-150",
+    "offenders": []
+  },
+  {
+    "path": "/vehicles/35e4efb4-4dbc-4bbe-8674-ec788d8bbdaf/edit",
+    "width": 390,
+    "heading": "Edit vehicle",
+    "offenders": []
+  },
+  {
+    "path": "/deals",
+    "width": 390,
+    "heading": "Deals",
+    "offenders": []
+  },
+  {
+    "path": "/deals/new",
+    "width": 390,
+    "heading": "Start deal",
+    "offenders": []
+  },
+  {
+    "path": "/deals/settings",
+    "width": 390,
+    "heading": "Workspace settings",
+    "offenders": []
+  },
+  {
+    "path": "/deals/new/lead/028f0b61-b017-432e-9f37-873bedd5284f",
+    "width": 390,
+    "heading": "Start deal",
+    "offenders": []
+  },
+  {
+    "path": "/deals/new/vehicle/35e4efb4-4dbc-4bbe-8674-ec788d8bbdaf",
+    "width": 390,
+    "heading": "Start deal",
+    "offenders": []
+  },
+  {
+    "path": "/deals/0cf18207-93fd-4d5e-83c1-4b7b60f0d276",
+    "width": 390,
+    "heading": "Alex Demo",
+    "offenders": []
+  },
+  {
+    "path": "/deals/0cf18207-93fd-4d5e-83c1-4b7b60f0d276/credit",
+    "width": 390,
+    "heading": "Credit application",
+    "offenders": []
+  },
+  {
+    "path": "/deals/0cf18207-93fd-4d5e-83c1-4b7b60f0d276/compliance",
+    "width": 390,
+    "heading": "Compliance",
+    "offenders": []
+  },
+  {
+    "path": "/deals/3cbba086-8923-4a4b-8eae-8127a7650389/jacket",
+    "width": 390,
+    "heading": "Deal jacket",
+    "offenders": []
+  },
+  {
+    "path": "/service",
+    "width": 390,
+    "heading": "Service board",
+    "offenders": []
+  },
+  {
+    "path": "/service/settings",
+    "width": 390,
+    "heading": "Technicians and labor grid",
+    "offenders": []
+  },
+  {
+    "path": "/service/appointments/new",
+    "width": 390,
+    "heading": "New service appointment",
+    "offenders": []
+  },
+  {
+    "path": "/service/repair-orders/new",
+    "width": 390,
+    "heading": "New repair order",
+    "offenders": []
+  },
+  {
+    "path": "/service/appointments/4946f98e-bf36-4ea8-8c07-317b9eee5680",
+    "width": 390,
+    "heading": "Edit service appointment",
+    "offenders": []
+  },
+  {
+    "path": "/service/repair-orders/af3a2a33-a2fd-4f1f-92e3-b3131d2b7a3a",
+    "width": 390,
+    "heading": "Edit repair order",
+    "offenders": []
+  },
+  {
+    "path": "/service/repair-orders/new/4946f98e-bf36-4ea8-8c07-317b9eee5680",
+    "width": 390,
+    "heading": "New repair order",
+    "offenders": []
+  },
+  {
+    "path": "/service/history/vehicle/35e4efb4-4dbc-4bbe-8674-ec788d8bbdaf",
+    "width": 390,
+    "heading": "Service history",
+    "offenders": []
+  },
+  {
+    "path": "/service/history/customer/bb863a3e-8f99-4991-8d4f-531e4e23a7c0",
+    "width": 390,
+    "heading": "Service history",
+    "offenders": []
+  },
+  {
+    "path": "/parts",
+    "width": 390,
+    "heading": "Parts",
+    "offenders": []
+  },
+  {
+    "path": "/parts/new",
+    "width": 390,
+    "heading": "Add part",
+    "offenders": []
+  },
+  {
+    "path": "/parts/9e7a15f5-1e1e-4d95-b7b8-5693cb18ee1d",
+    "width": 390,
+    "heading": "Edit part",
+    "offenders": []
+  },
+  {
+    "path": "/accounting",
+    "width": 390,
+    "heading": "Accounting",
+    "offenders": []
+  },
+  {
+    "path": "/accounting/ap",
+    "width": 390,
+    "heading": "Accounts payable",
+    "offenders": []
+  },
+  {
+    "path": "/accounting/ar",
+    "width": 390,
+    "heading": "Accounts receivable",
+    "offenders": []
+  },
+  {
+    "path": "/accounting/cash",
+    "width": 390,
+    "heading": "Cash & bank register",
+    "offenders": []
+  },
+  {
+    "path": "/accounting/cash/account-1000",
+    "width": 390,
+    "heading": "Cash & bank register",
+    "offenders": []
+  },
+  {
+    "path": "/accounting/reconciliations",
+    "width": 390,
+    "heading": "Bank reconciliation",
+    "offenders": []
+  },
+  {
+    "path": "/accounting/reconciliations/e70b79b6-e8bc-44ab-bc4a-7d5403480ce8",
+    "width": 390,
+    "heading": "Statement · 2026-10-28 – 2026-10-28",
+    "offenders": []
+  },
+  {
+    "path": "/accounting/deals/0cf18207-93fd-4d5e-83c1-4b7b60f0d276",
+    "width": 390,
+    "heading": "Deal accounting pack",
+    "offenders": []
+  },
+  {
+    "path": "/reports",
+    "width": 390,
+    "heading": "Reports",
+    "offenders": []
+  },
+  {
+    "path": "/documents",
+    "width": 390,
+    "heading": "Documents",
+    "offenders": []
+  },
+  {
+    "path": "/compliance",
+    "width": 390,
+    "heading": "Compliance log",
+    "offenders": []
+  },
+  {
+    "path": "/compliance/privacy",
+    "width": 390,
+    "heading": "Privacy requests",
+    "offenders": []
+  },
+  {
+    "path": "/compliance/audit",
+    "width": 390,
+    "heading": "Audit log",
+    "offenders": []
+  },
+  {
+    "path": "/fi-products",
+    "width": 390,
+    "heading": "F&I products",
+    "offenders": []
+  },
+  {
+    "path": "/import",
+    "width": 390,
+    "heading": "Import inventory",
+    "offenders": []
+  },
+  {
+    "path": "/feeds",
+    "width": 390,
+    "heading": "Feeds",
+    "offenders": []
+  },
+  {
+    "path": "/webhooks",
+    "width": 390,
+    "heading": "Webhooks",
+    "offenders": []
+  },
+  {
+    "path": "/account",
+    "width": 390,
+    "heading": "Account security",
+    "offenders": []
+  },
+  {
+    "path": "/users",
+    "width": 390,
+    "heading": "Workspace users",
+    "offenders": []
+  },
+  {
+    "path": "/terms",
+    "width": 390,
+    "heading": "freeDMS Hosted-Service Terms of Service",
+    "offenders": []
+  },
+  {
+    "path": "/privacy",
+    "width": 390,
+    "heading": "freeDMS Privacy Notice",
+    "offenders": []
+  },
+  {
+    "path": "/share/mobile-demo.88dac04579f7a1e35e34e9e27c261720b7678bf53126ad878f0ac6b73b2a6b9d",
+    "width": 390,
+    "heading": "Demo Motors",
+    "offenders": []
+  },
+  {
+    "path": "/invite/invalid",
+    "width": 390,
+    "heading": "This invite link is not valid",
+    "offenders": []
+  },
+  {
+    "path": "/join",
+    "width": 390,
+    "heading": "Your inventory, in one place.",
+    "offenders": []
+  }
+]

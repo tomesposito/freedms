@@ -50,6 +50,29 @@ Real captures from the local app on the current build — the same screens the
 verification tours use. The sample dealership data is local-only; the app itself
 always starts empty.
 
+**Phone layouts (390px)** — normal fictional demo records, with full-width filter
+fields and wide tables scrolling inside their cards. Swipe tables horizontally
+to see the remaining columns.
+
+![Leads filters on a phone](docs/screenshots/leads-mobile.png)
+
+![Reports date range on a phone](docs/screenshots/reports-mobile.png)
+
+![Accounting date range and trial balance on a phone](docs/screenshots/accounting-mobile.png)
+
+![Parts catalog on a phone](docs/screenshots/parts-mobile.png)
+
+The offline regression tour runs from the repo root:
+`node --import tsx packages/web/test/mobile-tour.mjs`. It follows the existing
+`auth-tour.mjs` browser setup (`PLAYWRIGHT_ROOT` and `CHROMIUM_PATH` overrides),
+uses the real in-memory API and `seedDemo`, and blocks external browser requests.
+It checks every route family at 390px, field widths, control overlap, table scroll
+containment, and desktop layouts. Per-route screenshots go to `.pilot/mobile-tour`
+(or `SCREENSHOT_DIR`); the committed [width log](docs/screenshots/mobile-scroll-width.json)
+records each page's document width. The tour also refreshes these four phone captures and the affected desktop
+captures, including the service day picker. Browser checks remain separate from `npm test`, whose offline
+Node harness does not install or launch Playwright.
+
 **Sign in** — in-app Cognito login, shown against the offline hosted-mode fixture.
 
 ![freeDMS sign-in](docs/screenshots/login.png)

@@ -24,7 +24,10 @@ p{margin:0 0 1rem}
 .muted{color:#64748B}
 .heading{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:32px}
 .heading p:last-child{margin-bottom:0}
-.filters{display:flex;align-items:end;gap:16px;margin-bottom:24px}
+/* Wrap whole fields before intrinsic select/date widths squeeze their neighbors. */
+.filters{display:flex;flex-wrap:wrap;align-items:end;gap:16px;margin-bottom:24px}
+.filters > label,#service-date > label{flex:0 1 auto;min-width:min(180px,100%);overflow-wrap:normal}
+.filters > button,#service-date > button{flex:none}
 .filters .search{flex:1}
 .filters select{min-width:180px}
 .empty{padding:70px 24px;text-align:center;background:white;border:1px dashed #CBD5E1;border-radius:12px}
@@ -81,7 +84,7 @@ h1{font-size:1.8rem}
 .heading .button{white-space:nowrap}
 .filters{flex-wrap:wrap}
 .filters .search{flex-basis:100%}
-.filters label:nth-child(2){flex:1}
+.filters > label,.filters > label.search,#service-date > label{flex:1 1 100%;min-width:0}
 .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
 .detail-grid,.form-grid{grid-template-columns:1fr}
 .card{padding:20px}
@@ -130,7 +133,7 @@ form>button{margin-top:12px}
 .service-board { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr)); gap:16px; margin:24px 0; }
 .service-board .card { margin:0; min-width:0; }
 .service-board article { border-top:1px solid #E2E8F0; padding:16px 0; overflow-wrap:anywhere; }
-#service-date { display:flex; align-items:end; gap:12px; margin:20px 0; }
+#service-date { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin:20px 0; }
 #service-lines fieldset { display:grid; grid-template-columns:2fr 1fr 1fr auto; align-items:end; gap:12px; border-bottom:1px solid #E2E8F0; padding-bottom:16px; }
 #service-lines legend { font-weight:600; padding:8px 0; }
 #service-totals { overflow:auto; margin-top:20px; }
@@ -151,12 +154,13 @@ main nav { display: flex; flex-wrap: wrap; gap: 12px 20px; }
 main nav a { font-weight: 600; }
 main > *, .heading > *, .filters > *, .form-grid > *, .detail-grid > *, .vin-row > * { min-width: 0; }
 .card, .table-wrap, .metrics { border-color: var(--line); box-shadow: 0 2px 6px #172b3a05; }
-label { color: #42525d; }
+label { color: #42525d; min-width: 0; }
 input, select, textarea { max-width: 100%; }
 fieldset { min-width: 0; }
 .form-actions { flex-wrap: wrap; }
 .card form > label + label { margin-top: 16px; }
-.table-wrap { max-width: 100%; }
+/* Let nested grid/flex table containers shrink; the table scrolls inside them. */
+.table-wrap { min-width: 0; max-width: 100%; }
 button, .button { transition: background-color .15s, border-color .15s; }
 
 /* The app chrome is scoped so public and login pages keep their own layout. */
