@@ -29,7 +29,7 @@ export async function ensureDefaultAccounts(repo: TenantRepository, principal: P
       }
     }
   }
-  return (await repo.crmList('gl-account')).sort((a, b) => a.code.localeCompare(b.code));
+  return (writes.length ? await repo.crmList('gl-account') : accounts).sort((a, b) => a.code.localeCompare(b.code));
 }
 export function assertBalanced(lines: JournalLine[]): void {
   if (lines.some(l => !Number.isSafeInteger(l.debit) || !Number.isSafeInteger(l.credit) || !((l.debit > 0 && l.credit === 0) || (l.credit > 0 && l.debit === 0)))) throw invalid('Invalid journal amounts.');
@@ -94,6 +94,11 @@ export async function accounting(request: ApiRequest, principal: Principal, repo
     const record: GlAccount = {...base(principal.tenantId, now, id ?? `account-${code}`), kind: 'gl-account', code, name: text(b.name, 'Name', 120), type: old?.type ?? choice(b.type, accountTypes, 'account type'), active, system: old?.system ?? false, ...(old?.cash ? {cash: true} : {}), version: expected + 1, createdAt: old?.createdAt ?? now.toISOString()};
     await repo.crmWrite([write(record, principal, expected)]); return response(id ? 200 : 201, {data: record});
   }
+  if (section === 'balances' || section === 'trial-balance') {
+    const rows = (await repo.accountingBalances(section === 'balances' ? {from: null, to: null} : range)).filter(r => section === 'balances' || r.debit || r.credit);
+    const debit = rows.reduce((s, r) => s + r.debit, 0), credit = rows.reduce((s, r) => s + r.credit, 0), totals = {debit, credit, balanced: debit === credit};
+    return response(200, section === 'balances' ? {data: rows, totals} : {data: {...range, rows, totals}});
+  }
   const lock = reverse ? await accountingLock(repo, principal, now) : undefined;
   const all = await repo.crmList('journal-entry');
   const reversed = new Set(all.map(e => e.reversesEntryId).filter(Boolean));
@@ -109,11 +114,6 @@ export async function accounting(request: ApiRequest, principal: Principal, repo
   if (section === 'journal') return response(200, {data: period.filter(e => (!q.accountId || e.lines.some(l => l.accountId === q.accountId)) && (!q.dealId || e.dealId === q.dealId) && (!q.repairOrderId || e.repairOrderId === q.repairOrderId) && (!q.partsSaleId || e.partsSaleId === q.partsSaleId))});
   if (section === 'departmental') {
     return response(200, {data: {...range, ...departmentalStatement(accounts, period)}});
-  }
-  if (section === 'balances' || section === 'trial-balance') {
-    const rows = accountBalances(accounts, section === 'balances' ? entries : period).filter(r => section === 'balances' || r.debit || r.credit);
-    const debit = rows.reduce((s, r) => s + r.debit, 0), credit = rows.reduce((s, r) => s + r.credit, 0), totals = {debit, credit, balanced: debit === credit};
-    return response(200, section === 'balances' ? {data: rows, totals} : {data: {...range, rows, totals}});
   }
   const rateBps = (await repo.crmGet('settings', 'workspace'))?.commissionRateBps ?? 0;
   if (section === 'commissions') {

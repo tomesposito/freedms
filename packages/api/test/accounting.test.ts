@@ -194,3 +194,97 @@ test('Sold-deal receivables appear once in AR and receipts tie aging to the exis
   assert.equal(balances.find((r: {code: string}) => r.code === '1000').balance, 12345);
   assert.equal((await call('A', 'GET', `/accounting/deals/${d.id}`)).data.entries.filter((j: JournalEntry) => j.source === 'deal-posting').length, 1);
 });
+
+test('Compact accounting reads preserve exact JSON, inclusive dates, account order and tenant scope', async t => {
+  const {write, ensureDefaultAccounts} = await import('../src/accounting.js');
+  const {DynamoRepositories} = await import('../src/dynamo.js');
+  const {QueryCommand} = await import('@aws-sdk/lib-dynamodb');
+  const memory = new MemoryRepositories(), repo = memory.forTenant('A');
+  const principal = {tenantId: 'A', userId: 'userA', role: 'admin'} as Principal;
+  const accounts = await ensureDefaultAccounts(repo, principal, now);
+  const entry = (id: string, date: string, amount: number): JournalEntry => ({id, tenantId: 'A', version: 1, createdAt: now.toISOString(), updatedAt: now.toISOString(), kind: 'journal-entry', date, source: 'deal-posting', dealId: null, memo: id, reversesEntryId: null, reversedByEntryId: null,
+    lines: [{accountId: 'account-1000', accountCode: '1000', accountName: 'Cash', debit: amount, credit: 0, explanation: ''}, {accountId: 'account-4000', accountCode: '4000', accountName: 'Sales', debit: 0, credit: amount, explanation: ''}]});
+  const entries = [entry('before', '2026-10-09', 7), entry('from', '2026-10-10T23:59:59Z', 101), entry('to', '2026-10-20T00:00:00Z', 203), entry('after', '2026-10-21', 11)];
+  for (const e of entries) await repo.crmWrite([write(e, principal)]);
+  let pages = 0;
+  const dynamo = new DynamoRepositories('offline', {send: async (command: InstanceType<typeof QueryCommand>) => {
+    assert.ok(command instanceof QueryCommand);
+    assert.equal(command.input.ConsistentRead, true);
+    const values = command.input.ExpressionAttributeValues!;
+    assert.ok(['GL-ACCOUNT#', 'JOURNAL-ENTRY#'].includes(values[':prefix']));
+    assert.ok(['TENANT#A', 'TENANT#B'].includes(values[':pk']));
+    const rows = values[':pk'] === 'TENANT#B' ? [] : values[':prefix'] === 'GL-ACCOUNT#' ? accounts : entries;
+    const offset = Number(command.input.ExclusiveStartKey?.offset ?? 0);
+    pages++;
+    return {Items: rows.slice(offset, offset + 2).map(data => ({data})), ...(offset + 2 < rows.length ? {LastEvaluatedKey: {offset: offset + 2}} : {})};
+  }} as any);
+  const expectedRows = (amount: number) => accounts.map(a => ({accountId: a.id, code: a.code, name: a.name, type: a.type, debit: a.code === '1000' ? amount : 0, credit: a.code === '4000' ? amount : 0, balance: ['1000', '4000'].includes(a.code) ? amount : 0}));
+  const range = {from: '2026-10-10', to: '2026-10-20'};
+  const clone = structuredClone;
+  const spy = t.mock.method(globalThis, 'structuredClone', (value: unknown) => {
+    assert.deepEqual(value, expectedRows(304));
+    return clone(value);
+  });
+  assert.deepEqual(await repo.accountingBalances(range), expectedRows(304));
+  spy.mock.restore();
+  for (const repositories of [memory, dynamo]) {
+    const scoped = repositories.forTenant('A');
+    const guarded = new Proxy(scoped, {get(target, property) {
+      if (property === 'list') return () => { throw new Error('Full collection read'); };
+      if (property === 'crmList') return (kind: string) => { assert.equal(kind, 'gl-account'); return target.crmList('gl-account'); };
+      return Reflect.get(target, property);
+    }});
+    for (const [query, amount] of [[range, 304], [{from: null, to: null}, 322], [{from: range.from, to: null}, 315], [{from: null, to: range.to}, 311], [{from: '2027-01-01', to: null}, 0]] as const) {
+      assert.deepEqual(await scoped.accountingBalances(query), expectedRows(amount));
+      const result = await accounting({method: 'GET', path: '/accounting/trial-balance', query: {...(query.from ? {from: query.from} : {}), ...(query.to ? {to: query.to} : {})}}, principal, guarded, now);
+      assert.equal(result.body, JSON.stringify({data: {...query, rows: expectedRows(amount).filter(r => r.debit || r.credit), totals: {debit: amount, credit: amount, balanced: true}}}));
+    }
+    const balances = await accounting({method: 'GET', path: '/accounting/balances'}, principal, guarded, now);
+    assert.equal(balances.body, JSON.stringify({data: expectedRows(322), totals: {debit: 322, credit: 322, balanced: true}}));
+    assert.deepEqual(await repositories.forTenant('B').accountingBalances(range), []);
+  }
+  assert.ok(pages > 20);
+  for (const row of [accounts[0], entries[0]]) {
+    const corrupt = new DynamoRepositories('offline', {send: async () => ({Items: [{data: {...row, tenantId: 'B'}}]})} as any);
+    await assert.rejects(corrupt.forTenant('A').accountingBalances(range), /scope/);
+  }
+  // Unknown accounts do not become output rows, so totals can be unbalanced.
+  const orphan = entry('orphan', range.from, 5); orphan.lines[1].accountId = 'missing';
+  await repo.crmWrite([write(orphan, principal)]);
+  const result = JSON.parse((await accounting({method: 'GET', path: '/accounting/trial-balance', query: range}, principal, repo, now)).body);
+  assert.deepEqual(result.data.totals, {debit: 309, credit: 304, balanced: false});
+});
+
+test('Accounting cache is detached, bounded, tenant-local and invalidated only by journal/account writes', async t => {
+  const {write, ensureDefaultAccounts} = await import('../src/accounting.js');
+  const memory = new MemoryRepositories(), repo = memory.forTenant('A');
+  const principal = {tenantId: 'A', userId: 'userA', role: 'admin'} as Principal;
+  const range = {from: null, to: null};
+  assert.deepEqual(await repo.accountingBalances(range), []);
+  const accounts = await ensureDefaultAccounts(repo, principal, now);
+  const expected = await repo.accountingBalances(range);
+  assert.equal(expected.length, accounts.length); // Real seed invalidates the empty cache.
+  const changed = await repo.accountingBalances(range); changed[0].name = 'mutated';
+  assert.deepEqual(await repo.accountingBalances(range), expected);
+  await ensureDefaultAccounts(repo, principal, now); // No-op seed must preserve the cache.
+  await repo.crmWrite([{record: {id: 'workspace', kind: 'settings', tenantId: 'A', version: 1, createdAt: now.toISOString(), updatedAt: now.toISOString(), taxRateBps: 0, taxTradeDifference: false, docFee: 0}, expectedVersion: 0, event: {id: 'settings', tenantId: 'A', actorId: 'userA', aggregateId: 'workspace', aggregateVersion: 1, type: 'settings.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'}}]);
+  // A raw CRM scan would call Map.values; a cache hit only clones compact rows.
+  const guard = t.mock.method(Map.prototype, 'values', () => { throw new Error('Unexpected raw scan'); });
+  assert.deepEqual(await memory.forTenant('A').accountingBalances(range), expected);
+  guard.mock.restore();
+  const account = accounts[0];
+  await repo.crmWrite([write({...account, name: 'Renamed', version: 2}, principal, 1)]);
+  assert.equal((await repo.accountingBalances(range))[0].name, 'Renamed');
+  const journal: JournalEntry = {id: 'j', tenantId: 'A', kind: 'journal-entry', version: 1, createdAt: now.toISOString(), updatedAt: now.toISOString(), date: now.toISOString(), source: 'deal-posting', dealId: null, memo: '', reversesEntryId: null, reversedByEntryId: null, lines: [{accountId: account.id, accountCode: account.code, accountName: account.name, debit: 123, credit: 0, explanation: ''}]};
+  await repo.crmWrite([write(journal, principal)]);
+  assert.equal((await repo.accountingBalances(range))[0].debit, 123);
+  const otherPrincipal = {...principal, tenantId: 'B'};
+  await memory.forTenant('B').crmWrite([write({...account, tenantId: 'B'}, otherPrincipal), write({...journal, tenantId: 'B', lines: journal.lines.map(l => ({...l, debit: 456}))}, otherPrincipal)]);
+  assert.equal((await memory.forTenant('B').accountingBalances(range))[0].debit, 456);
+  assert.equal((await repo.accountingBalances(range))[0].debit, 123);
+  for (let day = 1; day <= 5; day++) await repo.accountingBalances({from: `2026-10-0${day}`, to: null});
+  const evicted = t.mock.method(Map.prototype, 'values', () => { throw new Error('Evicted range scanned'); });
+  await assert.rejects(repo.accountingBalances(range), /Evicted range scanned/);
+  evicted.mock.restore();
+  assert.equal((await repo.accountingBalances(range))[0].debit, 123);
+});

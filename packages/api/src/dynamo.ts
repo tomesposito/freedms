@@ -7,7 +7,7 @@ import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, type VehicleQuery, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   constructor(private table: string, private client = DynamoDBDocumentClient.from(new DynamoDBClient({}))) {}
@@ -128,6 +128,25 @@ export class DynamoRepositories implements RepositoryFactory {
               KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
               ExpressionAttributeValues: {':pk': PK, ':prefix': prefix}, ConsistentRead: true, ExclusiveStartKey: cursor}));
             selection.add((function* () { for (const item of result.Items ?? []) yield item.data as CrmEntity; })());
+            cursor = result.LastEvaluatedKey;
+          } while (cursor);
+        }
+        return selection.finish();
+      },
+      accountingBalances: async range => {
+        const selection = accountingBalanceSelection(range);
+        for (const prefix of ['GL-ACCOUNT#', 'JOURNAL-ENTRY#']) {
+          let cursor: Record<string, unknown> | undefined;
+          do {
+            const result = await this.client.send(new QueryCommand({TableName: this.table,
+              KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+              ExpressionAttributeValues: {':pk': PK, ':prefix': prefix}, ConsistentRead: true, ExclusiveStartKey: cursor}));
+            selection.add((function* () {
+              for (const item of result.Items ?? []) {
+                const row = item.data as CrmEntity;
+                assertScope(tenantId, row); yield row;
+              }
+            })());
             cursor = result.LastEvaluatedKey;
           } while (cursor);
         }

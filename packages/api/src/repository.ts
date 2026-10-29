@@ -1,3 +1,4 @@
+import { debitNormal, type AccountBalance } from '@freedms/shared';
 import { leadStages, leadSources, type LeadReport } from '@freedms/shared';
 import type { MfaRecord } from '@freedms/shared';
 import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
@@ -35,6 +36,7 @@ export interface TenantRepository {
   users(): Promise<User[]>;
   serviceBoardEpoch(): Promise<number>;
   serviceBoard(day: string): Promise<ServiceBoardRows>;
+  accountingBalances(range: SalesReportRange): Promise<AccountBalance[]>;
   forecastRows(window: ForecastWindow): Promise<ForecastRows>;
   salesReportRows(range: SalesReportRange): Promise<SalesReportRows>;
   leadSummary(): Promise<LeadReport>;
@@ -301,5 +303,32 @@ export function forecastSelection(window: ForecastWindow) {
       }
     },
     finish(): ForecastRows { return {...rows, usage: [...rows.usage, ...roUsage]}; }
+  };
+}
+
+/** Retain account metadata and cent totals only; each journal line is visited once. */
+export function accountingBalanceSelection(range: SalesReportRange) {
+  const accounts: AccountBalance[] = [];
+  const sums = new Map<string, {debit: number; credit: number}>();
+  return {
+    add(rows: Iterable<CrmEntity>) {
+      for (const row of rows) {
+        if (row.kind === 'gl-account') accounts.push({accountId: row.id, code: row.code, name: row.name, type: row.type, debit: 0, credit: 0, balance: 0});
+        if (row.kind !== 'journal-entry') continue;
+        const day = row.date.slice(0, 10);
+        if ((range.from && day < range.from) || (range.to && day > range.to)) continue;
+        for (const line of row.lines) {
+          const sum = sums.get(line.accountId) ?? {debit: 0, credit: 0};
+          sum.debit += line.debit; sum.credit += line.credit;
+          sums.set(line.accountId, sum);
+        }
+      }
+    },
+    finish(): AccountBalance[] {
+      return accounts.sort((a, b) => a.code.localeCompare(b.code)).map(account => {
+        const {debit, credit} = sums.get(account.accountId) ?? {debit: 0, credit: 0};
+        return {...account, debit, credit, balance: debitNormal(account.type) ? debit - credit : credit - debit};
+      });
+    }
   };
 }

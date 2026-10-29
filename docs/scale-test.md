@@ -394,3 +394,35 @@ process.
 
 These are local in-memory measurements on one shared 2-core box, not
 hosted (DynamoDB) capacity evidence.
+
+## Trial balance compact account aggregates (#57)
+
+`GET /accounting/trial-balance` and `GET /accounting/balances` now use
+`accountingBalances(range)` after default-account seeding. A shared selector
+visits each journal line once and retains only account metadata and per-account
+integer-cent debit/credit sums. Memory scans raw tenant CRM rows on a cache miss
+and clones only the compact result; neither endpoint loads the full journal or
+rescans its lines separately for each account. A no-op default seed reuses its
+first account read instead of listing accounts twice.
+
+Memory caches at most four aggregate results by tenant accounting epoch and
+from/to range, evicting the oldest entry first. Only successful journal-entry or
+gl-account writes advance the epoch. Irrelevant writes and no-op seed checks
+preserve cached results; real default seed writes invalidate them. Each returned
+result is detached from the cache. Dynamo has no aggregate cache: it queries
+only tenant-scoped `GL-ACCOUNT#` and `JOURNAL-ENTRY#` prefixes, reducing each page
+before fetching the next. It still reads all pages of those kinds; the change
+bounds retained journal data, not Dynamo-side query work.
+
+Entry dates use `date.slice(0, 10)` with inclusive from/to bounds; null bounds
+are unbounded. Rows follow the chart's code order, use current account metadata,
+and preserve debit-normal balance signs. Trial balance excludes only rows with
+both debit and credit zero, while balances retains all chart rows. Totals sum
+returned rows and `balanced` remains exact debit/credit equality. Journal,
+departmental, commissions, deals, reversal writes and mutation events retain
+their existing behavior. Departmental performance remains separate issue #58.
+Validation uses offline tests, including guarded reads, cache behavior, exact
+response JSON and paginated Dynamo/memory equivalence. The #49 measurement
+harness is unchanged.
+
+Local check: results will be filled in after measurement by the supervisor.
