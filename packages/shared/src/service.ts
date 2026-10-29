@@ -38,10 +38,15 @@ export interface RepairOrder extends CrmRecord, Dispatch {
   status: RepairOrderStatus; advisorId: string | null; concern: string; lineItems: RepairOrderLineItem[];
 }
 export interface RepairOrderView extends RepairOrder { totals: RepairOrderTotals; signatureStatus: import('./signatures.js').SignatureStatus; signatures?: import('./signatures.js').SignatureRecord[]; signatureHash?: string }
+export interface ServiceBoardRepairOrder {
+  id: string; createdAt: string; customerName: string; concern: string; status: RepairOrderStatus;
+  payType: RepairOrderPayType; technicianId: string | null; totals: RepairOrderTotals;
+  signatureStatus: import('./signatures.js').SignatureStatus;
+}
 export interface ServiceBoardDay {
   technicians?: (Technician & {dayLoad: number})[];
   date: string; appointments: ServiceAppointment[];
-  byStatus: Record<AppointmentStatus, ServiceAppointment[]>; repairOrders: RepairOrderView[];
+  byStatus: Record<AppointmentStatus, ServiceAppointment[]>; repairOrders: ServiceBoardRepairOrder[];
 }
 
 export const serviceSkills = ['brakes','diesel','electrical','diagnostics','engine','transmission','suspension','hvac','tires','general'] as const;

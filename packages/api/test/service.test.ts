@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appointmentStatuses, lineItemAmountCents, repairOrderTotals, type RepairOrderLineItem, type Principal, type RepairOrderView, type ServiceAppointment } from '@freedms/shared';
+import { appointmentStatuses, lineItemAmountCents, repairOrderTotals, type RepairOrderLineItem, type Principal, type RepairOrderView, type ServiceAppointment, type ServiceBoardRepairOrder } from '@freedms/shared';
 import { MemoryRepositories } from '../src/memory.js';
 import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
@@ -95,12 +95,24 @@ test('UTC service board groups all statuses and includes created-today or appoin
   const excluded = (await ro()).data;
   await appointment({scheduledStart:'2026-10-25T00:00:00Z',scheduledEnd:'2026-10-25T01:00:00Z'});
   setTime('2026-10-24T12:00:00Z');
-  const today = (await ro()).data, both = (await ro({appointmentId:ap.id})).data;
+  const today = (await ro({lineItems:[labor,parts]})).data, both = (await ro({appointmentId:ap.id})).data;
   await call('A','PUT',`/service/repair-orders/${excluded.id}`,{version:1,status:'completed'});
   const day = (await call('A','GET','/service/board')).data;
   assert.equal(day.date,'2026-10-24'); assert.deepEqual(day.appointments.map((a:ServiceAppointment)=>a.id),[ap.id]);
   assert.deepEqual(Object.keys(day.byStatus),[...appointmentStatuses]); assert.equal(day.byStatus.scheduled.length,1); assert.equal(day.byStatus.done.length,0);
-  assert.deepEqual(new Set(day.repairOrders.map((r:RepairOrderView)=>r.id)),new Set([linked.id,today.id,both.id])); assert.equal(day.repairOrders.length,3); assert.equal(day.repairOrders[0].id,linked.id);
+  assert.deepEqual(new Set(day.repairOrders.map((r:ServiceBoardRepairOrder)=>r.id)),new Set([linked.id,today.id,both.id])); assert.equal(day.repairOrders.length,3); assert.equal(day.repairOrders[0].id,linked.id);
+  const summaryKeys = ['id','createdAt','customerName','concern','status','payType','technicianId','totals','signatureStatus'].sort();
+  const fullList = (await call('A','GET','/service/repair-orders')).data;
+  for (const summary of day.repairOrders as ServiceBoardRepairOrder[]) {
+    assert.deepEqual(Object.keys(summary).sort(),summaryKeys);
+    const original = [linked,today,both].find(r=>r.id===summary.id)!;
+    const full = (await call('A','GET',`/service/repair-orders/${summary.id}`)).data;
+    assert.deepEqual(full,original);
+    assert.deepEqual(full.lineItems,original.lineItems);
+    assert.deepEqual(fullList.find((r:RepairOrderView)=>r.id===summary.id),full);
+    assert.deepEqual(summary,Object.fromEntries(summaryKeys.map(key=>[key,key==='technicianId' ? full[key] ?? null : full[key]])));
+    assert.deepEqual(summary.totals,full.totals);
+  }
   for (const query of [{date:'2026-02-30'},{date:'2026-1-01'},{extra:'bad'}]) assert.equal((await call('A','GET','/service/board',undefined,query)).status,400);
 });
 test('Service tenant isolation, repository scope, auth, reader writes and route method contracts', async () => {

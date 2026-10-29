@@ -124,7 +124,11 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
     const board = await repo.serviceBoard(day);
     const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
     const appointments = board.appointments.sort((a,b) => compare(a.scheduledStart,b.scheduledStart) || compare(a.id,b.id));
-    const repairOrders = board.repairOrders.sort((a,b) => compare(a.createdAt,b.createdAt) || compare(a.id,b.id)).map(r => repairOrderSignatureView(r, board.signatures));
+    const repairOrders = board.repairOrders.sort((a,b) => compare(a.createdAt,b.createdAt) || compare(a.id,b.id)).map(r => repairOrderSignatureView(r, board.signatures)).map(r => ({
+      id: r.id, createdAt: r.createdAt, customerName: r.customerName, concern: r.concern,
+      status: r.status, payType: r.payType, technicianId: r.technicianId ?? null,
+      totals: r.totals, signatureStatus: r.signatureStatus,
+    }));
     const byStatus = Object.fromEntries(appointmentStatuses.map(s => [s, appointments.filter(a => a.status === s)])) as ServiceBoardDay['byStatus'];
     const technicians = board.technicians.map(t=>({...t,dayLoad:[...appointments,...repairOrders].filter(r=>r.technicianId===t.id).length}));
     const result = response(200, {data: {date: day, appointments, byStatus, repairOrders, technicians}});

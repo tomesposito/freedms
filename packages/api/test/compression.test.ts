@@ -66,7 +66,7 @@ test('Service board through createHandler preserves the complete payload under g
   const lead = await call({method: 'POST', path: '/leads', body: JSON.stringify({customer: {name: 'Buyer', phone: '', email: '', address: '', notes: '', consent: {status: 'unknown', timestamp: null, source: ''}}, source: 'walk-in'})});
   assert.equal(lead.statusCode, 201);
   const customerId = JSON.parse(lead.body).data.lead.customerId;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 6; i++) {
     const created = await call({method: 'POST', path: '/service/repair-orders', body: JSON.stringify({customerId, vehicleId: null, vehicleDescription: 'Customer vehicle', advisorId: 'userA', payType: 'customer-pay', lineItems: []})});
     assert.equal(created.statusCode, 201);
   }
