@@ -7,9 +7,12 @@ import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
+  // In-process, warm-instance only; the consistent epoch Get validates across instances.
+  // A cold/missing page still reads every LEAD#/CUSTOMER# query page.
+  private leadPageCache = new Map<string, LeadPage>();
   constructor(private table: string, private client = DynamoDBDocumentClient.from(new DynamoDBClient({}))) {}
   forTenant(tenantId: string): TenantRepository {
     requireId(tenantId);
@@ -227,9 +230,17 @@ export class DynamoRepositories implements RepositoryFactory {
         return summary;
       },
       leadListPage: async query => {
-        // Still reads every LEAD#/CUSTOMER# query page; pagination only bounds returned rows.
+        const epoch = (await get<{version: number}>('LEADLIST#EPOCH'))?.version ?? 0;
+        // false distinguishes an omitted assignee filter from null (unassigned).
+        const key = JSON.stringify([tenantId, epoch, query.search, query.stage, query.assignee === undefined ? false : query.assignee, query.limit, query.offset]);
+        const cached = this.leadPageCache.get(key);
+        if (cached) return structuredClone(cached);
+        // On a miss, still read every LEAD#/CUSTOMER# query page.
         const [leads, customers] = await Promise.all([listRows<Lead>('LEAD#'), listRows<Customer>('CUSTOMER#')]);
-        return leadPage(leads, new Map(customers.map(c => [c.id, c])), query);
+        const page = structuredClone(leadPage(leads, new Map(customers.map(c => [c.id, c])), query));
+        this.leadPageCache.set(key, page);
+        if (this.leadPageCache.size > 4) this.leadPageCache.delete(this.leadPageCache.keys().next().value!);
+        return structuredClone(page);
       },
       crmList: kind => listRows(`${kind.toUpperCase()}#`) as never,
       crmGet: (kind, id) => get<CrmEntity>(`${kind.toUpperCase()}#${requireId(id)}`) as never,
@@ -244,6 +255,11 @@ export class DynamoRepositories implements RepositoryFactory {
             reservations.push(put(`PART-NUMBER#${record.partNumber}`, {id:record.id}));
             if (old) reservations.push({Delete:{TableName:this.table,Key:key(`PART-NUMBER#${old.partNumber}`),ConditionExpression:'#d.#id = :id',ExpressionAttributeNames:{'#d':'data','#id':'id'},ExpressionAttributeValues:{':id':record.id}}});
           }
+        }
+        if (writes.some(({record}) => record.kind === 'lead' || record.kind === 'customer')) {
+          const epoch = await get<{version: number}>('LEADLIST#EPOCH');
+          reservations.push(put('LEADLIST#EPOCH', {version: (epoch?.version ?? 0) + 1},
+            epoch ? '#d.#v = :v' : 'attribute_not_exists(PK)', epoch?.version));
         }
         if (writes.some(({record}) => serviceBoardKinds.has(record.kind))) {
           const epoch = await get<{version: number}>('SERVICEBOARD#EPOCH');

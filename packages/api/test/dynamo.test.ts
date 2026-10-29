@@ -59,12 +59,12 @@ test('Dynamo CRM reads remain partition-bound and customer/lead/event writes for
   const writes = [{record: customer, expectedVersion: 0, event: {...event, id: 'ec', aggregateId: 'c', type: 'customer.created' as const}}, {record: lead, expectedVersion: 0, event: {...event, id: 'el', aggregateId: 'l', type: 'lead.created' as const}}];
   await repo.crmWrite(writes);
   const transaction = commands.at(-1) as TransactWriteCommand;
-  assert.equal(transaction.input.TransactItems?.length, 4);
-  assert.deepEqual(transaction.input.TransactItems?.map(i => i.Put?.Item?.SK), ['CUSTOMER#c', 'EVENT#ec', 'LEAD#l', 'EVENT#el']);
+  assert.equal(transaction.input.TransactItems?.length, 5);
+  assert.deepEqual(transaction.input.TransactItems?.map(i => i.Put?.Item?.SK), ['LEADLIST#EPOCH', 'CUSTOMER#c', 'EVENT#ec', 'LEAD#l', 'EVENT#el']);
   assert.ok(transaction.input.TransactItems?.every(i => i.Put?.Item?.PK === 'TENANT#A' && i.Put?.ConditionExpression === 'attribute_not_exists(PK)'));
   await repo.crmWrite([{...writes[1], record: {...lead, version: 2}, expectedVersion: 1, event: {...writes[1].event, aggregateVersion: 2, type: 'lead.updated'}}]);
   const update = commands.at(-1) as TransactWriteCommand;
-  assert.equal(update.input.TransactItems?.[0].Put?.ExpressionAttributeValues?.[':v'], 1);
+  assert.equal(update.input.TransactItems?.find(i => i.Put?.Item?.SK === 'LEAD#l')?.Put?.ExpressionAttributeValues?.[':v'], 1);
   const count = commands.length;
   await assert.rejects(repo.crmWrite([{...writes[0], record: {...customer, tenantId: 'B'}}]), /scope/);
   await assert.rejects(repo.crmWrite([{...writes[1], event: {...writes[1].event, tenantId: 'B'}}]), /scope/);
@@ -88,8 +88,8 @@ test('Dynamo desking/settings use scoped keys and mixed sold writes are one cond
   const vehicles = [{record: {...vehicle, version: 2, status: 'sold' as const}, expectedVersion: 1, event: {...event, id: 'ev', aggregateVersion: 2, type: 'vehicle.updated' as const}}];
   await repo.crmWrite(writes, vehicles);
   const items = (commands.at(-1) as TransactWriteCommand).input.TransactItems!;
-  assert.equal(items.length, 6); assert.ok(items.every(i => i.Put?.Item?.PK === 'TENANT#A'));
-  assert.deepEqual(items.filter(i => !i.Put?.Item?.SK.startsWith('EVENT#')).map(i => i.Put?.ExpressionAttributeValues?.[':v']), [1, 2, 1]);
+  assert.equal(items.length, 7); assert.ok(items.every(i => i.Put?.Item?.PK === 'TENANT#A'));
+  assert.deepEqual(items.filter(i => !i.Put?.Item?.SK.startsWith('EVENT#')).map(i => i.Put?.ExpressionAttributeValues?.[':v']), [undefined, 1, 2, 1]);
   const count = commands.length;
   await assert.rejects(repo.crmWrite([{...settingsWrite, record: {...settings, tenantId: 'B'}}]), /scope/);
   await assert.rejects(repo.crmWrite(writes, [{...vehicles[0], record: {...vehicles[0].record, tenantId: 'B'}}]), /scope/);
@@ -200,7 +200,8 @@ test('Dynamo vehicle pages filter and sort across all query pages before slicing
 test('Dynamo lead pages join and filter across all lead and customer query pages before slicing', async () => {
   const calls: Record<string, number> = {};
   const lead = {kind: 'lead', tenantId: 'A', customerId: 'c', stage: 'new', assigneeId: null, source: 'phone', vehicleDescription: 'Sedan', createdAt: '2026-10-19T00:00:00Z'};
-  const client = {send: async (command: QueryCommand) => {
+  const client = {send: async (command: QueryCommand | GetCommand) => {
+    if (command instanceof GetCommand) { assert.equal(command.input.Key?.SK, 'LEADLIST#EPOCH'); assert.equal(command.input.ConsistentRead, true); return {}; }
     assert.equal(command.input.ExpressionAttributeValues?.[':pk'], 'TENANT#A');
     const prefix = String(command.input.ExpressionAttributeValues?.[':prefix']);
     assert.ok(['LEAD#', 'CUSTOMER#'].includes(prefix));
@@ -278,7 +279,8 @@ test('Dynamo service epoch uses a consistent Get and one conditional Put in the 
   const client = {send:async(command:GetCommand | TransactWriteCommand)=>{
     commands.push(command);
     if (command instanceof GetCommand) {
-      assert.deepEqual(command.input.Key,{PK:'TENANT#A',SK:'SERVICEBOARD#EPOCH'});
+      assert.equal(command.input.Key?.PK, 'TENANT#A');
+      assert.ok(['SERVICEBOARD#EPOCH', 'LEADLIST#EPOCH'].includes(command.input.Key?.SK));
       assert.equal(command.input.ConsistentRead,true);
       return stored === undefined ? {} : {Item:{data:{version:stored}}};
     }
@@ -300,8 +302,8 @@ test('Dynamo service epoch uses a consistent Get and one conditional Put in the 
   commands.length=0;
   const lead: import('@freedms/shared').Lead = {kind:'lead',id:'lead',tenantId:'A',version:1,createdAt:vehicle.createdAt,updatedAt:vehicle.updatedAt,customerId:'c',vehicleId:null,vehicleDescription:'',source:'walk-in',sourceDetail:'',stage:'new',assigneeId:null,followUps:[],activities:[]};
   await repo.crmWrite([{record:lead,expectedVersion:0,event:{...event,aggregateId:lead.id,type:'lead.created'}}]);
-  assert.equal(commands.length,1);
-  assert.deepEqual((commands[0] as TransactWriteCommand).input.TransactItems?.map(i=>i.Put?.Item?.SK),['LEAD#lead','EVENT#e']);
+  assert.equal(commands.length,2);
+  assert.deepEqual((commands[1] as TransactWriteCommand).input.TransactItems?.map(i=>i.Put?.Item?.SK),['LEADLIST#EPOCH','LEAD#lead','EVENT#e']);
 });
 
 test('Dynamo sales read filters each deal page before advancing, including empty pages', async () => {
@@ -326,4 +328,67 @@ test('Dynamo sales read filters each deal page before advancing, including empty
   const repositories = new DynamoRepositories('table', client), range = {from: '2026-10-01', to: null};
   for (const tenant of ['A', 'B']) assert.deepEqual(await repositories.forTenant(tenant).salesReportRows(range), {deals: [], vehicles: [], customers: []});
   assert.equal(calls, 3);
+});
+
+test('Dynamo lead cache validates epochs across instances and invalidates transactionally for lead/customer writes only', async () => {
+  const commands: (GetCommand | QueryCommand | TransactWriteCommand)[] = [];
+  const records = new Map<string, unknown>();
+  const client = {send: async (command: GetCommand | QueryCommand | TransactWriteCommand) => {
+    commands.push(command);
+    if (command instanceof GetCommand) {
+      assert.equal(command.input.ConsistentRead, true);
+      const data = records.get(`${command.input.Key?.PK}/${command.input.Key?.SK}`);
+      return data ? {Item: {data}} : {};
+    }
+    if (command instanceof QueryCommand) {
+      const prefix = `${command.input.ExpressionAttributeValues?.[':pk']}/${command.input.ExpressionAttributeValues?.[':prefix']}`;
+      return {Items: [...records].filter(([key]) => key.startsWith(prefix)).map(([, data]) => ({data}))};
+    }
+    for (const item of command.input.TransactItems ?? []) if (item.Put) {
+      const {PK, SK, data} = item.Put.Item!;
+      records.set(`${PK}/${SK}`, structuredClone(data));
+    }
+    return {};
+  }} as unknown as DynamoDBDocumentClient;
+  const repositories = new DynamoRepositories('table', client), repo = repositories.forTenant('A');
+  const other = new DynamoRepositories('table', client).forTenant('A');
+  const query = {limit: 1, offset: 0};
+  const counts = () => ['LEAD#', 'CUSTOMER#'].map(prefix => commands.filter(c => c instanceof QueryCommand && c.input.ExpressionAttributeValues?.[':prefix'] === prefix).length);
+  assert.deepEqual(await repo.leadListPage(query), {leads: [], customers: [], total: 0});
+  assert.deepEqual(await other.leadListPage(query), {leads: [], customers: [], total: 0});
+  const customer: import('@freedms/shared').Customer = {kind: 'customer', id: 'c', tenantId: 'A', version: 1, createdAt: vehicle.createdAt, updatedAt: vehicle.updatedAt, name: 'Jamie', phone: '', email: '', address: '', notes: '', consent: {status: 'unknown', timestamp: null, source: ''}};
+  const lead: import('@freedms/shared').Lead = {kind: 'lead', id: 'l', tenantId: 'A', version: 1, createdAt: vehicle.createdAt, updatedAt: vehicle.updatedAt, customerId: 'c', vehicleId: null, vehicleDescription: '', source: 'website', sourceDetail: '', stage: 'new', assigneeId: null, followUps: [], activities: []};
+  const write = (record: import('@freedms/shared').CrmEntity): import('../src/repository.js').CrmWrite => ({record, expectedVersion: record.version - 1, event: {...event, id: `${record.id}-${record.version}`, aggregateId: record.id, aggregateVersion: record.version, type: `${record.kind}.${record.version === 1 ? 'created' : 'updated'}` as typeof event.type}});
+  for (const [index, rows] of [[customer, lead], [{...lead, version: 2, vehicleDescription: 'Changed'}], [{...customer, version: 2, name: 'Renamed'}]].entries()) {
+    await repo.crmWrite(rows.map(write));
+    const items = (commands.at(-1) as TransactWriteCommand).input.TransactItems!;
+    const epochs = items.filter(i => i.Put?.Item?.SK === 'LEADLIST#EPOCH');
+    assert.equal(epochs.length, 1);
+    assert.deepEqual(epochs[0].Put?.Item, {PK: 'TENANT#A', SK: 'LEADLIST#EPOCH', data: {version: index + 1}});
+    assert.equal(epochs[0].Put?.ConditionExpression, index ? '#d.#v = :v' : 'attribute_not_exists(PK)');
+    assert.deepEqual(epochs[0].Put?.ExpressionAttributeValues, index ? {':v': index} : undefined);
+    assert.deepEqual(epochs[0].Put?.ExpressionAttributeNames, index ? {'#d': 'data', '#v': 'version'} : undefined);
+    const before = counts();
+    const page = await repo.leadListPage(query);
+    assert.deepEqual(counts(), before.map(n => n + 1));
+    assert.equal(page.leads[0].vehicleDescription, index >= 1 ? 'Changed' : '');
+    assert.equal(page.customers[0].name, index === 2 ? 'Renamed' : 'Jamie');
+    const expected = structuredClone(page);
+    page.customers[0].name = 'polluted'; page.leads[0].vehicleDescription = 'polluted';
+    const gets = commands.filter(c => c instanceof GetCommand).length;
+    assert.deepEqual(await repositories.forTenant('A').leadListPage(query), expected);
+    assert.equal(commands.filter(c => c instanceof GetCommand).length, gets + 1);
+    assert.deepEqual(counts(), before.map(n => n + 1));
+    // A separate warm instance must observe the new epoch too.
+    assert.deepEqual(await other.leadListPage(query), expected);
+    assert.deepEqual(counts(), before.map(n => n + 2));
+  }
+  await repo.crmWrite([write({kind: 'settings', id: 'workspace', tenantId: 'A', version: 1, createdAt: vehicle.createdAt, updatedAt: vehicle.updatedAt, taxRateBps: 0, taxTradeDifference: false, docFee: 0})]);
+  assert.ok(!(commands.at(-1) as TransactWriteCommand).input.TransactItems!.some(i => i.Put?.Item?.SK === 'LEADLIST#EPOCH'));
+  const before = counts();
+  await repo.leadListPage(query); assert.deepEqual(counts(), before);
+  assert.deepEqual(await repositories.forTenant('B').leadListPage(query), {leads: [], customers: [], total: 0});
+  for (let offset = 1; offset <= 4; offset++) assert.equal((await repo.leadListPage({...query, offset})).leads.length, 0);
+  const evicted = counts(); await repo.leadListPage(query);
+  assert.deepEqual(counts(), evicted.map(n => n + 1));
 });

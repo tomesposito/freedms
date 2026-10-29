@@ -245,3 +245,39 @@ test('memory crmList preserves per-kind order, replacement and clone isolation a
   assert.deepEqual(await repo.crmList('customer'), customers);
   assert.deepEqual(await other.crmList('lead'), [await other.crmGet('lead', otherLead.id)]);
 });
+
+test('lead page cache is detached, bounded, tenant-local and invalidated only by lead/customer writes', async t => {
+  const {repositories, makeLead, call} = await setup();
+  const lead = await makeLead(); await makeLead('A', {assigneeId: 'userA'}); await makeLead('B');
+  const repo = repositories.forTenant('A'), query = {limit: 10, offset: 0};
+  const expected = await repo.leadListPage(query);
+  const changed = await repo.leadListPage(query);
+  changed.leads[0].activities[0].summary = 'polluted'; changed.customers[0].name = 'polluted';
+  assert.deepEqual(await repo.leadListPage(query), expected);
+  assert.notEqual((await repo.crmGet('lead', changed.leads[0].id))!.activities[0].summary, 'polluted');
+  assert.notEqual((await repo.crmGet('customer', changed.customers[0].id))!.name, 'polluted');
+  await repo.crmWrite([{record: {id: 'workspace', kind: 'settings', tenantId: 'A', version: 1, createdAt: now.toISOString(), updatedAt: now.toISOString(), taxRateBps: 0, taxTradeDifference: false, docFee: 0}, expectedVersion: 0, event: {id: 'settings', tenantId: 'A', actorId: 'userA', aggregateId: 'workspace', aggregateVersion: 1, type: 'settings.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'}}]);
+  const guard = t.mock.method(Map.prototype, 'values', () => { throw new Error('Unexpected scan'); });
+  assert.deepEqual(await repositories.forTenant('A').leadListPage(query), expected);
+  guard.mock.restore();
+  assert.equal((await call('A', 'PUT', `/customers/${lead.customerId}`, {...customer, name: 'Renamed', version: 1})).status, 200);
+  assert.equal((await repo.leadListPage(query)).customers.find(c => c.id === lead.customerId)!.name, 'Renamed');
+  const current = (await repo.crmGet('lead', lead.id))!;
+  await repo.crmWrite([{record: {...current, stage: 'contacted', version: 2}, expectedVersion: 1, event: {id: 'changed-lead', tenantId: 'A', actorId: 'userA', aggregateId: lead.id, aggregateVersion: 2, type: 'lead.updated', occurredAt: now.toISOString(), deliveryStatus: 'pending'}}]);
+  assert.equal((await repo.leadListPage(query)).leads.find(l => l.id === lead.id)!.stage, 'contacted');
+  const b = await repositories.forTenant('B').leadListPage(query);
+  assert.equal(b.total, 1); assert.ok(b.leads.every(l => l.tenantId === 'B'));
+  const {leadPage} = await import('../src/repository.js');
+  const leads = await repo.crmList('lead'), customers = new Map((await repo.crmList('customer')).map(c => [c.id, c]));
+  const variants: import('../src/repository.js').LeadQuery[] = [query, {...query, assignee: null}, {...query, assignee: 'userA'}, {...query, stage: 'contacted'}, {...query, search: 'RENAMED'}, {...query, limit: 1}, {...query, limit: 1, offset: 1}, {...query, offset: 99}];
+  for (const variant of variants) {
+    const expectedPage = leadPage(leads, customers, variant);
+    assert.deepEqual(await repo.leadListPage(variant), expectedPage);
+    const hit = t.mock.method(Map.prototype, 'values', () => { throw new Error('Repeated query scanned'); });
+    assert.deepEqual(await repo.leadListPage(variant), expectedPage);
+    hit.mock.restore();
+  }
+  const evicted = t.mock.method(Map.prototype, 'values', () => { throw new Error('Evicted query scanned'); });
+  await assert.rejects(repo.leadListPage(query), /Evicted query scanned/);
+  evicted.mock.restore();
+});

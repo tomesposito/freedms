@@ -594,3 +594,52 @@ probe shape. Both before and after had zero errors at both levels. All endpoints
 in the after run passed their budgets with zero errors. The bounded read alone
 passes, so no memory epoch cache was added. This is a local vehicle-volume probe,
 not a full Dataset B reproduction or hosted (DynamoDB) capacity evidence.
+
+## Lead list page cache (#62)
+
+`GET /leads` now reuses an epoch-validated repository `LeadPage` (leads, joined
+customers and total). Memory keeps four pages per tenant; Dynamo keeps four
+pages per repository instance, evicting the oldest insertion when full. Keys
+include epoch, search, stage, assignee, limit and offset, plus tenant id in
+Dynamo. An omitted assignee filter remains distinct from null (unassigned).
+Hits return a detached clone; misses store and return separate clones.
+Lead/customer writes advance the epoch once per transaction; unrelated writes
+do not invalidate pages. Memory misses iterate only the `crmByKind` customer
+and lead buckets instead of the entire CRM map.
+
+Dynamo writes one conditional `LEADLIST#EPOCH` Put in the same transaction as
+lead/customer rows and outbox events. Every page read first consistently Gets
+that epoch. The cache is in-process and warm-instance only: that Get validates
+cached pages across instances. A hit costs an epoch Get plus a clone of one
+page, with no LEAD#/CUSTOMER# Query. A miss still reads every LEAD#/CUSTOMER#
+query page; this does not bound Dynamo read capacity or cold-read work
+independently of tenant size. Ordering, filters, orphan exclusion, totals and
+the HTTP envelope are unchanged. The handler still computes `overdue` from the
+current time on every request; serialized responses are never cached.
+
+Local measurement on 2026-10-29 (Node v24.22.1), using the unchanged #49 harness
+against the in-memory API on loopback port 3001:
+
+```sh
+node --import tsx packages/api/src/local.ts
+# In another terminal:
+node --import tsx scripts/scale-seed.ts --profile smoke --heavy-leads 12000 --heavy-customers 2400 --light-tenants 0 --state /tmp/scale62-state.json
+node --import tsx scripts/scale-measure.ts --state /tmp/scale62-state.json --out /tmp/scale62-results.json --report /tmp/scale62-report.md
+```
+
+The seed completed without truncation: 12,000 leads, 2,400 customers, 2,400
+follow-ups, 60 vehicles (45 in stock), 15 sold deals, 5 parts, 40 repair orders
+(20 completed), 3 appointments, and no light tenants. These match #52's Dataset
+A lead/customer counts. Measurement setup adds 50 vehicles, customers and
+scratch deals. Each endpoint receives 100 requests per concurrency level.
+
+| Level | Concurrency | Before p95 (ms) | After p50 (ms) | After p95 (ms) | Errors | Result |
+|---|---:|---:|---:|---:|---:|---|
+| Peak | 5 | 107.0 | 15.6 | 41.7 | 0 | PASS |
+| 10x | 50 | 430.0 | 126.8 | 161.0 | 0 | PASS |
+
+Before values are the issue's post-#52 baseline at the same lead/customer
+counts. Both after levels meet the strict 300 ms p95 budget with zero errors;
+all other endpoints in this run also passed their budgets with zero errors.
+This is local in-memory evidence, not hosted Dynamo capacity evidence. The
+full `npm test` suite passes (383 tests), and `npm run typecheck` passes.

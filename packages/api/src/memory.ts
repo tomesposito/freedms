@@ -6,16 +6,16 @@ import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import type { Customer, CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
-import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 const forecastKinds = new Set<CrmEntity['kind']>(['deal', 'service-appointment', 'part', 'parts-sale', 'repair-order']);
-interface State { accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
+interface State { leadPageEpoch: number; leadPageCache: Map<string, LeadPage>; accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
   private states = new Map<string, State>();
   forTenant(tenantId: string): TenantRepository {
     requireId(tenantId);
     let state = this.states.get(tenantId);
-    if (!state) { state = {accountingEpoch: 0, accountingCache: new Map(), forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), crmByKind: new Map(), partNumbers: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
+    if (!state) { state = {leadPageEpoch: 0, leadPageCache: new Map(), accountingEpoch: 0, accountingCache: new Map(), forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), crmByKind: new Map(), partNumbers: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
     const s = state;
     const storeCrm = (record: CrmEntity) => {
       const stored = structuredClone(record);
@@ -129,9 +129,16 @@ export class MemoryRepositories implements RepositoryFactory {
       },
       leadSummary: async () => countLeads(s.crm.values()),
       leadListPage: async query => {
+        // false distinguishes an omitted assignee filter from null (unassigned).
+        const key = JSON.stringify([s.leadPageEpoch, query.search, query.stage, query.assignee === undefined ? false : query.assignee, query.limit, query.offset]);
+        const cached = s.leadPageCache.get(key);
+        if (cached) return structuredClone(cached);
         const customers = new Map<string, Customer>();
-        for (const row of s.crm.values()) if (row.kind === 'customer') customers.set(row.id, row);
-        return structuredClone(leadPage(s.crm.values(), customers, query));
+        for (const row of s.crmByKind.get('customer')?.values() ?? []) if (row.kind === 'customer') customers.set(row.id, row);
+        const page = structuredClone(leadPage(s.crmByKind.get('lead')?.values() ?? [], customers, query));
+        s.leadPageCache.set(key, page);
+        if (s.leadPageCache.size > 4) s.leadPageCache.delete(s.leadPageCache.keys().next().value!);
+        return structuredClone(page);
       },
       crmList: async kind => structuredClone([...(s.crmByKind.get(kind)?.values() ?? [])]) as never,
       crmGet: async (kind, id) => structuredClone(s.crm.get(`${kind}#${requireId(id)}`)) as never,
@@ -169,6 +176,7 @@ export class MemoryRepositories implements RepositoryFactory {
         for (const {record, event} of writes) {
           storeCrm(record); s.events.set(event.id, structuredClone(event));
         }
+        if (writes.some(({record}) => record.kind === 'lead' || record.kind === 'customer')) s.leadPageEpoch++;
         if (writes.some(({record}) => record.kind === 'journal-entry' || record.kind === 'gl-account')) s.accountingEpoch++;
         if (writes.some(({record}) => serviceBoardKinds.has(record.kind))) s.serviceBoardEpoch++;
         if (vehicles.length || writes.some(({record}) => forecastKinds.has(record.kind))) s.forecastEpoch++;
