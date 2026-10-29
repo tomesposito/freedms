@@ -224,6 +224,20 @@ application's runtime permissions, so source review remains required.
 
 ### Release an application change
 
+The SEO marketing rollout also requires a one-time operator migration. Stage the
+five marketing documents (`robots.txt`, `sitemap.xml`, `llms.txt`, `dms-cost.html`,
+and `free-dealer-management-software.html`) and their immutable assets from an
+attested release before enabling their CloudFront routes. Preserve the live Lambda
+artifact when updating the viewer function. Grant the release role access to only
+these five additional keys, pin the updated private controller, verify public
+routes and the Free subscription, and record the infrastructure digest and each
+document digest under `marketingDocumentsSha256` in the release baseline.
+
+Every subsequent release checks those digests, snapshots all five documents,
+uses conditional writes, and restores them with the Lambda and both indexes if
+promotion fails. External edits stop recovery and retain the durable lock.
+Adding or removing a document path requires another operator baseline migration.
+
 1. Merge the reviewed change into `master` and wait for the public build to pass.
 2. Download `release.json` from `build-<full-source-sha>` and calculate its SHA-256.
    Review backward compatibility, especially stored records, authorization, and
