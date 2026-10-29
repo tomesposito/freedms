@@ -4,16 +4,12 @@ import {execFileSync} from 'node:child_process';
 import {resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {buildMarketing} from './marketing.mjs';
+import {releaseConfiguration} from './configuration.mjs';
 
 const source = process.env.GITHUB_SHA;
 const repository = process.env.GITHUB_REPOSITORY;
 if (!/^[a-f0-9]{40}$/.test(source ?? '') || repository !== 'tomesposito/freedms') throw Error('Trusted release identity required');
-const config = {apiUrl: process.env.VITE_API_URL, cognitoDomain: process.env.VITE_COGNITO_DOMAIN, clientId: process.env.VITE_COGNITO_CLIENT_ID};
-if (config.apiUrl !== '/api' || !/^https:\/\/[a-z0-9-]+\.auth\.us-east-1\.amazoncognito\.com$/.test(config.cognitoDomain ?? '') || !/^[a-z0-9]+$/.test(config.clientId ?? '')) throw Error('Hosted frontend configuration required');
-if (process.env.VITE_COGNITO_USER_POOL_ID) {
-  if (!/^us-east-1_[A-Za-z0-9]+$/.test(process.env.VITE_COGNITO_USER_POOL_ID)) throw Error('Invalid Cognito user pool ID');
-  config.userPoolId = process.env.VITE_COGNITO_USER_POOL_ID;
-}
+const config = releaseConfiguration(process.env);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const files = [];
 function walk(dir, prefix = '') {
