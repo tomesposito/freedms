@@ -540,3 +540,57 @@ The same measure run still failed lead-pipeline-board (peak and 10x) and
 inventory-aging-report (10x) against their budgets; those are tracked by
 their own follow-up issues (#62, #60), not by this one. This is a local
 in-memory measurement, not hosted (DynamoDB) capacity evidence.
+
+## Inventory aging report bounded read (#60)
+
+`GET /reports/inventory` and its CSV export now use tenant-scoped
+`inventoryReportRows()` instead of loading and cloning all vehicles before
+excluding sold rows. The custom-report inventory dataset shares this read
+through `inventoryReport`. Memory scans the raw tenant vehicle map, checks each
+row's scope, retains only `status !== 'sold'`, and clones only those retained
+rows. Returned vehicles and nested recon costs are detached. There is no cache:
+each request reads current vehicle state, and scan work still scales with total
+vehicle count while retained/cloned data scales with unsold count.
+
+Dynamo queries every tenant `VEHICLE#` page with consistent reads, checks each
+row's scope, and retains only unsold rows before fetching the next page. It
+still reads all vehicle pages: this bounds retained data by unsold inventory,
+not Dynamo query work or read capacity independently of total vehicle volume.
+
+Response contracts remain unchanged: all unsold statuses, UTC aging boundaries
+(0–30, 31–60, 61–90, 91+), descending age then stock-number ordering, optional
+trim, integer-cent recon/cost/list-price totals, zero-filled empty buckets, and
+CSV formatting. Offline tests compare byte-for-byte legacy JSON and CSV on a
+mixed fixture, memory and paginated fake-Dynamo reads, tenant isolation and
+scope rejection, detached nested returns, empty reports, and custom inventory
+reports. A guarded memory clone verifies that sold rows are never cloned by
+this read. The full `npm test` suite passes (375 tests), as does
+`npm run typecheck`. The #49 harness is unchanged.
+
+Local vehicle-volume probe on 2026-10-29 (Node v24.22.1), with an empty in-memory
+API on loopback port 3001 and external AI/analytics integrations disabled:
+
+```sh
+node --import tsx packages/api/src/local.ts
+# In another terminal, with FREEDMS_SCALE_BASE_URL and FREEDMS_SCALE_TOKEN unset:
+node --import tsx scripts/scale-seed.ts --profile smoke --heavy-vehicles 10000 --heavy-in-stock 100 --light-tenants 0 --state /tmp/issue60-state.json --maxMinutes 30
+node --import tsx scripts/scale-measure.ts --state /tmp/issue60-state.json --out /tmp/issue60-results.json --report /tmp/issue60-report.md
+```
+
+The seed completed without truncation: 10,000 vehicles (100 in stock), 24
+customers, 120 leads, 24 follow-ups, 15 sold deals, 5 parts, 40 repair orders
+(20 completed), 3 appointments, and no light tenants. The unchanged measurement
+setup adds 50 vehicles, customers and scratch deals. Each endpoint receives
+100 requests at each level. Inventory-aging-report results against the
+1,000 ms p95 budget:
+
+| Level | Concurrency | Before p50 (ms) | Before p95 (ms) | After p50 (ms) | After p95 (ms) | After result |
+|---|---:|---:|---:|---:|---:|---|
+| Peak | 5 | 184.3 | 397.1 | 17.2 | 49.2 | PASS |
+| 10x | 50 | 2,197.0 | 2,373.5 | 118.2 | 146.7 | PASS |
+
+Before values are the sweep's pre-fix baseline on this machine with the same
+probe shape. Both before and after had zero errors at both levels. All endpoints
+in the after run passed their budgets with zero errors. The bounded read alone
+passes, so no memory epoch cache was added. This is a local vehicle-volume probe,
+not a full Dataset B reproduction or hosted (DynamoDB) capacity evidence.

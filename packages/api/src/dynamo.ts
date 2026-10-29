@@ -152,6 +152,23 @@ export class DynamoRepositories implements RepositoryFactory {
         }
         return selection.finish();
       },
+      inventoryReportRows: async () => {
+        const rows: Vehicle[] = [];
+        let cursor: Record<string, unknown> | undefined;
+        // Still reads every vehicle page; retain only unsold rows before fetching the next.
+        do {
+          const result = await this.client.send(new QueryCommand({TableName: this.table,
+            KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+            ExpressionAttributeValues: {':pk': PK, ':prefix': 'VEHICLE#'}, ConsistentRead: true, ExclusiveStartKey: cursor}));
+          for (const item of result.Items ?? []) {
+            const row = item.data as Vehicle;
+            assertScope(tenantId, row);
+            if (row.status !== 'sold') rows.push(row);
+          }
+          cursor = result.LastEvaluatedKey;
+        } while (cursor);
+        return rows;
+      },
       forecastRows: async window => {
         const selection = forecastSelection(window);
         // Page through tenant prefixes; discard excluded rows before fetching the next page.

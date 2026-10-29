@@ -22,7 +22,7 @@ export function dateRange(query: ApiRequest['query'] = {}) {
   return {from: query.from ?? null, to: query.to ?? null};
 }
 export async function inventoryReport(repo: TenantRepository, now: Date): Promise<InventoryReport> {
-  const rows = (await repo.list({})).filter(v => v.status !== 'sold').map(vehicle => {
+  const rows = (await repo.inventoryReportRows()).map(vehicle => {
     const v = view(vehicle, now);
     const bucket = agingBuckets[v.agingDays <= 30 ? 0 : v.agingDays <= 60 ? 1 : v.agingDays <= 90 ? 2 : 3];
     return {stockNumber: v.stockNumber, vehicle: [description(v), v.trim].filter(Boolean).join(' '), status: v.status, dateStocked: v.dateStocked, agingDays: v.agingDays, bucket, listPrice: v.listPrice, cost: v.cost, reconTotal: v.reconTotal, totalCost: v.cost + v.reconTotal};

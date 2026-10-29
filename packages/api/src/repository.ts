@@ -37,6 +37,7 @@ export interface TenantRepository {
   serviceBoardEpoch(): Promise<number>;
   serviceBoard(day: string): Promise<ServiceBoardRows>;
   accountingBalances(range: SalesReportRange): Promise<AccountBalance[]>;
+  inventoryReportRows(): Promise<Vehicle[]>;
   forecastRows(window: ForecastWindow): Promise<ForecastRows>;
   salesReportRows(range: SalesReportRange): Promise<SalesReportRows>;
   leadSummary(): Promise<LeadReport>;

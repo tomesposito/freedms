@@ -90,6 +90,14 @@ export class MemoryRepositories implements RepositoryFactory {
         if (s.accountingCache.size > 4) s.accountingCache.delete(s.accountingCache.keys().next().value!);
         return structuredClone(rows);
       },
+      inventoryReportRows: async () => {
+        const rows: Vehicle[] = [];
+        for (const row of s.vehicles.values()) {
+          assertScope(tenantId, row);
+          if (row.status !== 'sold') rows.push(row);
+        }
+        return structuredClone(rows);
+      },
       forecastRows: async window => {
         const key = JSON.stringify([s.forecastEpoch, window.from, window.to]);
         const cached = s.forecastCache.get(key);

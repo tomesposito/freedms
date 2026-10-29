@@ -1,3 +1,8 @@
+import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoRepositories } from '../src/dynamo.js';
+import { agingBuckets, type Vehicle } from '@freedms/shared';
+import { view } from '../src/validation.js';
+import { customReport } from '../src/reports-p2.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { leadSources, leadStages, pencilMath, type Deal, type CrmEntity, type Lead, type DealView, type InventoryReport, type LeadReport, type SalesReport } from '@freedms/shared';
@@ -5,7 +10,7 @@ import { countLeads } from '../src/repository.js';
 import { MemoryRepositories } from '../src/memory.js';
 import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
-import { salesReport, inventoryCsv, leadReport, leadCsv, salesCsv, soldDate, toCsv } from '../src/reports.js';
+import { inventoryReport, salesReport, inventoryCsv, leadReport, leadCsv, salesCsv, soldDate, toCsv } from '../src/reports.js';
 
 function parseCsv(csv: string): string[][] {
   const rows: string[][] = []; let row: string[] = [], cell = '', quoted = false;
@@ -296,4 +301,85 @@ test('memory and Dynamo sales selection agree on UTC boundaries, history fallbac
       for (const backend of [memory, dynamo]) await assert.rejects(salesReport(backend, range), {status: 404, code: 'NOT_FOUND', message: 'Record not found.'});
     }
   }
+});
+
+
+test('inventory bounded reads preserve legacy JSON/CSV, page through sold rows and detach tenant data', async t => {
+  const s = await setup(), now = new Date('2026-10-20T12:00:00Z');
+  const template: Vehicle = await s.vehicle('Z-template', 91);
+  const memory = s.repositories.forTenant('A');
+  for (const [i, days] of [0, 30, 31, 60, 61, 90, 91, 120].entries()) {
+    const row: Vehicle = {...template, id: `fixture-${i}`, stockNumber: `A-${i}`,
+      status: (['available', 'reserved', 'in recon', 'sold'] as const)[i % 4],
+      trim: i % 2 ? '' : 'EX', cost: 10001 + i, listPrice: 20003 + i,
+      reconCosts: [{description: 'One', amount: 123}, {description: 'Two', amount: 456}],
+      dateStocked: new Date(now.getTime() - days * 86400000).toISOString().slice(0, 10)};
+    await memory.create(row, {id: row.id, tenantId: 'A', actorId: 'userA', aggregateId: row.id,
+      aggregateVersion: 1, type: 'vehicle.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'});
+  }
+  const foreign = {...template, id: 'foreign', tenantId: 'B', stockNumber: 'PRIVATE-B'};
+  await s.repositories.forTenant('B').create(foreign, {id: 'foreign', tenantId: 'B', actorId: 'userB', aggregateId: foreign.id,
+    aggregateVersion: 1, type: 'vehicle.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'});
+  const all = await memory.list({});
+  // Independent legacy all-vehicle computation, including its response property order.
+  const rows = all.filter(v => v.status !== 'sold').map(vehicle => {
+    const v = view(vehicle, now);
+    const bucket = agingBuckets[v.agingDays <= 30 ? 0 : v.agingDays <= 60 ? 1 : v.agingDays <= 90 ? 2 : 3];
+    return {stockNumber: v.stockNumber, vehicle: [`${v.year} ${v.make} ${v.model}`, v.trim].filter(Boolean).join(' '), status: v.status, dateStocked: v.dateStocked, agingDays: v.agingDays, bucket, listPrice: v.listPrice, cost: v.cost, reconTotal: v.reconTotal, totalCost: v.cost + v.reconTotal};
+  }).sort((a, b) => b.agingDays - a.agingDays || a.stockNumber.localeCompare(b.stockNumber));
+  const expected = {rows, buckets: agingBuckets.map(bucket => ({bucket, count: rows.filter(r => r.bucket === bucket).length, totalCost: rows.filter(r => r.bucket === bucket).reduce((sum, r) => sum + r.totalCost, 0)})),
+    totals: {count: rows.length, totalCost: rows.reduce((sum, r) => sum + r.totalCost, 0), totalListPrice: rows.reduce((sum, r) => sum + r.listPrice, 0)}};
+  let pages = 0, corrupt = false;
+  const client = {send: async (command: QueryCommand) => {
+    assert.ok(command instanceof QueryCommand);
+    assert.equal(command.input.TableName, 'table');
+    assert.equal(command.input.KeyConditionExpression, 'PK = :pk AND begins_with(SK, :prefix)');
+    assert.equal(command.input.ExpressionAttributeValues?.[':prefix'], 'VEHICLE#');
+    assert.equal(command.input.ConsistentRead, true);
+    const pk = command.input.ExpressionAttributeValues?.[':pk'];
+    assert.ok(['TENANT#A', 'TENANT#B', 'TENANT#empty'].includes(pk));
+    const data = pk === 'TENANT#A' ? all : pk === 'TENANT#B' ? [foreign] : [];
+    const offset = Number(command.input.ExclusiveStartKey?.offset ?? 0);
+    if (offset) assert.equal(command.input.ExclusiveStartKey?.PK, pk);
+    pages++;
+    // Fresh deserialized objects, as returned by the real document client; one row per page.
+    return {Items: structuredClone(data.slice(offset, offset + 1).map(data => ({data: corrupt ? {...data, tenantId: 'B'} : data}))),
+      ...(offset + 1 < data.length ? {LastEvaluatedKey: {PK: pk, offset: offset + 1}} : {})};
+  }} as unknown as DynamoDBDocumentClient;
+  const dynamo = new DynamoRepositories('table', client);
+  const selected = all.filter(v => v.status !== 'sold');
+  const normalize = (rows: Vehicle[]) => rows.sort((a, b) => a.id.localeCompare(b.id));
+  for (const repo of [memory, dynamo.forTenant('A')]) {
+    const guarded = new Proxy(repo, {get(target, property) {
+      if (property === 'list') return () => { throw new Error('inventory must not load the full vehicle list'); };
+      return Reflect.get(target, property);
+    }});
+    assert.deepEqual(normalize(await repo.inventoryReportRows()), normalize(structuredClone(selected)));
+    const result = await inventoryReport(guarded, now);
+    assert.equal(JSON.stringify(result), JSON.stringify(expected));
+    assert.equal(inventoryCsv(result), inventoryCsv(expected));
+    const custom = await customReport(guarded, now, {dataset: 'inventory', columns: ['stockNumber', 'status']});
+    assert.deepEqual(custom.rows, expected.rows.map(r => [r.stockNumber, r.status]));
+    const detached = await repo.inventoryReportRows();
+    detached[0].stockNumber = 'MUTATED'; detached[0].reconCosts[0].amount = -1;
+    assert.deepEqual(normalize(await repo.inventoryReportRows()), normalize(structuredClone(selected)));
+  }
+  assert.ok(pages >= all.length * 5);
+  for (const factory of [s.repositories, dynamo]) {
+    assert.deepEqual(await factory.forTenant('B').inventoryReportRows(), [foreign]);
+    assert.deepEqual(await factory.forTenant('empty').inventoryReportRows(), []);
+    assert.deepEqual(await inventoryReport(factory.forTenant('empty'), now), {rows: [],
+      buckets: agingBuckets.map(bucket => ({bucket, count: 0, totalCost: 0})), totals: {count: 0, totalCost: 0, totalListPrice: 0}});
+  }
+  corrupt = true;
+  await assert.rejects(dynamo.forTenant('A').inventoryReportRows(), /scope/);
+  const originalClone = globalThis.structuredClone;
+  const clone = t.mock.method(globalThis, 'structuredClone', <T>(value: T): T => {
+    assert.ok(Array.isArray(value));
+    assert.equal(value.length, selected.length);
+    assert.ok(value.every((v: Vehicle) => v.status !== 'sold'));
+    return originalClone(value);
+  });
+  await memory.inventoryReportRows();
+  assert.equal(clone.mock.callCount(), 1);
 });
