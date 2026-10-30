@@ -54,8 +54,9 @@ export function createMcpHandler(repositories: RepositoryFactory, execute: (requ
       if (!tool) return fail(id, -32602, 'Tool unavailable.');
       const args = object(params.arguments ?? {}); onlyKeys(args, Object.keys(tool.inputSchema.properties));
       if (tool.inputSchema.required.some(key => args[key] === undefined)) throw invalid('Required tool arguments are missing.');
-      const {id: entityId, ...fields} = args;
-      const path = tool.path.includes(':id') ? tool.path.replace(':id', requireId(entityId)) : tool.path;
+      const {id: entityId, taskId, ...fields} = args;
+      let path = tool.path.includes(':id') ? tool.path.replace(':id', requireId(entityId)) : tool.path;
+      if ('taskId' in tool.inputSchema.properties) path = path.replace(':taskId', requireId(taskId));
       const internal: ApiRequest = {method: tool.method, path, claims, agent: true};
       if (tool.method === 'GET') {
         internal.query = {};
@@ -70,6 +71,12 @@ export function createMcpHandler(repositories: RepositoryFactory, execute: (requ
           if (existing.statusCode !== 200) return rpc(id, {isError: true, content: [{type: 'text', text: existing.body}]});
           const vehicle = JSON.parse(existing.body).data;
           internal.body = JSON.stringify({...Object.fromEntries(Object.keys(vehicleFields).map(k => [k, vehicle[k]])), ...fields});
+        } else if (tool.name === 'set_lead_stage' || tool.name === 'assign_lead') {
+          const existing = await execute({method: 'GET', path, claims});
+          if (existing.statusCode !== 200) return rpc(id, {isError: true, content: [{type: 'text', text: existing.body}]});
+          const lead = JSON.parse(existing.body).data;
+          internal.body = JSON.stringify({version: fields.version, stage: fields.stage ?? lead.stage,
+            assigneeId: 'assigneeId' in fields ? fields.assigneeId : lead.assigneeId, vehicleId: lead.vehicleId});
         } else internal.body = JSON.stringify(fields);
       }
       // Direct in-process REST operation dispatch: no HTTP self-call. Reads are not audited

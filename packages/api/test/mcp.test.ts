@@ -1,3 +1,4 @@
+import type { QuickEntryProvider } from '../src/ai-provider.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
@@ -16,7 +17,7 @@ function token(overrides: Record<string, unknown> = {}, header = {alg: 'RS256', 
   const data = [header, {sub: 'admin-A', iss: config.issuer, client_id: config.clientId, token_use: 'access', scope: 'freedms/mcp.write', exp: now.getTime() / 1000 + 3600, ...overrides}].map(v => Buffer.from(JSON.stringify(v)).toString('base64url')).join('.');
   return `${data}.${sign('RSA-SHA256', Buffer.from(data), privateKey).toString('base64url')}`;
 }
-async function setup() {
+async function setup(provider?: QuickEntryProvider) {
   const repositories = new MemoryRepositories();
   for (const tenantId of ['A', 'B']) {
     const userId = `admin-${tenantId}`;
@@ -24,7 +25,7 @@ async function setup() {
       {id: 'provision', tenantId, actorId: userId, aggregateId: tenantId, aggregateVersion: 1, type: 'tenant.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'});
     await seedDemo(repositories, tenantId, userId, now);
   }
-  const handle = createHandler(repositories, {decode: async () => {throw Error('Network forbidden');}}, () => now, undefined, undefined, undefined, async () => ({status: 204}), {mcp: config});
+  const handle = createHandler(repositories, {decode: async () => {throw Error('Network forbidden');}}, () => now, undefined, provider, undefined, async () => ({status: 204}), {mcp: config});
   const request = async (method: string, params: unknown = {}, jwt = token()) => {
     const response = await handle({method: 'POST', path: '/mcp', authorization: `Bearer ${jwt}`, body: JSON.stringify({jsonrpc: '2.0', id: 1, method, params})});
     return {response, ...JSON.parse(response.body)};
@@ -37,7 +38,7 @@ test('MCP initialize, ping, scoped tool discovery, metadata and adapter dispatch
   const initialized = await s.request('initialize', {protocolVersion: '2025-11-25', capabilities: {}, clientInfo: {name: 'offline', version: '1'}});
   assert.equal(initialized.result.protocolVersion, '2025-11-25'); assert.ok(initialized.result.capabilities.tools);
   assert.deepEqual((await s.request('ping')).result, {});
-  assert.equal((await s.request('tools/list')).result.tools.length, 18);
+  assert.equal((await s.request('tools/list')).result.tools.length, 29);
   const reads = (await s.request('tools/list', {}, token({scope: 'freedms/mcp.read'}))).result.tools;
   assert.equal(reads.length, 14); assert.ok(reads.every((t: {annotations: {readOnlyHint: boolean}}) => t.annotations.readOnlyHint));
   assert.equal((await s.request('tools/call', {name: 'create_vehicle', arguments: {}}, token({scope: 'freedms/mcp.read'}))).error.message, 'Tool unavailable.');
@@ -46,7 +47,7 @@ test('MCP initialize, ping, scoped tool discovery, metadata and adapter dispatch
   assert.deepEqual(JSON.parse(metadata.body).authorization_servers, [config.issuer]); assert.equal(JSON.parse(metadata.body).resource, config.resource);
   const gateway = gatewayHandler(s.handle, 'web-issuer', 'web-audience');
   const result = await gateway({rawPath: '/mcp', requestContext: {http: {method: 'POST'}}, headers: {Authorization: `Bearer ${token()}`}, body: JSON.stringify({jsonrpc: '2.0', id: 7, method: 'tools/list'})});
-  assert.equal(JSON.parse(result.body).result.tools.length, 18);
+  assert.equal(JSON.parse(result.body).result.tools.length, 29);
   assert.deepEqual(localAuth('/mcp', false, 'access-token', {verify: () => {throw Error('Must not verify as ID token');}}), {authorization: 'Bearer access-token'});
 });
 test('MCP rejects invalid access tokens with a resource challenge and caches offline JWKS', async () => {
@@ -179,4 +180,121 @@ test('MCP ignores token tenant hints and refuses a subject without its resolved 
     const result = await handle({method: 'POST', path: '/mcp', authorization: `Bearer ${token({sub: 'admin-B'})}`, body: JSON.stringify({jsonrpc: '2.0', id: 1, method: 'tools/list'})});
     assert.equal(result.statusCode, 200); assert.deepEqual(JSON.parse(result.body).result.tools, []);
   }
+});
+
+const customerInput = {name: 'MCP Customer', phone: '', email: '', address: '', notes: '',
+  consent: {status: 'granted', timestamp: now.toISOString(), source: 'Dealer intake form'}};
+const crmTools = ['create_lead', 'update_lead', 'set_lead_stage', 'assign_lead', 'add_lead_note', 'schedule_follow_up',
+  'update_follow_up', 'create_customer', 'update_customer', 'quick_entry_draft', 'quick_entry_confirm'];
+function data(result: any) {
+  assert.equal(result.isError, false, result.content?.[0]?.text);
+  return result.structuredContent.data;
+}
+function refused(result: any, code: string) {
+  assert.equal(result.isError, true);
+  assert.equal(JSON.parse(result.content[0].text).error.code, code);
+}
+test('CRM MCP writes preserve consent, lead fields, follow-up actions and agent attribution', async () => {
+  const s = await setup(), repo = s.repositories.forTenant('A');
+  const before = (await repo.events()).length;
+  const customer = data(await s.call('create_customer', customerInput)).customer;
+  assert.deepEqual((await repo.crmGet('customer', customer.id))?.consent, customerInput.consent);
+  const consent = {...customerInput.consent, status: 'revoked'};
+  const updated = data(await s.call('update_customer', {...customerInput, id: customer.id, version: 1, consent}));
+  assert.equal(updated.version, 2);
+  assert.deepEqual((await repo.crmGet('customer', customer.id))?.consent, consent);
+  const vehicleId = (await repo.list({}))[0].id;
+  const inline = data(await s.call('create_lead', {customer: customerInput, source: 'website', vehicleId, assigneeId: 'admin-A'})).lead;
+  const existing = data(await s.call('create_lead', {customerId: customer.id, source: 'phone'})).lead;
+  assert.equal(existing.customerId, customer.id); assert.equal(inline.stage, 'new');
+  const id = inline.id;
+  let lead = data(await s.call('update_lead', {id, version: 1, stage: 'contacted', assigneeId: 'admin-A', vehicleId}));
+  assert.equal(lead.version, 2); assert.equal(lead.stage, 'contacted');
+  lead = data(await s.call('set_lead_stage', {id, version: 2, stage: 'appointment'}));
+  assert.equal(lead.stage, 'appointment'); assert.equal(lead.assigneeId, 'admin-A'); assert.equal(lead.vehicleId, vehicleId);
+  lead = data(await s.call('assign_lead', {id, version: 3, assigneeId: null}));
+  assert.equal(lead.assigneeId, null); assert.equal(lead.stage, 'appointment'); assert.equal(lead.vehicleId, vehicleId);
+  lead = data(await s.call('assign_lead', {id, version: 4, assigneeId: 'admin-A'}));
+  assert.equal(lead.assigneeId, 'admin-A'); assert.equal(lead.stage, 'appointment'); assert.equal(lead.vehicleId, vehicleId);
+  lead = data(await s.call('assign_lead', {id, version: 5, assigneeId: null}));
+  assert.equal(lead.assigneeId, null);
+  const note = {type: 'call', direction: 'inbound', summary: 'Asked about a test drive', timestamp: now.toISOString()};
+  lead = data(await s.call('add_lead_note', {id, version: 6, ...note}));
+  assert.deepEqual(lead.activities.at(-1), {...note, id: lead.activities.at(-1).id, kind: 'communication', actorId: 'admin-A'});
+  lead = data(await s.call('schedule_follow_up', {id, version: 7, type: 'visit', dueAt: now.toISOString()}));
+  const taskId = lead.followUps[0].id;
+  assert.deepEqual(lead.followUps[0], {id: taskId, type: 'visit', dueAt: now.toISOString(), done: false});
+  lead = data(await s.call('update_follow_up', {id, taskId, version: 8, done: true}));
+  assert.equal(lead.followUps[0].done, true);
+  refused(await s.call('update_follow_up', {id, taskId, version: 9, done: false, dismissed: true}), 'VALIDATION');
+  lead = data(await s.call('update_follow_up', {id, taskId, version: 9, done: false}));
+  assert.equal(lead.followUps[0].done, false);
+  lead = data(await s.call('update_follow_up', {id, taskId, version: 10, dueAt: '2026-11-01T12:00:00.000Z'}));
+  assert.equal(lead.followUps[0].dueAt, '2026-11-01T12:00:00.000Z');
+  lead = data(await s.call('update_follow_up', {id, taskId, version: 11, dismissed: true}));
+  assert.equal(lead.followUps[0].dismissed, true);
+  refused(await s.call('update_follow_up', {id, taskId: '../invalid', version: 12, done: true}), 'INVALID_ID');
+  refused(await s.call('update_lead', {id, version: 1, stage: 'new', assigneeId: null, vehicleId: null}), 'CONFLICT');
+  refused(await s.call('update_customer', {...customerInput, id: customer.id, version: 1}), 'CONFLICT');
+  const events = (await repo.events()).slice(before);
+  assert.equal(events.length, 16);
+  assert.ok(events.every(e => e.actorType === 'agent' && e.actorId === 'admin-A' && e.tenantId === 'A'));
+  refused(await s.call('get_lead', {id}, token({sub: 'admin-B'})), 'NOT_FOUND');
+});
+
+test('CRM MCP tools enforce scope, tenant isolation and REST validation', async () => {
+  const s = await setup(), repo = s.repositories.forTenant('A'), other = s.repositories.forTenant('B');
+  const lead = (await other.crmList('lead'))[0], customer = (await other.crmList('customer'))[0];
+  const before = (await repo.events()).length, otherBefore = (await other.events()).length;
+  const cases: [string, Record<string, unknown>][] = [
+    ['get_lead', {id: lead.id}], ['get_customer', {id: customer.id}],
+    ['update_lead', {id: lead.id, version: lead.version, stage: 'new', assigneeId: null, vehicleId: null}],
+    ['set_lead_stage', {id: lead.id, version: lead.version, stage: 'new'}],
+    ['assign_lead', {id: lead.id, version: lead.version, assigneeId: null}],
+    ['add_lead_note', {id: lead.id, version: lead.version, type: 'call', direction: 'inbound', summary: 'Note', timestamp: now.toISOString()}],
+    ['schedule_follow_up', {id: lead.id, version: lead.version, type: 'call', dueAt: now.toISOString()}],
+    ['update_follow_up', {id: lead.id, taskId: 'foreign-task', version: lead.version, done: true}],
+    ['update_customer', {...customerInput, id: customer.id, version: customer.version}],
+    ['create_lead', {customerId: customer.id, source: 'phone'}],
+  ];
+  for (const [name, args] of cases) refused(await s.call(name, args), 'NOT_FOUND');
+  const foreignVehicle = (await other.list({}))[0].id;
+  for (const name of ['create_lead', 'quick_entry_confirm']) {
+    refused(await s.call(name, {customer: customerInput, source: 'phone', vehicleId: foreignVehicle}), 'VALIDATION');
+  }
+  for (const name of crmTools) {
+    assert.equal((await s.request('tools/call', {name, arguments: {}}, token({scope: 'freedms/mcp.read'}))).error.message, 'Tool unavailable.');
+    refused(await s.call(name, {tenantId: 'B'}), 'VALIDATION');
+  }
+  const localCustomer = (await repo.crmList('customer'))[0];
+  for (const args of [{customerId: localCustomer.id, customer: customerInput, source: 'phone'}, {customer: customerInput, source: 'invalid'}]) {
+    refused(await s.call('create_lead', args), 'VALIDATION');
+  }
+  refused(await s.call('create_customer', {...customerInput, consent: {...customerInput.consent, timestamp: null}}), 'VALIDATION');
+  refused(await s.call('quick_entry_draft', {text: 'New lead'}), 'AI_UNAVAILABLE');
+  assert.equal((await repo.events()).length, before); assert.equal((await other.events()).length, otherBefore);
+});
+
+test('CRM quick-entry MCP draft saves nothing and confirm saves the reviewed fields', async () => {
+  const provider: QuickEntryProvider = {
+    configured: true, supportsVision: false,
+    async extractVehicle() { throw Error('Unexpected vehicle extraction'); },
+    async extractVehiclePhoto() { throw Error('Unexpected photo extraction'); },
+    async extractLead() { return {customer: {...customerInput, tenantId: 'B'}, source: 'website', vehicleDescription: 'Blue sedan', tenantId: 'B', vehicleId: 'foreign'}; },
+  };
+  const s = await setup(provider), repo = s.repositories.forTenant('A'), other = s.repositories.forTenant('B');
+  const leads = await repo.crmList('lead'), customers = await repo.crmList('customer'), before = (await repo.events()).length;
+  const draft = data(await s.call('quick_entry_draft', {text: 'Customer looking for a blue sedan'})).draft;
+  assert.deepEqual(draft.customer.consent, {status: 'unknown', timestamp: null, source: ''});
+  assert.equal(draft.tenantId, undefined); assert.equal(draft.vehicleId, undefined); assert.equal(draft.customer.tenantId, undefined);
+  assert.deepEqual(await repo.crmList('lead'), leads); assert.deepEqual(await repo.crmList('customer'), customers);
+  assert.equal((await repo.events()).length, before);
+  assert.equal((await repo.usageForTest()).length, 1); assert.equal((await other.usageForTest()).length, 0);
+  const lead = data(await s.call('quick_entry_confirm', {...draft, customer: {...customerInput, ...draft.customer}})).lead;
+  assert.equal(lead.vehicleDescription, 'Blue sedan'); assert.deepEqual(lead.customer.consent, draft.customer.consent);
+  assert.equal((await repo.crmList('lead')).length, leads.length + 1); assert.equal((await repo.crmList('customer')).length, customers.length + 1);
+  const events = (await repo.events()).slice(before); assert.equal(events.length, 2);
+  assert.ok(events.every(e => e.actorType === 'agent' && e.actorId === 'admin-A' && e.tenantId === 'A'));
+  refused(await s.call('get_lead', {id: lead.id}, token({sub: 'admin-B'})), 'NOT_FOUND');
+  refused(await s.call('get_customer', {id: lead.customerId}, token({sub: 'admin-B'})), 'NOT_FOUND');
 });

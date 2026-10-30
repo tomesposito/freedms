@@ -8,11 +8,11 @@ import { pageNumber, invalid, onlyKeys, text, version } from './validation.js';
 import { choice, communicationType, customerInput, normalizedPhone, source, stage, timestamp } from './crm-validation.js';
 import { parseAdf } from './adf.js';
 const hash = (token: string) => createHash('sha256').update(token).digest('hex');
-function context(principal: Principal, now: Date) {
+function context(principal: Principal, now: Date, agent = false) {
   const date = now.toISOString();
   const base = () => ({id: randomUUID(), tenantId: principal.tenantId, version: 1, createdAt: date, updatedAt: date});
   const write = (record: Exclude<CrmEntity, {kind: 'terms-acceptance' | 'signature' | 'parts-return' | 'parts-sale' | 'compliance-check' | 'journal-entry' | 'payoff-quote' | 'share-response'}>, expectedVersion = 0): CrmWrite => ({record, expectedVersion, event: {
-    id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id,
+    id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, ...(agent ? {actorType: 'agent' as const} : {}), aggregateId: record.id,
     aggregateVersion: record.version, type: `${record.kind}.${expectedVersion ? 'updated' : 'created'}`,
     occurredAt: date, deliveryStatus: 'pending'
   } satisfies OutboxEvent});
@@ -35,10 +35,10 @@ async function references(repo: TenantRepository, vehicle: unknown, assignee: un
   if (assigneeId && !(await repo.membership(assigneeId))?.active) throw invalid('Assignee must be an active workspace user.');
   return {vehicleId, assigneeId};
 }
-export async function createLead(repo: TenantRepository, principal: Principal, b: Record<string, unknown>, now: Date) {
+export async function createLead(repo: TenantRepository, principal: Principal, b: Record<string, unknown>, now: Date, agent = false) {
   onlyKeys(b, ['customerId', 'customer', 'vehicleId', 'vehicleDescription', 'source', 'sourceDetail', 'assigneeId']);
   if (!!b.customerId === !!b.customer) throw invalid('Choose an existing customer or supply a new customer.');
-  const ctx = context(principal, now); const writes: CrmWrite[] = []; let customer: Customer; let duplicateIds: string[] = [];
+  const ctx = context(principal, now, agent); const writes: CrmWrite[] = []; let customer: Customer; let duplicateIds: string[] = [];
   if (b.customerId) { const existing = await repo.crmGet('customer', requireId(b.customerId)); if (!existing) throw missing(); customer = existing; }
   else { const input = customerInput(b.customer); duplicateIds = await duplicates(repo, input); customer = {...ctx.base(), kind: 'customer', ...input}; writes.push(ctx.write(customer)); }
   const refs = await references(repo, b.vehicleId, b.assigneeId);
@@ -63,7 +63,7 @@ export async function intake(request: ApiRequest, repositories: RepositoryFactor
 }
 export async function crm(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date): Promise<ApiResponse> {
   const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, ''); const parts = path.split('/').slice(1);
-  const ctx = context(principal, now); const query = request.query ?? {};
+  const ctx = context(principal, now, request.agent); const query = request.query ?? {};
   if (path === '/equity-mining' && method === 'GET') {
     onlyKeys(query, ['search']); const search = text(query.search ?? '', 'Search', 200, true).toLowerCase();
     const [deals, customers, leads, vehicles] = await Promise.all([repo.crmList('deal'), repo.crmList('customer'), repo.crmList('lead'), repo.list({})]);
@@ -147,7 +147,7 @@ export async function crm(request: ApiRequest, principal: Principal, repo: Tenan
   if (!['POST', 'PUT'].includes(method)) throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
   const b = parseBody(request.body);
   if (method === 'POST' && !id) {
-    if (collection === 'leads') return response(201, {data: await createLead(repo, principal, b, now)});
+    if (collection === 'leads') return response(201, {data: await createLead(repo, principal, b, now, request.agent)});
     const input = customerInput(b); const duplicateCustomerIds = await duplicates(repo, input);
     const customer: Customer = {...ctx.base(), kind: 'customer', ...input}; await repo.crmWrite([ctx.write(customer)]);
     return response(201, {data: {customer, duplicateCustomerIds}});
