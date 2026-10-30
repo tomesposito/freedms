@@ -262,3 +262,6 @@ button, .button { transition: background-color .15s, border-color .15s; }
 .auth-form{width:100%;max-width:370px;margin:64px auto;flex:1}.auth-form h1{font-size:32px;letter-spacing:-.035em;margin:0 0 16px}.auth-form>p{color:#52636e;line-height:1.6;margin-bottom:28px}
 .auth-form form{display:grid;gap:20px}.auth-form label{display:grid;gap:8px;font-size:14px;font-weight:600}.auth-form input{width:100%;box-sizing:border-box;min-height:48px}.auth-form button.primary{background:#FF6A00;color:#0B1F2C;min-height:48px;font-weight:700;border:0}.auth-form>.quiet{margin-top:20px;padding-left:0}.auth-panel footer{font-size:12px;color:#52636e}.auth-photo{display:none;background-size:max(230%,191dvh) auto;background-position:right center}
 @media(min-width:800px){.auth-view{grid-template-columns:minmax(440px,44%) 1fr}.auth-panel{padding:48px 56px 30px}.auth-form{margin-top:90px}.auth-photo{display:block}}
+
+.account-qr { width: 256px; max-width: 100%; margin: 1rem 0; }
+.account-qr svg { display: block; width: 100%; height: auto; }

@@ -4,6 +4,10 @@ import {pathToFileURL} from 'node:url';
 export function mockCognito(port = 9229) {
   const calls = [];
   let serial = 0;
+  let mfaEnabled = false;
+  let associated = false;
+  let verified = false;
+  let password = 'FixturePassword123!';
   const jwt = kind => [Buffer.from(JSON.stringify({alg:'none'})).toString('base64url'), Buffer.from(JSON.stringify({sub:'offline-user', email:'pilot@example.test', token_use:kind, exp: Math.floor(Date.now()/1000)+3600, iat:Math.floor(Date.now()/1000), serial:++serial})).toString('base64url'), 'offline'].join('.');
   const tokens = () => ({IdToken:jwt('id'), AccessToken:jwt('access'), RefreshToken:'offline-refresh', ExpiresIn:3600, TokenType:'Bearer'});
   const server = createServer(async (req,res) => {
@@ -13,7 +17,26 @@ export function mockCognito(port = 9229) {
     const body=JSON.parse(raw || '{}'); const operation=String(req.headers['x-amz-target']).split('.').pop(); calls.push(operation);
     res.setHeader('Content-Type','application/x-amz-json-1.1');
     const send = data => res.end(JSON.stringify(data));
-    const fail = type => {res.statusCode=400;send({__type:type,message:'Offline fixture rejection'});};
+    const fail = (type, message = 'Offline fixture rejection') => {res.statusCode=400;send({__type:type,message});};
+    if (body.AccessToken) {
+      if (operation === 'GetUser') return send({Username:'pilot@example.test', UserAttributes:[{Name:'name',Value:'Pilot User'},{Name:'email',Value:'pilot@example.test'}], UserMFASettingList:mfaEnabled ? ['SOFTWARE_TOKEN_MFA'] : []});
+      if (operation === 'ChangePassword') {
+        if (body.PreviousPassword !== password) return fail('NotAuthorizedException');
+        if (body.ProposedPassword.length < 12) return fail('InvalidPasswordException', 'Password must have length greater than or equal to 12');
+        password = body.ProposedPassword; return send({});
+      }
+      if (operation === 'AssociateSoftwareToken') { associated = true; verified = false; return send({SecretCode:'JBSWY3DPEHPK3PXP'}); }
+      if (operation === 'VerifySoftwareToken') {
+        if (!associated) return fail('NotAuthorizedException');
+        if (body.UserCode !== '123456') return fail('CodeMismatchException');
+        if (body.FriendlyDeviceName !== 'freeDMS authenticator') return fail('InvalidParameterException');
+        verified = true; return send({Status:'SUCCESS'});
+      }
+      if (operation === 'SetUserMFAPreference') {
+        if (!verified) return fail('NotAuthorizedException');
+        mfaEnabled = body.SoftwareTokenMfaSettings.Enabled; return send({});
+      }
+    }
     if(operation==='InitiateAuth') {
       if(body.AuthFlow==='REFRESH_TOKEN_AUTH') return send({AuthenticationResult:tokens()});
       if(body.AuthFlow!=='USER_SRP_AUTH') return fail('InvalidParameterException');

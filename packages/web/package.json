@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "@freedms/shared": "0.1.0",
-    "amazon-cognito-identity-js": "^6.3.22"
+    "amazon-cognito-identity-js": "^6.3.22",
+    "qrcode-generator": "^2.0.4"
   },
   "devDependencies": {
     "vite": "^6.4.1"

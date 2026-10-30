@@ -8,6 +8,7 @@ const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replac
 export const authFlow = selectAuthFlow({domain, client, poolId: env.VITE_COGNITO_USER_POOL_ID, flow: env.VITE_AUTH_FLOW});
 export const cognito = authFlow === 'inapp' ? createCognito({poolId: env.VITE_COGNITO_USER_POOL_ID!, clientId: client!, region: env.VITE_COGNITO_REGION, endpoint: env.VITE_COGNITO_ENDPOINT}) : undefined;
 export const localMode = env.DEV && !domain;
+export const getAccessToken = () => sessionStorage.getItem('freedms-access-token');
 export const getToken = () => sessionStorage.getItem('freedms-token');
 export const setToken = (token: string) => sessionStorage.setItem('freedms-token', token);
 export function storeTokens(tokens: Tokens): void {

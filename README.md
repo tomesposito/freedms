@@ -334,6 +334,25 @@ has MFA on and can reset it.
 
 ![Account MFA](docs/screenshots/account-mfa.png)
 
+**Account — hosted pilot**: profile, password change, and authenticator management
+through Cognito. This is an offline mocked-Cognito tour capture, using fictional
+pilot data like the login capture. QR codes are generated in the browser with
+`qrcode-generator` (MIT); setup secrets are never sent to an external QR service.
+Replacing an authenticator associates a new token, verifies its code, then enables
+its preference without first disabling MFA. Hosted accounts have no recovery codes;
+contact the pilot operator if you lose your authenticator and have no valid session.
+Redirect sign-in or a missing access token shows the profile and an operator notice
+instead of unavailable controls.
+
+![Hosted account security](docs/screenshots/account-hosted.png)
+
+Run the offline hosted account tour from the repo root:
+`node packages/web/test/account-tour.mjs` (`PLAYWRIGHT_ROOT` and `CHROMIUM_PATH`
+overrides match the login tour). Captures go to `.pilot/account-tour` by default
+or `SCREENSHOT_DIR`; the enrollment capture refreshes the hosted image above.
+The local account page and its existing screenshot are unchanged.
+
+
 **Workspace users** — admin-only membership management with role, active status,
 and MFA status. Fresh workspaces contain only their admin. Local sign-in only;
 admins create invites during onboarding or any time after from this page, and share copyable links themselves. No

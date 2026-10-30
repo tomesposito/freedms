@@ -7,6 +7,22 @@ export function authError(error: unknown): Error {
   const name = (error as {code?: string; name?: string})?.code || (error as Error)?.name;
   return new Error(['NotAuthorizedException', 'UserNotFoundException'].includes(name) ? 'Email or password is incorrect.' : name === 'CodeMismatchException' ? 'The code is incorrect. Please try again.' : name === 'InvalidPasswordException' ? 'The password does not meet the account password policy.' : 'Sign-in could not be completed. Please try again or contact your pilot operator.');
 }
+export interface AccountUser { name?: string; email?: string; enabled: boolean }
+export interface CognitoUserInfo {
+  UserAttributes?: {Name: string; Value: string}[];
+  UserMFASettingList?: string[];
+  PreferredMfaSetting?: string;
+  MFAOptions?: {DeliveryMedium?: string; AttributeName?: string}[];
+}
+export function accountUser(info: CognitoUserInfo): AccountUser {
+  const attributes = Object.fromEntries((info.UserAttributes ?? []).map(a => [a.Name, a.Value]));
+  return {name: attributes.name, email: attributes.email, enabled: Boolean(info.UserMFASettingList?.includes('SOFTWARE_TOKEN_MFA') || info.PreferredMfaSetting === 'SOFTWARE_TOKEN_MFA' || info.MFAOptions?.some(o => o.DeliveryMedium === 'SOFTWARE_TOKEN_MFA'))};
+}
+export function accountError(error: unknown, operation: string): Error {
+  const body = error as {__type?: string; name?: string; message?: string};
+  const name = body?.__type?.split('#').pop() || body?.name;
+  return new Error(name === 'InvalidPasswordException' && body.message ? body.message : name === 'NotAuthorizedException' && operation === 'ChangePassword' ? 'Current password is incorrect.' : name === 'CodeMismatchException' ? 'The code is incorrect. Please try again.' : 'Account changes could not be completed. Please try again or contact your pilot operator.');
+}
 export function createCognito(config: CognitoConfig) {
   // The SDK must never persist passwords or its own token cache. auth.ts owns session storage.
   const memory = new Map<string, string>();
@@ -31,7 +47,27 @@ export function createCognito(config: CognitoConfig) {
         }, mfaRequired: unsupported, selectMFAType: unsupported, customChallenge: unsupported});
     });
   }
+  async function accountCall<T>(operation: string, body: Record<string, unknown>): Promise<T> {
+    try {
+      const response = await fetch(endpoint, {method: 'POST', headers: {'content-type': 'application/x-amz-json-1.1', 'x-amz-target': `AWSCognitoIdentityProviderService.${operation}`}, body: JSON.stringify(body)});
+      const result = await response.json();
+      if (!response.ok) throw result;
+      return result as T;
+    } catch (error) { throw accountError(error, operation); }
+  }
   return {
+    getUser: async (accessToken: string) => accountUser(await accountCall<CognitoUserInfo>('GetUser', {AccessToken: accessToken})),
+    changePassword: (accessToken: string, previous: string, proposed: string) => accountCall<void>('ChangePassword', {AccessToken: accessToken, PreviousPassword: previous, ProposedPassword: proposed}),
+    associateSoftwareToken: async (accessToken: string) => {
+      const result = await accountCall<{SecretCode?: string}>('AssociateSoftwareToken', {AccessToken: accessToken});
+      if (!result.SecretCode) throw accountError({}, 'AssociateSoftwareToken');
+      return result.SecretCode;
+    },
+    verifySoftwareToken: async (accessToken: string, code: string) => {
+      const result = await accountCall<{Status: string}>('VerifySoftwareToken', {AccessToken: accessToken, UserCode: code, FriendlyDeviceName: 'freeDMS authenticator'});
+      if (result.Status !== 'SUCCESS') throw accountError({}, 'VerifySoftwareToken');
+    },
+    setTotpPreference: (accessToken: string, enabled: boolean) => accountCall<void>('SetUserMFAPreference', {AccessToken: accessToken, SoftwareTokenMfaSettings: {Enabled: enabled, PreferredMfa: enabled}}),
     signIn: (username: string, password: string) => { const u = user(username); u.setAuthenticationFlowType('USER_SRP_AUTH'); return run(u, cb => u.authenticateUser(new AuthenticationDetails({Username: username, Password: password}), cb)); },
     respondNewPassword: (s: ChallengeSession, password: string) => run(s.user, cb => s.user.completeNewPasswordChallenge(password, s.attributes || {}, cb)),
     respondTotp: (s: ChallengeSession, code: string) => run(s.user, cb => s.user.sendMFACode(code, cb, 'SOFTWARE_TOKEN_MFA')),

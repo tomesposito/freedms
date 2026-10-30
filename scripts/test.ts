@@ -66,3 +66,4 @@ import '../packages/api/test/compression.test.js';
 import '../packages/web/test/auth.test.js';
 import '../packages/web/test/api-client.test.js';
 import '../packages/web/test/load-error.test.js';
+import '../packages/web/test/account.test.js';

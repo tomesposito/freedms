@@ -1,3 +1,5 @@
+import { hostedAccountRoute } from './hosted-account';
+import type { Cognito } from './cognito';
 import type { AdminMfaEntry, PublicMfaStatus } from '@freedms/shared';
 import { escapeHtml as e } from './format';
 import type { UI } from './desking';
@@ -10,9 +12,9 @@ export function adminMfaHtml(users: AdminMfaEntry[], admin: boolean): string {
 }
 type Reveal = {secret?: string; otpauthUrl?: string; recoveryCodes?: string[]; verified?: boolean};
 const codeForm = (action: string, label: string, totpOnly = false) => `<form data-mfa-action="${e(action)}"><label>${totpOnly ? 'Authenticator code' : 'Authenticator or recovery code'}<input name="code" required autocomplete="one-time-code" ${totpOnly ? 'inputmode="numeric" pattern="[0-9]{6}" maxlength="6"' : 'maxlength="32"'}></label><button class="${action === 'disable' ? 'danger' : ''}">${e(label)}</button></form>`;
-export async function accountRoute(ui: UI, reveal: Reveal = {}, hosted = false): Promise<void> {
+export async function accountRoute(ui: UI, reveal: Reveal = {}, hosted = false, client?: Cognito): Promise<void> {
   if (hosted) {
-    ui.shell('<h1>Account security</h1><section class="card"><h2>Authenticator required</h2><p>Your pilot account requires a password and authenticator code at sign-in. Use the sign-in page to reset your password. Contact the pilot operator if you lose your authenticator.</p></section>');
+    await hostedAccountRoute(ui, client);
     return;
   }
   ui.shell('<p>Loading account security…</p>');
