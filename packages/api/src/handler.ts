@@ -76,46 +76,52 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
+      // Attribute atomic writes from MCP to the connecting user without changing REST events.
+      const agentEvent = (event: OutboxEvent): OutboxEvent => ({...event, actorType: 'agent'});
+      const agentWrites: Pick<TenantRepository, 'crmWrite' | 'saveMember' | 'saveWebhookEndpoint' | 'saveFeedConfig' | 'appendFeedRun'> = {
+        crmWrite: (writes, vehicles) => repository.crmWrite(writes.map(write => ({...write, event: agentEvent(write.event)})), vehicles),
+        saveMember: (user, member, expected, event) => repository.saveMember(user, member, expected, agentEvent(event)),
+        saveWebhookEndpoint: (record, expected, event) => repository.saveWebhookEndpoint(record, expected, agentEvent(event)),
+        saveFeedConfig: (record, expected, event) => repository.saveFeedConfig(record, expected, agentEvent(event)),
+        appendFeedRun: (record, event) => repository.appendFeedRun(record, agentEvent(event)),
+      };
+      const repo = request.agent ? new Proxy(repository, {get(target, key) {
+        if (Object.hasOwn(agentWrites, key)) return agentWrites[key as keyof typeof agentWrites];
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }}) : repository;
+
       const execute = async (): Promise<ApiResponse> => {
         if (options.hosted && ((path === '/admin/users' && method === 'POST') || /^\/(account|admin)\/mfa(\/|$)/.test(path)))
           throw new ApiError(403, 'HOSTED_ACCOUNT_MANAGEMENT', 'Pilot accounts and authenticator recovery are managed by the pilot operator.');
         if (/^\/deals\/[^/]+\/(buyers-order\/signatures|documents\/[^/]+\/(signatures|replace))$/.test(path) || /^\/service\/repair-orders\/[^/]+\/signatures$/.test(path)) return await signatures(request, principal, repository, now(), documents);
         if (/^\/(parts|service|accounting)(\/|$)/.test(path)) {
-          // Tag every transactional side effect, including stock, reservations, journals and reconciliation locks.
-          // Keep ordinary REST events and the operation's validation/stock rules unchanged.
-          const crmWrite: TenantRepository['crmWrite'] = (writes, vehicles) => repository.crmWrite(
-            writes.map(write => ({...write, event: {...write.event, actorType: 'agent'}})), vehicles);
-          const repo = request.agent ? new Proxy(repository, {get(target, key) {
-            if (key === 'crmWrite') return crmWrite;
-            const value = Reflect.get(target, key);
-            return typeof value === 'function' ? value.bind(target) : value;
-          }}) : repository;
           if (path.startsWith('/accounting')) return await accounting(request, principal, repo, now());
           return path.startsWith('/parts') ? await parts(request, principal, repo, now()) : await service(request, principal, repo, now(), documents);
         }
         if (/^\/compliance(\/|$)/.test(path) || /^\/deals\/[^/]+\/(compliance|compliance-checks)(\/|$)/.test(path)) return await compliance(request, principal, repository, now());
-        if (/^\/documents(\/|$)/.test(path)) return await documentControls(request, principal, repository, now(), documents);
-        if (/^\/admin\/invites(\/|$)/.test(path)) return await manageInvites(request, principal, repository, now());
+        if (/^\/documents(\/|$)/.test(path)) return await documentControls(request, principal, repo, now(), documents);
+        if (/^\/admin\/invites(\/|$)/.test(path)) return await manageInvites(request, principal, repo, now());
         if (path === '/admin/terms-acceptance') {
           if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can view acceptance.');
           if (method !== 'GET') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
           onlyKeys(request.query ?? {}, []);
           return response(200, {data: await repository.crmGet('terms-acceptance', 'signup') ?? null});
         }
-        if (/^\/admin\/users(\/|$)/.test(path)) return await manageUsers(request, principal, repository, now());
+        if (/^\/admin\/users(\/|$)/.test(path)) return await manageUsers(request, principal, repo, now());
         if (/^\/(account|admin)\/mfa(\/|$)/.test(path)) return await mfa(request, principal, repository, now());
-        if (/^\/webhooks(\/|$)/.test(path)) return await webhooks(request, principal, repository, now(), webhookSender);
+        if (/^\/webhooks(\/|$)/.test(path)) return await webhooks(request, principal, repo, now(), webhookSender);
         const record = (data: import('@freedms/shared').BehavioralEvent) => track(repository, principal, now(), data, vendor);
         if (/^\/analytics(\/|$)/.test(path)) return await analytics(request, principal, repository, record);
         if (/^\/quick-entry(\/|$)/.test(path)) return await quickEntry(request, principal, repository, now(), provider);
         if (/^\/fi-products(\/|$)/.test(path)) return await fiProducts(request, principal, repository, now(), request.agent);
-        if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repository, now());
+        if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repo, now());
         if (/^\/reports\/(technicians|departments|forecasts)([/.]|$)/.test(path)) return await reportsP3(request, repository, now());
-        if (/^\/reports\/(turn|fi|custom|saved)([/.]|$)/.test(path)) return await reportsP2(request, principal, repository, now());
+        if (/^\/reports\/(turn|fi|custom|saved)([/.]|$)/.test(path)) return await reportsP2(request, principal, repo, now());
         if (/^\/reports(\/|$)/.test(path)) return await reports(request, repository, now(), record);
         if (/^\/(deals|settings)(\/|$)/.test(path)) {
           const command = () => /^\/deals\/[^/]+\/share(\/|$)/.test(path) ? dealerShare(request, principal, repository, now()) : /^\/deals\/[^/]+\/(credit-application|payoff-quotes)(\/|$)/.test(path) ? credit(request, principal, repository, now(), request.agent) : /^\/deals\/[^/]+\/(jacket|documents)(\/|$)/.test(path)
-            ? jacket(request, principal, repository, now(), documents)
+            ? jacket(request, principal, repo, now(), documents)
             : desking(request, principal, repository, now(), request.agent);
           return ['POST', 'PUT'].includes(method) && path.startsWith('/deals/')
             ? await observeJacketCompletion(repository, requireId(path.split('/')[2]), record, command)

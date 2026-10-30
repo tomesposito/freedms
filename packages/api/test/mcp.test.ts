@@ -1,3 +1,4 @@
+import { MemoryDocumentStore, type DocumentStore } from '../src/document-store.js';
 import type { QuickEntryProvider } from '../src/ai-provider.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,7 +18,7 @@ function token(overrides: Record<string, unknown> = {}, header = {alg: 'RS256', 
   const data = [header, {sub: 'admin-A', iss: config.issuer, client_id: config.clientId, token_use: 'access', scope: 'freedms/mcp.write', exp: now.getTime() / 1000 + 3600, ...overrides}].map(v => Buffer.from(JSON.stringify(v)).toString('base64url')).join('.');
   return `${data}.${sign('RSA-SHA256', Buffer.from(data), privateKey).toString('base64url')}`;
 }
-async function setup(provider?: QuickEntryProvider, clock: () => Date = () => now) {
+async function setup(provider?: QuickEntryProvider, clock: () => Date = () => now, store?: DocumentStore) {
   const repositories = new MemoryRepositories();
   for (const tenantId of ['A', 'B']) {
     const userId = `admin-${tenantId}`;
@@ -25,7 +26,7 @@ async function setup(provider?: QuickEntryProvider, clock: () => Date = () => no
       {id: 'provision', tenantId, actorId: userId, aggregateId: tenantId, aggregateVersion: 1, type: 'tenant.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'});
     await seedDemo(repositories, tenantId, userId, now);
   }
-  const handle = createHandler(repositories, {decode: async () => {throw Error('Network forbidden');}}, clock, undefined, provider, undefined, async () => ({status: 204}), {mcp: config});
+  const handle = createHandler(repositories, {decode: async () => {throw Error('Network forbidden');}}, clock, store, provider, undefined, async () => ({status: 204}), {mcp: config});
   const request = async (method: string, params: unknown = {}, jwt = token()) => {
     const response = await handle({method: 'POST', path: '/mcp', authorization: `Bearer ${jwt}`, body: JSON.stringify({jsonrpc: '2.0', id: 1, method, params})});
     return {response, ...JSON.parse(response.body)};
@@ -38,16 +39,16 @@ test('MCP initialize, ping, scoped tool discovery, metadata and adapter dispatch
   const initialized = await s.request('initialize', {protocolVersion: '2025-11-25', capabilities: {}, clientInfo: {name: 'offline', version: '1'}});
   assert.equal(initialized.result.protocolVersion, '2025-11-25'); assert.ok(initialized.result.capabilities.tools);
   assert.deepEqual((await s.request('ping')).result, {});
-  assert.equal((await s.request('tools/list')).result.tools.length, 89);
+  assert.equal((await s.request('tools/list')).result.tools.length, 130);
   const reads = (await s.request('tools/list', {}, token({scope: 'freedms/mcp.read'}))).result.tools;
-  assert.equal(reads.length, 29); assert.ok(reads.every((t: {annotations: {readOnlyHint: boolean}}) => t.annotations.readOnlyHint));
+  assert.equal(reads.length, 51); assert.ok(reads.every((t: {annotations: {readOnlyHint: boolean}}) => t.annotations.readOnlyHint));
   assert.equal((await s.request('tools/call', {name: 'create_vehicle', arguments: {}}, token({scope: 'freedms/mcp.read'}))).error.message, 'Tool unavailable.');
   for (const sub of ['unknown', 'admin-C']) assert.deepEqual((await s.request('tools/list', {}, token({sub}))).result.tools, []);
   const metadata = await s.handle({method: 'GET', path: '/.well-known/oauth-protected-resource'});
   assert.deepEqual(JSON.parse(metadata.body).authorization_servers, [config.issuer]); assert.equal(JSON.parse(metadata.body).resource, config.resource);
   const gateway = gatewayHandler(s.handle, 'web-issuer', 'web-audience');
   const result = await gateway({rawPath: '/mcp', requestContext: {http: {method: 'POST'}}, headers: {Authorization: `Bearer ${token()}`}, body: JSON.stringify({jsonrpc: '2.0', id: 7, method: 'tools/list'})});
-  assert.equal(JSON.parse(result.body).result.tools.length, 89);
+  assert.equal(JSON.parse(result.body).result.tools.length, 130);
   assert.deepEqual(localAuth('/mcp', false, 'access-token', {verify: () => {throw Error('Must not verify as ID token');}}), {authorization: 'Bearer access-token'});
 });
 test('MCP rejects invalid access tokens with a resource challenge and caches offline JWKS', async () => {
@@ -66,7 +67,7 @@ test('original fourteen MCP reads preserve REST resources and tenant isolation',
   const s = await setup(), repo = s.repositories.forTenant('A');
   const ids: Record<string, string> = {get_vehicle: (await repo.list({}))[0].id, get_lead: (await repo.crmList('lead'))[0].id, get_customer: (await repo.crmList('customer'))[0].id, get_deal: (await repo.crmList('deal'))[0].id};
   const before = (await repo.events()).length;
-  for (const tool of tools.filter(t => t.method === 'GET' && !deskingReads.includes(t.name) && !accountingTools.includes(t))) {
+  for (const tool of tools.filter(t => t.method === 'GET' && !deskingReads.includes(t.name) && !accountingTools.includes(t) && !parityTools.includes(t))) {
     const args = ids[tool.name] ? {id: ids[tool.name]} : {};
     const result = await s.call(tool.name, args); assert.equal(result.isError, false, tool.name);
     const rest = await s.handle({method: 'GET', path: tool.path.replace(':id', ids[tool.name]), claims: {sub: 'admin-A', 'custom:tenant_id': 'A', iss: '', aud: '', exp: 1, token_use: 'id'}});
@@ -747,4 +748,215 @@ test('every accounting MCP tool enforces scope, membership and tenant isolation 
     for (const id of [cash.id, gl.id, bill.id, invoice.id, period.id]) assert.ok(!result.content[0].text.includes(id), t.name);
   }
   assert.equal((await repo.events()).length, before); assert.equal((await other.events()).length, otherBefore);
+});
+
+// Issue #76 tools occupy the first contiguous block of the registry.
+const parityTools = tools.slice(0, tools.findIndex(t => t.name === 'list_gl_accounts'));
+const documentInput = {name: 'Proof.txt', type: 'other', content: Buffer.from('offline document').toString('base64')};
+const userInput = {name: 'New user', email: 'new@example.test', role: 'staff'};
+const webhookInput = {url: 'https://receiver.example.test/events', eventTypes: ['vehicle.created']};
+const feedInput = {formats: ['csv', 'json'], includedStatuses: ['available'], requirePrice: true, schedule: 'manual'};
+const reportInput = {name: 'Inventory', dataset: 'inventory', columns: ['stockNumber', 'vehicle'], from: '2020-01-01', to: '2026-10-30'};
+async function staffToken(s: Awaited<ReturnType<typeof setup>>) {
+  const user = data(await s.call('create_user', {...userInput, email: 'staff76@example.test'}));
+  return token({sub: user.userId});
+}
+
+test('documents MCP upload, search, content, retention and confirmed disposal reuse storage and audit', async () => {
+  const store = new MemoryDocumentStore(), s = await setup(undefined, undefined, store), repo = s.repositories.forTenant('A');
+  const staff = await staffToken(s), id = (await repo.crmList('deal'))[0].id, before = (await repo.events()).length;
+  const doc = data(await s.call('upload_document', {id, ...documentInput}, staff));
+  assert.deepEqual(await repo.crmGet('document', doc.id), doc);
+  assert.equal(Buffer.from((await store.forTenant('A').get(doc.id))!).toString(), 'offline document');
+  assert.equal(data(await s.call('get_document_content', {id, documentId: doc.id})).content, documentInput.content);
+  const query = {name: 'Proof', type: 'other', buyer: id, from: '2026-10-30', to: '2026-10-30'};
+  assert.deepEqual(data(await s.call('search_documents', query)).map((d: any) => d.id), [doc.id]);
+  assert.equal(data(await s.call('search_documents', {...query, name: 'missing'})).length, 0);
+  const retention = data(await s.call('get_document_retention'));
+  data(await s.call('update_document_retention', {version: retention.version, retentionDays: 1}));
+  assert.equal((await repo.crmGet('retention', 'workspace'))!.retentionDays, 1);
+  refused(await s.call('update_document_retention', {version: retention.version, retentionDays: null}), 'CONFLICT');
+  data(await s.call('update_document_retention', {version: retention.version + 1, retentionDays: null}));
+  assert.equal((await repo.crmGet('retention', 'workspace'))!.retentionDays, null);
+  data(await s.call('list_past_retention_documents'));
+  const unchanged = (await repo.events()).length;
+  for (const confirm of [undefined, false, 'true']) refused(await s.call('dispose_document', {id: doc.id, version: 1, confirm}), 'VALIDATION');
+  refused(await s.call('upload_document', {id, ...documentInput, content: Buffer.alloc(40961).toString('base64')}), 'VALIDATION');
+  assert.equal((await repo.events()).length, unchanged); assert.ok(await store.forTenant('A').get(doc.id));
+  const disposed = data(await s.call('dispose_document', {id: doc.id, version: 1, confirm: true}));
+  assert.equal(disposed.status, 'disposed'); assert.deepEqual(await repo.crmGet('document', doc.id), disposed);
+  assert.equal(await store.forTenant('A').get(doc.id), undefined);
+  refused(await s.call('get_document_content', {id, documentId: doc.id}), 'DOCUMENT_DISPOSED');
+  const events = (await repo.events()).slice(before); assert.equal(events.length, 5);
+  assert.ok(events.every(e => e.actorType === 'agent' && e.actorId === (e.type === 'document.created' ? JSON.parse(Buffer.from(staff.split('.')[1], 'base64url').toString()).sub : 'admin-A')));
+  const noStore = await setup(), r = noStore.repositories.forTenant('A'), deal = (await r.crmList('deal'))[0];
+  refused(await noStore.call('upload_document', {id: deal.id, ...documentInput}), 'STORAGE_UNAVAILABLE');
+  const existing = {...doc, dealId: deal.id};
+  await r.crmWrite([{record: existing, expectedVersion: 0, event: {id: randomUUID(), tenantId: 'A', actorId: 'admin-A', aggregateId: existing.id, aggregateVersion: 1, type: 'document.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'}}]);
+  refused(await noStore.call('dispose_document', {id: existing.id, version: existing.version, confirm: true}), 'STORAGE_UNAVAILABLE');
+});
+
+test('admin MCP user and invite mutations preserve confirmations, last admin and conflicts', async () => {
+  const s = await setup(), repo = s.repositories.forTenant('A'), before = (await repo.events()).length;
+  const admin = (await repo.membership('admin-A'))!;
+  refused(await s.call('set_user_role', {id: 'admin-A', version: admin.version ?? 0, role: 'staff'}), 'LAST_ADMIN');
+  refused(await s.call('deactivate_user', {id: 'admin-A', version: admin.version ?? 0, confirm: true}), 'LAST_ADMIN');
+  assert.equal((await repo.events()).length, before);
+  let user = data(await s.call('create_user', userInput));
+  assert.equal((await repo.membership(user.userId))!.role, 'staff');
+  refused(await s.call('create_user', userInput), 'DUPLICATE_EMAIL');
+  user = data(await s.call('set_user_role', {id: user.userId, version: user.version, role: 'admin'}));
+  assert.equal((await repo.membership(user.userId))!.role, 'admin');
+  const unchanged = (await repo.events()).length;
+  for (const confirm of [undefined, false, 'true']) refused(await s.call('deactivate_user', {id: user.userId, version: user.version, confirm}), 'VALIDATION');
+  refused(await s.call('set_user_role', {id: user.userId, version: user.version, role: 'staff', active: false}), 'VALIDATION');
+  assert.equal((await repo.events()).length, unchanged);
+  user = data(await s.call('deactivate_user', {id: user.userId, version: user.version, confirm: true}));
+  assert.equal((await repo.membership(user.userId))!.active, false);
+  user = data(await s.call('reactivate_user', {id: user.userId, version: user.version}));
+  assert.equal((await repo.membership(user.userId))!.active, true);
+  const input = {...userInput, email: 'invite@example.test'};
+  let invite = data(await s.call('invite_user', input)); assert.ok(invite.token);
+  assert.deepEqual(await repo.crmGet('invite', invite.id), invite);
+  refused(await s.call('invite_user', input), 'CONFLICT');
+  refused(await s.call('invite_user', userInput), 'CONFLICT');
+  const oldToken = invite.token;
+  invite = data(await s.call('reissue_invite', {id: invite.id, version: invite.version}));
+  assert.notEqual(invite.token, oldToken); assert.deepEqual(await repo.crmGet('invite', invite.id), invite);
+  const revokeBefore = (await repo.events()).length;
+  for (const confirm of [undefined, false, 'true']) refused(await s.call('revoke_invite', {id: invite.id, version: invite.version, confirm}), 'VALIDATION');
+  assert.equal((await repo.events()).length, revokeBefore);
+  invite = data(await s.call('revoke_invite', {id: invite.id, version: invite.version, confirm: true}));
+  assert.equal((await repo.crmGet('invite', invite.id))!.status, 'revoked');
+  refused(await s.call('reissue_invite', {id: invite.id, version: invite.version}), 'CONFLICT');
+  const events = (await repo.events()).slice(before); assert.equal(events.length, 7);
+  assert.ok(events.every(e => e.actorType === 'agent' && e.actorId === 'admin-A'));
+  const direct = await s.handle({method: 'POST', path: '/admin/users', claims: restClaims, body: JSON.stringify({...userInput, email: 'rest76@example.test'})});
+  assert.equal(direct.statusCode, 201); assert.ok(!('actorType' in (await repo.events()).at(-1)!));
+});
+
+test('settings MCP preserves versions, webhook secret visibility, stub dispatch and feed snapshots', async () => {
+  const s = await setup(), repo = s.repositories.forTenant('A'), staff = await staffToken(s), before = (await repo.events()).length;
+  const settings = data(await s.call('get_workspace_settings'));
+  const input = {version: settings.version, taxRateBps: 600, taxTradeDifference: true, docFee: 10000, commissionRateBps: 1000, shareExpiryDays: 7};
+  const updated = data(await s.call('update_workspace_settings', input));
+  assert.deepEqual(await repo.crmGet('settings', 'workspace'), updated);
+  refused(await s.call('update_workspace_settings', input), 'CONFLICT');
+  const endpoint = data(await s.call('create_webhook_endpoint', webhookInput)); assert.ok(endpoint.secret);
+  assert.equal((await repo.webhookEndpoint(endpoint.id))!.secret, endpoint.secret);
+  assert.ok(!JSON.stringify(data(await s.call('list_webhook_endpoints'))).includes(endpoint.secret));
+  assert.ok(!('secret' in data(await s.call('update_webhook_endpoint', {id: endpoint.id, version: 1, url: 'https://receiver.example.test/updated', enabled: true}))));
+  assert.equal((await repo.webhookEndpoint(endpoint.id))!.url, 'https://receiver.example.test/updated');
+  const rotated = data(await s.call('rotate_webhook_secret', {id: endpoint.id, version: 2}));
+  assert.notEqual(rotated.secret, endpoint.secret); assert.equal((await repo.webhookEndpoint(endpoint.id))!.secret, rotated.secret);
+  const dispatch = data(await s.call('dispatch_webhooks')); assert.ok(dispatch.delivered > 0);
+  assert.equal((await repo.webhookDeliveries()).length, dispatch.delivered);
+  data(await s.call('update_feed_config', feedInput, staff));
+  assert.deepEqual((await repo.feedConfig())!.includedStatuses, ['available']);
+  const run = data(await s.call('generate_feed', {}, staff));
+  assert.deepEqual(await repo.feedRun(run.id), run);
+  assert.ok(run.rows.length > 0); assert.ok(run.rows.every((r: any) => r.status === 'available' && r.listPriceCents > 0));
+  for (const format of ['csv', 'json']) {
+    const result = await s.call(`download_feed_run_${format}`, {id: run.id});
+    const rest = await s.handle({method: 'GET', path: `/feeds/runs/${run.id}.${format}`, claims: restClaims});
+    assert.equal(result.isError, false); assert.equal(result.content[0].text, rest.body);
+    if (format === 'csv') assert.ok(!('structuredContent' in result)); else assert.deepEqual(result.structuredContent, run.rows);
+  }
+  const events = (await repo.events()).slice(before); assert.equal(events.length, 6);
+  assert.ok(events.every(e => e.actorType === 'agent' && e.actorId === (e.type.startsWith('feed.') ? run.actorId : 'admin-A')));
+});
+
+test('reports MCP saves definitions and exports every CSV byte for byte as REST', async () => {
+  const s = await setup(), repo = s.repositories.forTenant('A'), staff = await staffToken(s), before = (await repo.events()).length;
+  let saved = data(await s.call('create_saved_report', reportInput, staff));
+  assert.deepEqual(await repo.crmGet('saved-report', saved.id), saved);
+  const update = {...reportInput, name: 'Renamed', id: saved.id, version: 1};
+  saved = data(await s.call('update_saved_report', update, staff));
+  assert.deepEqual(await repo.crmGet('saved-report', saved.id), saved);
+  refused(await s.call('update_saved_report', update, staff), 'CONFLICT');
+  refused(await s.call('create_saved_report', {...reportInput, columns: ['invalid']}), 'VALIDATION');
+  assert.deepEqual(data(await s.call('get_saved_report', {id: saved.id})), saved);
+  for (const t of parityTools.filter(t => t.name.startsWith('export_'))) {
+    const args = t.name === 'export_custom_report_csv' ? {...saved.definition, columns: saved.definition.columns.join(',')} : ['export_inventory_report_csv', 'export_lead_report_csv'].includes(t.name) ? {} : {from: '2026-01-01', to: '2026-10-30'};
+    const result = await s.call(t.name, args, token({scope: 'freedms/mcp.read'}));
+    const rest = await s.handle({method: 'GET', path: t.path, query: args, claims: restClaims});
+    assert.equal(rest.statusCode, 200, t.name); assert.equal(result.isError, false, t.name);
+    assert.equal(result.content[0].text, rest.body, t.name); assert.ok(!('structuredContent' in result));
+  }
+  const events = (await repo.events()).slice(before); assert.equal(events.length, 2);
+  assert.ok(events.every(e => e.actorType === 'agent' && e.actorId !== 'admin-A'));
+});
+
+test('all parity MCP tools enforce scopes and membership; admin tools refuse staff without mutations', async () => {
+  const s = await setup(undefined, undefined, new MemoryDocumentStore()), repo = s.repositories.forTenant('A'), staff = await staffToken(s);
+  const deal = (await repo.crmList('deal'))[0], doc = data(await s.call('upload_document', {id: deal.id, ...documentInput}));
+  const settings = data(await s.call('get_workspace_settings'));
+  const cases: [string, Record<string, unknown>][] = [
+    ['list_users', {}], ['list_invites', {}], ['list_past_retention_documents', {}], ['get_document_retention', {}],
+    ['create_user', userInput], ['invite_user', userInput], ['set_user_role', {id: 'admin-A', version: 1, role: 'staff'}],
+    ['deactivate_user', {id: 'admin-A', version: 1, confirm: true}], ['reactivate_user', {id: 'admin-A', version: 1}],
+    ['reissue_invite', {id: 'missing', version: 1}], ['revoke_invite', {id: 'missing', version: 1, confirm: true}],
+    ['update_document_retention', {version: 0, retentionDays: 30}], ['dispose_document', {id: doc.id, version: doc.version, confirm: true}],
+    ['update_workspace_settings', {version: settings.version, taxRateBps: 0, taxTradeDifference: false, docFee: 0, commissionRateBps: 0, shareExpiryDays: 7}],
+    ['create_webhook_endpoint', webhookInput], ['update_webhook_endpoint', {id: 'missing', version: 1, enabled: false}],
+    ['rotate_webhook_secret', {id: 'missing', version: 1}], ['dispatch_webhooks', {}],
+  ];
+  const before = (await repo.events()).length;
+  for (const [name, args] of cases) refused(await s.call(name, args, staff), 'FORBIDDEN');
+  const reads = (await s.request('tools/list', {}, token({scope: 'freedms/mcp.read'}))).result.tools;
+  assert.equal(parityTools.length, 41); assert.equal(parityTools.filter(t => t.method === 'GET').length, 22);
+  for (const t of parityTools) {
+    assert.equal(reads.some((r: any) => r.name === t.name), t.method === 'GET', t.name);
+    if (t.method !== 'GET') assert.equal((await s.request('tools/call', {name: t.name}, token({scope: 'freedms/mcp.read'}))).error.message, 'Tool unavailable.');
+    refused(await s.call(t.name, {tenantId: 'B'}), 'VALIDATION');
+  }
+  for (const role of ['viewer', 'inactive']) {
+    const factory = {tenantForSubject: async () => 'A', forTenant: () => ({...repo, membership: async () => ({tenantId: 'A', userId: 'admin-A', active: role !== 'inactive', role: (role === 'inactive' ? 'admin' : 'viewer') as 'admin'})})};
+    const handle = createHandler(factory, {decode: async () => {throw Error('Network forbidden');}}, () => now, undefined, undefined, undefined, undefined, {mcp: config});
+    for (const t of parityTools) {
+      const response = await handle({method: 'POST', path: '/mcp', authorization: `Bearer ${token()}`, body: JSON.stringify({jsonrpc: '2.0', id: 1, method: 'tools/call', params: {name: t.name}})});
+      assert.equal(JSON.parse(response.body).error.message, 'Tool unavailable.', t.name);
+    }
+  }
+  assert.equal((await repo.events()).length, before);
+  assert.ok(deal.id); assert.ok(!parityTools.some(t => /signature|mfa|terms|credit/.test(t.path)));
+});
+
+test('parity MCP foreign IDs refuse without events and collection reads match tenant-scoped REST', async () => {
+  const s = await setup(undefined, undefined, new MemoryDocumentStore()), repo = s.repositories.forTenant('A'), other = s.repositories.forTenant('B'), jwt = token({sub: 'admin-B'});
+  const deal = (await other.crmList('deal'))[0], localDeal = (await repo.crmList('deal'))[0];
+  const doc = data(await s.call('upload_document', {id: deal.id, ...documentInput}, jwt));
+  const user = data(await s.call('create_user', userInput, jwt));
+  const invite = data(await s.call('invite_user', {...userInput, email: 'foreign@example.test'}, jwt));
+  const endpoint = data(await s.call('create_webhook_endpoint', webhookInput, jwt));
+  const saved = data(await s.call('create_saved_report', reportInput, jwt));
+  data(await s.call('update_feed_config', feedInput, jwt));
+  const run = data(await s.call('generate_feed', {}, jwt));
+  const cases: [string, Record<string, unknown>][] = [
+    ['upload_document', {id: deal.id, ...documentInput}],
+    ['get_document_content', {id: deal.id, documentId: doc.id}], ['get_document_content', {id: localDeal.id, documentId: doc.id}],
+    ['dispose_document', {id: doc.id, version: 1, confirm: true}],
+    ['set_user_role', {id: user.userId, version: 1, role: 'admin'}],
+    ['deactivate_user', {id: user.userId, version: 1, confirm: true}], ['reactivate_user', {id: user.userId, version: 1}],
+    ['reissue_invite', {id: invite.id, version: 1}], ['revoke_invite', {id: invite.id, version: 1, confirm: true}],
+    ['update_webhook_endpoint', {id: endpoint.id, version: 1, enabled: false}], ['rotate_webhook_secret', {id: endpoint.id, version: 1}],
+    ['get_saved_report', {id: saved.id}], ['update_saved_report', {id: saved.id, version: 1, ...reportInput}],
+    ['download_feed_run_csv', {id: run.id}], ['download_feed_run_json', {id: run.id}],
+  ];
+  const before = await repo.events(), otherBefore = await other.events();
+  for (const [name, args] of cases) refused(await s.call(name, args), 'NOT_FOUND');
+  for (const t of parityTools.filter(t => t.method === 'GET' && !t.path.includes(':') && !t.name.startsWith('export_'))) {
+    const result = await s.call(t.name, {}, token({scope: 'freedms/mcp.read'})); data(result);
+    const rest = await s.handle({method: 'GET', path: t.path, claims: restClaims});
+    assert.deepEqual(result.structuredContent, JSON.parse(rest.body), t.name);
+    for (const id of [doc.id, user.userId, invite.id, endpoint.id, saved.id, run.id]) assert.ok(!result.content[0].text.includes(id), t.name);
+  }
+  assert.deepEqual(await repo.events(), before); assert.deepEqual(await other.events(), otherBefore);
+  assert.deepEqual(await other.crmGet('document', doc.id), doc); assert.deepEqual(await other.crmGet('invite', invite.id), invite);
+  assert.deepEqual(await other.webhookEndpoint(endpoint.id), endpoint); assert.deepEqual(await other.crmGet('saved-report', saved.id), saved);
+  assert.equal((await other.membership(user.userId))!.active, true); assert.deepEqual(await other.feedRun(run.id), run);
+  // ID-free writes and singleton settings always bind to A, even when B has the same email/config.
+  data(await s.call('create_user', userInput)); data(await s.call('invite_user', {...userInput, email: 'foreign@example.test'}));
+  data(await s.call('update_feed_config', {...feedInput, includedStatuses: ['sold']})); data(await s.call('generate_feed'));
+  assert.deepEqual((await other.feedConfig())!.includedStatuses, ['available']); assert.deepEqual(await other.events(), otherBefore);
 });

@@ -1,4 +1,4 @@
-import { accountTypes, appointmentStatuses, repairOrderStatuses, repairOrderPayTypes, serviceSkills, communicationTypes, dealStatuses, fiCategories, housingStatuses, leadSources, leadStages } from '@freedms/shared';
+import { documentTypes, webhookEventTypes, vehicleStatuses, reportDatasets, accountTypes, appointmentStatuses, repairOrderStatuses, repairOrderPayTypes, serviceSkills, communicationTypes, dealStatuses, fiCategories, housingStatuses, leadSources, leadStages } from '@freedms/shared';
 const string = {type: 'string'}, integer = {type: 'integer'}, money = {type: 'integer', minimum: 0, description: 'Integer USD cents'};
 const signedMoney = {type: 'integer', description: 'Signed integer USD cents'};
 const payableFields = {amount: money, party: string, reference: string, dueDate: string, offsetAccountId: string, vehicleId: {type: ['string', 'null']}};
@@ -76,10 +76,58 @@ const poLines = {type: 'array', minItems: 1, maxItems: 8, items: {type: 'object'
     customerId: nullableString, repairOrderId: nullableString,
   }, additionalProperties: false},
 }, required: ['partId', 'quantityOrdered', 'costCents'], additionalProperties: false}};
+const documentType = {type: 'string', enum: documentTypes};
+const confirm = {type: 'boolean', description: 'Explicit confirmation of this destructive operation; must be true.'};
+const userFields = {name: string, email: string, role: {type: 'string', enum: ['admin', 'staff']}};
+const webhookFields = {url: string, eventTypes: {type: 'array', items: {type: 'string', enum: webhookEventTypes}}};
+const reportFields = {name: string, dataset: {type: 'string', enum: Object.keys(reportDatasets)}, columns: {type: 'array', items: string}, ...range, groupBy: string};
 function tool(name: string, path: string, properties: Record<string, unknown> = {}, required: string[] = [], method = 'GET', description = name.replaceAll('_', ' ')) {
   return {name, path, method, description, inputSchema: {type: 'object', properties, required, additionalProperties: false}};
 }
 export const tools = [
+
+  tool('search_documents', '/documents', {name: string, type: documentType, buyer: string, ...range}),
+  tool('list_past_retention_documents', '/documents/past-retention'),
+  tool('get_document_retention', '/documents/retention'),
+  tool('get_document_content', '/deals/:id/documents/:documentId/content', {id: string, documentId: string}, ['id', 'documentId']),
+  tool('upload_document', '/deals/:id/documents', {id: string, name: string, type: documentType, content: string}, ['id', 'name', 'type', 'content'], 'POST'),
+  tool('update_document_retention', '/documents/retention', {version: integer, retentionDays: {type: ['integer', 'null'], minimum: 1, maximum: 36500}}, ['version', 'retentionDays'], 'PUT'),
+  tool('dispose_document', '/documents/:id/dispose', {...periodVersion, confirm}, ['id', 'version', 'confirm'], 'POST'),
+  tool('list_users', '/admin/users'),
+  tool('list_invites', '/admin/invites'),
+  tool('create_user', '/admin/users', userFields, Object.keys(userFields), 'POST'),
+  tool('invite_user', '/admin/invites', userFields, Object.keys(userFields), 'POST'),
+  tool('set_user_role', '/admin/users/:id/role', {...periodVersion, role: userFields.role}, ['id', 'version', 'role'], 'POST'),
+  tool('deactivate_user', '/admin/users/:id/deactivate', {...periodVersion, confirm}, ['id', 'version', 'confirm'], 'POST'),
+  tool('reactivate_user', '/admin/users/:id/reactivate', periodVersion, ['id', 'version'], 'POST'),
+  tool('reissue_invite', '/admin/invites/:id/reissue', periodVersion, ['id', 'version'], 'POST'),
+  tool('revoke_invite', '/admin/invites/:id/revoke', {...periodVersion, confirm}, ['id', 'version', 'confirm'], 'POST'),
+  tool('get_workspace_settings', '/settings'),
+  tool('list_webhook_endpoints', '/webhooks/endpoints'),
+  tool('list_webhook_deliveries', '/webhooks/deliveries'),
+  tool('get_feed_config', '/feeds/config'),
+  tool('list_feed_runs', '/feeds/runs'),
+  tool('update_workspace_settings', '/settings', {version: integer, taxRateBps: integer, taxTradeDifference: {type: 'boolean'}, docFee: money, commissionRateBps: integer, shareExpiryDays: integer}, ['version', 'taxRateBps', 'taxTradeDifference', 'docFee', 'commissionRateBps', 'shareExpiryDays'], 'PUT'),
+  tool('create_webhook_endpoint', '/webhooks/endpoints', webhookFields, ['url', 'eventTypes'], 'POST'),
+  tool('update_webhook_endpoint', '/webhooks/endpoints/:id', {...periodVersion, ...webhookFields, enabled: {type: 'boolean'}}, ['id', 'version'], 'PUT'),
+  tool('rotate_webhook_secret', '/webhooks/endpoints/:id/rotate-secret', periodVersion, ['id', 'version'], 'POST'),
+  tool('dispatch_webhooks', '/webhooks/dispatch', {}, [], 'POST'),
+  tool('update_feed_config', '/feeds/config', {formats: {type: 'array', items: {type: 'string', enum: ['csv', 'json']}}, includedStatuses: {type: 'array', items: {type: 'string', enum: vehicleStatuses}}, requirePrice: {type: 'boolean'}, schedule: {type: 'string', enum: ['manual', 'daily', 'weekly']}}, ['formats', 'includedStatuses', 'requirePrice', 'schedule'], 'PUT'),
+  tool('generate_feed', '/feeds/generate', {}, [], 'POST'),
+  tool('download_feed_run_csv', '/feeds/runs/:id.csv', {id: string}, ['id']),
+  tool('download_feed_run_json', '/feeds/runs/:id.json', {id: string}, ['id']),
+  tool('list_saved_reports', '/reports/saved'),
+  tool('get_saved_report', '/reports/saved/:id', {id: string}, ['id']),
+  tool('create_saved_report', '/reports/saved', reportFields, ['name', 'dataset', 'columns'], 'POST'),
+  tool('update_saved_report', '/reports/saved/:id', {...periodVersion, ...reportFields}, ['id', 'version', 'name', 'dataset', 'columns'], 'PUT'),
+  tool('export_custom_report_csv', '/reports/custom.csv', {dataset: reportFields.dataset, columns: string, ...range, groupBy: string}, ['dataset', 'columns'], 'GET', 'Export CSV using a saved report definition, with columns joined by commas, exactly as the UI does.'),
+  tool('export_turn_report_csv', '/reports/turn.csv', range),
+  tool('export_fi_report_csv', '/reports/fi.csv', range),
+  tool('export_sales_report_csv', '/reports/sales.csv', range),
+  tool('export_inventory_report_csv', '/reports/inventory.csv'),
+  tool('export_lead_report_csv', '/reports/leads.csv'),
+  tool('export_accounting_report_csv', '/reports/accounting.csv', range),
+
 
   tool('list_gl_accounts', '/accounting/accounts'),
   tool('create_gl_account', '/accounting/accounts', {code: string, name: string, type: {type: 'string', enum: accountTypes}, active: {type: 'boolean'}}, ['code', 'name', 'type'], 'POST'),

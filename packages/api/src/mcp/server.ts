@@ -54,9 +54,10 @@ export function createMcpHandler(repositories: RepositoryFactory, execute: (requ
       if (!tool) return fail(id, -32602, 'Tool unavailable.');
       const args = object(params.arguments ?? {}); onlyKeys(args, Object.keys(tool.inputSchema.properties));
       if (tool.inputSchema.required.some(key => args[key] === undefined)) throw invalid('Required tool arguments are missing.');
-      const {id: entityId, taskId, pencilId, ...fields} = args;
+      const {id: entityId, taskId, documentId, pencilId, ...fields} = args;
       let path = tool.path.includes(':id') ? tool.path.replace(':id', requireId(entityId)) : tool.path;
       if ('taskId' in tool.inputSchema.properties) path = path.replace(':taskId', requireId(taskId));
+      if ('documentId' in tool.inputSchema.properties) path = path.replace(':documentId', requireId(documentId));
       const internal: ApiRequest = {method: tool.method, path, claims, agent: true};
       if (tool.method === 'GET') {
         internal.query = {};
@@ -66,7 +67,11 @@ export function createMcpHandler(repositories: RepositoryFactory, execute: (requ
         }
       } else {
         // The inventory UI only confirms deletion, which is deliberately not exposed.
-        if (tool.name === 'set_vehicle_status') {
+        if (tool.name === 'deactivate_user' || tool.name === 'revoke_invite') {
+          if (fields.confirm !== true) throw invalid('Explicit confirmation is required.');
+          const {confirm: _confirm, ...body} = fields;
+          internal.body = JSON.stringify(body);
+        } else if (tool.name === 'set_vehicle_status') {
           const existing = await execute({method: 'GET', path, claims});
           if (existing.statusCode !== 200) return rpc(id, {isError: true, content: [{type: 'text', text: existing.body}]});
           const vehicle = JSON.parse(existing.body).data;
@@ -109,7 +114,9 @@ export function createMcpHandler(repositories: RepositoryFactory, execute: (requ
       // Direct in-process REST operation dispatch: no HTTP self-call. Reads are not audited
       // by REST. Writes retain its atomic outbox and add actorType=agent with the real user ID.
       const result = await execute(internal);
-      return rpc(id, {isError: result.statusCode >= 400, content: [{type: 'text', text: result.body}], structuredContent: JSON.parse(result.body)});
+      let structuredContent: unknown;
+      try { structuredContent = JSON.parse(result.body); } catch { /* CSV downloads retain their exact text. */ }
+      return rpc(id, {isError: result.statusCode >= 400, content: [{type: 'text', text: result.body}], structuredContent});
     } catch (error) {
       const sanitized = JSON.parse(errorResponse(error).body);
       return rpc(id, {isError: true, content: [{type: 'text', text: JSON.stringify(sanitized)}]});
