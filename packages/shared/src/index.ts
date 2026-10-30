@@ -93,3 +93,12 @@ export * from './users.js';
 
 export * from './ownership.js';
 export * from './reports-p3.js';
+
+export const inventorySizes = ['1-25', '26-50', '51-100', '101-200', '201+'] as const;
+export interface AccessRequest {
+  id: string; tenantId: string; email: string;
+  contactName: string; dealershipName: string;
+  phone: string; inventorySize: string; currentDms: string; message: string;
+  status: 'pending' | 'handled'; handledAt: string | null;
+  version: number; createdAt: string; updatedAt: string;
+}

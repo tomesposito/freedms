@@ -6,6 +6,7 @@
   "scripts": {
     "build": "esbuild src/lambda.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/lambda.cjs",
     "dev": "tsx watch src/local.ts",
+    "access-requests": "node --import tsx src/access-requests-cli.ts",
     "provision": "node --import tsx src/provision.ts"
   },
   "dependencies": {

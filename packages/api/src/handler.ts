@@ -1,3 +1,4 @@
+import { submitAccessRequest } from './access-requests.js';
 import { createMcpHandler, isMcpPath } from './mcp/server.js';
 import { mcpConfig, type McpConfig } from './mcp/auth.js';
 import { compressResponse } from './compression.js';
@@ -71,6 +72,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         return compressResponse(result, request.acceptEncoding);
       }
       if (request.path.startsWith('/invite/')) return compressResponse(await publicInvite(request, repositories, now(), options.hosted), request.acceptEncoding);
+      if (request.path.replace(/\/$/, '') === '/access-requests') return compressResponse(await submitAccessRequest(request, repositories, now()), request.acceptEncoding);
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');

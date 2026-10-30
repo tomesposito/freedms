@@ -1,3 +1,4 @@
+import type { AccessRequest } from '@freedms/shared';
 import { acceptanceWrite } from './invites.js';
 import { validateMemberWrite } from './users.js';
 import type { MfaRecord } from '@freedms/shared';
@@ -110,6 +111,13 @@ export class DynamoRepositories implements RepositoryFactory {
           ...(this.subjectBindings ? [subjectPut(user.id)] : []), {Put: {TableName: this.table, Item: {...key(`USER#${requireId(user.id)}`), data: user}}},
           {Put: {TableName: this.table, Item: {...key(`MEMBER#${requireId(member.userId)}`), data: member}}}, eventPut(event)
         ]);
+      },
+      accessRequest: email => get<AccessRequest>(`ACCESSREQUEST#${email.toLowerCase()}`),
+      accessRequests: () => listRows<AccessRequest>('ACCESSREQUEST#'),
+      saveAccessRequest: async (record, expectedVersion) => {
+        assertScope(tenantId, record);
+        if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid access request version');
+        await transact([put(`ACCESSREQUEST#${record.email.toLowerCase()}`, record, expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined)]);
       },
       mfa: userId => get<MfaRecord>(`MFA#${requireId(userId)}`),
       saveMfa: async (record, expectedVersion, event) => {

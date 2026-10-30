@@ -1,3 +1,4 @@
+import type { AccessRequest } from '@freedms/shared';
 import { debitNormal, type AccountBalance } from '@freedms/shared';
 import { leadStages, leadSources, type LeadReport } from '@freedms/shared';
 import type { MfaRecord } from '@freedms/shared';
@@ -9,8 +10,12 @@ import type { Membership, OutboxEvent, Tenant, User, Vehicle, VehicleStatus } fr
 export interface VehicleQuery { status?: VehicleStatus; search?: string }
 export interface LeadQuery { search?: string; stage?: Lead['stage']; assignee?: string | null; limit: number; offset: number }
 export interface LeadPage { leads: Lead[]; customers: Customer[]; total: number }
+export const OPERATOR_TENANT_ID = 'operator';
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
+  accessRequest(email: string): Promise<AccessRequest | undefined>;
+  accessRequests(): Promise<AccessRequest[]>;
+  saveAccessRequest(record: AccessRequest, expectedVersion: number): Promise<void>;
   acceptInvite(invite: import('@freedms/shared').Invite, user: User, now: Date): Promise<'accepted' | 'already-member'>;
   workspaceUsers(): Promise<import('@freedms/shared').WorkspaceUser[]>;
   saveMember(user: User, membership: Membership, expectedVersion: number, event: OutboxEvent): Promise<void>;

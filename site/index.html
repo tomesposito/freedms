@@ -249,6 +249,17 @@ footer a:hover{color:#fff}
   .nav-toggle{display:block}
   .hero{padding-top:52px}
 }
+/* pilot access form */
+.access-request{margin-top:36px;max-width:760px}
+.access-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-bottom:20px}
+.access-fields label{display:block;font-weight:600}
+.access-fields input,.access-fields select,.access-fields textarea{display:block;width:100%;margin-top:6px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font:inherit;color:var(--ink);background:var(--paper)}
+.access-fields textarea{resize:vertical}
+.access-wide{grid-column:1/-1}
+.access-honeypot{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
+.access-request button{font:inherit;cursor:pointer}
+.access-request button:disabled{opacity:.6;cursor:wait}
+@media(max-width:600px){.access-fields{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -432,6 +443,31 @@ footer a:hover{color:#fff}
       <div class="step"><div class="n">2</div><h3>Activate your account</h3><p>Invited users receive access privately, choose a password, and set up an authenticator.</p></div>
       <div class="step"><div class="n">3</div><h3>Explore your workspace</h3><p>Try the workflow with fictional demo data in a dealership workspace prepared for the pilot.</p></div>
     </div>
+    <div class="access-request card">
+      <h3>Request pilot access</h3>
+      <p id="access-error" role="alert" hidden>That didn't go through. Check the form and try again.</p>
+      <p id="access-success" role="status" tabindex="-1" hidden>Thanks — your request is in. We review requests by hand and invite dealers a few at a time.</p>
+      <form id="access-form">
+        <div class="access-fields">
+          <label>Contact name<input name="contactName" required maxlength="120" autocomplete="name"></label>
+          <label>Dealership name<input name="dealershipName" required maxlength="160" autocomplete="organization"></label>
+          <label>Email<input name="email" type="email" required maxlength="254" autocomplete="email"></label>
+          <label>Phone (optional)<input name="phone" type="tel" maxlength="40" autocomplete="tel"></label>
+          <label>Approximate inventory size (optional)<select name="inventorySize">
+            <option value="">Select…</option>
+            <option value="1-25">1–25 vehicles</option>
+            <option value="26-50">26–50 vehicles</option>
+            <option value="51-100">51–100 vehicles</option>
+            <option value="101-200">101–200 vehicles</option>
+            <option value="201+">201+ vehicles</option>
+          </select></label>
+          <label>Current DMS (optional)<input name="currentDms" maxlength="120"></label>
+          <label class="access-wide">Message (optional)<textarea name="message" maxlength="2000" rows="4"></textarea></label>
+        </div>
+        <div class="access-honeypot" aria-hidden="true"><label>Website<input name="website" type="text" tabindex="-1" autocomplete="off"></label></div>
+        <button class="btn" type="submit">Request pilot access</button>
+      </form>
+    </div>
     <div class="split" style="margin-top:44px">
       <div class="shot"><img src="assets/onboarding.png" alt="freeDMS dealer onboarding wizard" width="1200" height="850"></div>
       <div>
@@ -529,6 +565,30 @@ document.getElementById('tourThumbs').addEventListener('click', function(e){
   b.setAttribute('aria-pressed','true');
 });
 document.querySelector('#tourThumbs button').setAttribute('aria-pressed','true');
+</script>
+<script>
+const accessForm = document.getElementById('access-form');
+accessForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = accessForm.querySelector('button[type="submit"]');
+  const error = document.getElementById('access-error');
+  button.disabled = true;
+  error.hidden = true;
+  const fields = new FormData(accessForm);
+  const body = {};
+  for (const key of ['contactName', 'dealershipName', 'email', 'phone', 'inventorySize', 'currentDms', 'message', 'website']) body[key] = fields.get(key);
+  try {
+    const result = await fetch('/api/access-requests', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
+    if (!result.ok) throw new Error('Request failed');
+    accessForm.hidden = true;
+    const success = document.getElementById('access-success');
+    success.hidden = false;
+    success.focus();
+  } catch {
+    error.hidden = false;
+    button.disabled = false;
+  }
+});
 </script>
 </body>
 </html>

@@ -18,10 +18,12 @@ const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date
 const server = createServer(async (req, res) => {
   let result;
   try {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1:3001');
+    // The marketing site uses a different local origin; production is same-origin via CloudFront.
+    const isAccessRequest = req.method === 'POST' && url.pathname.replace(/\/$/, '') === '/access-requests';
     // Loopback only, host/origin allowlist to prevent websites/DNS rebinding from minting local tokens.
     if (!['127.0.0.1:3001', 'localhost:3001'].includes(req.headers.host ?? '') ||
-        (req.headers.origin && !['http://127.0.0.1:5173', 'http://localhost:5173'].includes(req.headers.origin))) throw new ApiError(403, 'FORBIDDEN', 'Local origin not allowed.');
-    const url = new URL(req.url ?? '/', 'http://127.0.0.1:3001');
+        (!isAccessRequest && req.headers.origin && !['http://127.0.0.1:5173', 'http://localhost:5173'].includes(req.headers.origin))) throw new ApiError(403, 'FORBIDDEN', 'Local origin not allowed.');
     const chunks: Buffer[] = []; let bytes = 0;
     for await (const chunk of req) { bytes += chunk.length; if (bytes > bodyLimit(req.method ?? 'GET', url.pathname)) throw new ApiError(413, 'TOO_LARGE', 'Body exceeds the limit for this endpoint.'); chunks.push(chunk); }
     const body = Buffer.concat(chunks).toString('utf8');

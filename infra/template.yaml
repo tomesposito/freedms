@@ -275,6 +275,13 @@ Resources:
             Path: /.well-known/oauth-protected-resource
             Method: GET
             Auth: {Authorizer: NONE}
+        AccessRequests:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/access-requests'
+            Method: POST
+            Auth: {Authorizer: NONE}
         AdfIntake:
           Type: HttpApi
           Properties:

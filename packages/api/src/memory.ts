@@ -1,3 +1,4 @@
+import type { AccessRequest } from '@freedms/shared';
 import type { AccountBalance } from '@freedms/shared';
 import { acceptanceWrite } from './invites.js';
 import { validateMemberWrite } from './users.js';
@@ -9,7 +10,7 @@ import type { Customer, CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicl
 import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 const forecastKinds = new Set<CrmEntity['kind']>(['deal', 'service-appointment', 'part', 'parts-sale', 'repair-order']);
-interface State { leadPageEpoch: number; leadPageCache: Map<string, LeadPage>; accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
+interface State { accessRequests: Map<string, AccessRequest>; leadPageEpoch: number; leadPageCache: Map<string, LeadPage>; accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
   private states = new Map<string, State>();
   async tenantForSubject(subject: string): Promise<string | undefined> {
@@ -19,7 +20,7 @@ export class MemoryRepositories implements RepositoryFactory {
   forTenant(tenantId: string): TenantRepository {
     requireId(tenantId);
     let state = this.states.get(tenantId);
-    if (!state) { state = {leadPageEpoch: 0, leadPageCache: new Map(), accountingEpoch: 0, accountingCache: new Map(), forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), crmByKind: new Map(), partNumbers: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
+    if (!state) { state = {accessRequests: new Map(), leadPageEpoch: 0, leadPageCache: new Map(), accountingEpoch: 0, accountingCache: new Map(), forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), crmByKind: new Map(), partNumbers: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
     const s = state;
     const storeCrm = (record: CrmEntity) => {
       const stored = structuredClone(record);
@@ -46,6 +47,15 @@ export class MemoryRepositories implements RepositoryFactory {
         assertScope(tenantId, member, event); check(event);
         validateMemberWrite(user, member, expected, event, [...s.memberships.values()].map(membership => ({membership, user: s.users.get(membership.userId)!})));
         s.users.set(user.id, structuredClone(user)); s.memberships.set(user.id, structuredClone(member)); s.events.set(event.id, structuredClone(event));
+      },
+      accessRequest: async email => structuredClone(s.accessRequests.get(email.toLowerCase())),
+      accessRequests: async () => structuredClone([...s.accessRequests.values()]),
+      saveAccessRequest: async (record, expectedVersion) => {
+        assertScope(tenantId, record);
+        if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid access request version');
+        const email = record.email.toLowerCase();
+        if ((s.accessRequests.get(email)?.version ?? 0) !== expectedVersion) throw conflict();
+        s.accessRequests.set(email, structuredClone(record));
       },
       mfa: async userId => structuredClone(s.mfa.get(requireId(userId))),
       saveMfa: async (record, expectedVersion, event) => {
