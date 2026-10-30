@@ -1,4 +1,4 @@
-import { communicationTypes, dealStatuses, fiCategories, housingStatuses, leadSources, leadStages } from '@freedms/shared';
+import { appointmentStatuses, repairOrderStatuses, repairOrderPayTypes, serviceSkills, communicationTypes, dealStatuses, fiCategories, housingStatuses, leadSources, leadStages } from '@freedms/shared';
 const string = {type: 'string'}, integer = {type: 'integer'}, money = {type: 'integer', minimum: 0, description: 'Integer USD cents'};
 const page = {limit: integer, offset: integer}, range = {from: string, to: string};
 export const vehicleFields = {
@@ -42,6 +42,36 @@ const applicant = {type: 'object', properties: {
 }, required: ['fullName', 'dateOfBirth', 'address', 'housingStatus', 'monthlyHousingPayment', 'yearsAtAddress', 'yearsEmployed', 'grossMonthlyIncome', 'otherMonthlyIncome'], additionalProperties: false};
 // Certification and decision attestations are human-only; never expose status or decision here.
 const creditFields = {applicant, coApplicant: {...applicant, type: ['object', 'null']}, consentAt: string};
+const skill = {type: 'string', enum: serviceSkills};
+const dispatchFields = {technicianId: nullableString, requiredSkill: {...skill, type: ['string', 'null'], enum: [...serviceSkills, null]},
+  acknowledgeSkillMismatch: {type: 'boolean', description: 'Explicitly acknowledge assigning a technician without the required skill.'}};
+const serviceFields = {vehicleId: nullableString, vehicleDescription: string, advisorId: nullableString, concern: string, ...dispatchFields};
+const appointmentFields = {...serviceFields, scheduledStart: string, scheduledEnd: string, status: {type: 'string', enum: appointmentStatuses}};
+const stockAcknowledgements = {
+  allowNegativeStock: {type: 'boolean', description: 'Explicitly allow this operation to drive stock below zero.'},
+  acknowledgeReservedStock: {type: 'boolean', description: 'Explicitly acknowledge consuming stock reserved for other repair orders’ special orders; recorded with your user identity.'},
+};
+const roStatus = {type: 'string', enum: repairOrderStatuses};
+const roFields = {...serviceFields, payType: {type: 'string', enum: repairOrderPayTypes},
+  lineItems: {type: 'array', maxItems: 100, description: 'Full replacement array; retain existing lines to preserve them.', items: {type: 'object', properties: {
+    id: string, kind: {type: 'string', enum: ['labor', 'parts']}, description: string,
+    skill: {...skill, type: ['string', 'null'], enum: [...serviceSkills, null]}, flaggedHoursHundredths: {type: ['integer', 'null'], minimum: 0, maximum: 100000},
+    laborHoursHundredths: {type: ['integer', 'null'], minimum: 1, maximum: 100000}, laborRateCents: {...money, type: ['integer', 'null']},
+    quantity: {type: ['integer', 'null'], minimum: 1, maximum: 100000}, unitPriceCents: {...money, type: ['integer', 'null']}, partId: nullableString,
+  }, required: ['kind', 'description', 'laborHoursHundredths', 'quantity', 'unitPriceCents'], additionalProperties: false}},
+  inspection: {type: 'array', maxItems: 100, items: {type: 'object', properties: {
+    id: string, label: string, status: {type: 'string', enum: ['ok', 'monitor', 'needs-attention']}, skill, laborHoursHundredths: integer, partId: nullableString,
+  }, required: ['label', 'status'], additionalProperties: false}},
+  recommendationDecision: {type: 'object', properties: {id: string, status: {type: 'string', enum: ['approved', 'declined']}}, required: ['id', 'status'], additionalProperties: false},
+};
+const technicianFields = {name: string, skills: {type: 'array', maxItems: serviceSkills.length, items: skill}};
+const partFields = {partNumber: string, description: string, location: string, binLocation: string, costCents: money,
+  retailPriceCents: money, quantityOnHand: integer, reorderPoint: integer};
+const poLines = {type: 'array', minItems: 1, maxItems: 8, items: {type: 'object', properties: {
+  partId: string, quantityOrdered: integer, costCents: money, specialOrder: {type: ['object', 'null'], properties: {
+    customerId: nullableString, repairOrderId: nullableString,
+  }, additionalProperties: false},
+}, required: ['partId', 'quantityOrdered', 'costCents'], additionalProperties: false}};
 function tool(name: string, path: string, properties: Record<string, unknown> = {}, required: string[] = [], method = 'GET', description = name.replaceAll('_', ' ')) {
   return {name, path, method, description, inputSchema: {type: 'object', properties, required, additionalProperties: false}};
 }
@@ -100,4 +130,26 @@ export const tools = [
   tool('update_fi_product', '/fi-products/:id', {id: string, version: integer, ...fiFields}, ['id', 'version', ...Object.keys(fiFields)], 'PUT'),
   tool('create_credit_application', '/deals/:id/credit-application', {id: string, ...creditFields}, ['id', 'applicant', 'consentAt'], 'POST'),
   tool('update_credit_application', '/deals/:id/credit-application', {id: string, version: integer, ...creditFields}, ['id', 'version', ...Object.keys(creditFields)], 'PUT'),
+  // Service/parts confirmations are explicit acknowledgements, never implicit overrides.
+  tool('create_appointment', '/service/appointments', {customerId: string, ...appointmentFields}, ['customerId', 'scheduledStart', 'scheduledEnd'], 'POST'),
+  tool('update_appointment', '/service/appointments/:id', {id: string, version: integer, ...appointmentFields}, ['id', 'version'], 'PUT'),
+  tool('create_repair_order', '/service/repair-orders', {customerId: string, appointmentId: nullableString, ...roFields}, ['payType'], 'POST', 'Create a repair order with a customerId or an existing appointmentId.'),
+  tool('update_repair_order', '/service/repair-orders/:id', {id: string, version: integer, ...roFields, status: roStatus, ...stockAcknowledgements}, ['id', 'version'], 'PUT'),
+  tool('set_repair_order_status', '/service/repair-orders/:id', {id: string, version: integer, status: roStatus, ...stockAcknowledgements}, ['id', 'version', 'status'], 'PUT'),
+  tool('create_technician', '/service/technicians', technicianFields, ['name', 'skills'], 'POST'),
+  tool('update_technician', '/service/technicians/:id', {id: string, version: integer, ...technicianFields}, ['id', 'version'], 'PUT'),
+  tool('create_labor_rate', '/service/labor-rates', {skill, laborRateCents: money}, ['skill', 'laborRateCents'], 'POST'),
+  tool('update_labor_rate', '/service/labor-rates/:id', {id: skill, version: integer, skill, laborRateCents: money}, ['id', 'version'], 'PUT', 'Update a labor rate by its skill id; the skill cannot change.'),
+  tool('create_part', '/parts', partFields, Object.keys(partFields).filter(k => k !== 'location'), 'POST'),
+  tool('update_part', '/parts/:id', {id: string, version: integer, ...partFields}, ['id', 'version'], 'PUT'),
+  tool('record_part_sale', '/parts/sales', {partId: string, quantity: integer, customerId: nullableString, unitPriceCents: money, allowNegativeStock: stockAcknowledgements.allowNegativeStock}, ['partId', 'quantity'], 'POST'),
+  tool('create_purchase_order', '/parts/purchase-orders', {vendorName: string, lines: poLines}, ['vendorName', 'lines'], 'POST'),
+  tool('receive_purchase_order', '/parts/purchase-orders/:id/receive', {id: string, version: integer,
+    lines: {type: 'array', minItems: 1, maxItems: 8, items: {type: 'object', properties: {lineId: string, quantity: integer}, required: ['lineId', 'quantity'], additionalProperties: false}}}, ['id', 'version', 'lines'], 'POST'),
+  tool('fulfill_special_order', '/parts/purchase-orders/:id/special-fulfill', {id: string, version: integer, lineId: string}, ['id', 'version', 'lineId'], 'POST'),
+  tool('create_part_return', '/parts/returns', {partId: string, vendorName: string, quantity: integer, reason: string, purchaseOrderId: nullableString, costCents: money}, ['partId', 'vendorName', 'quantity', 'reason'], 'POST'),
+  tool('update_pricing_matrix', '/parts/pricing-matrix', {version: integer, enabled: {type: 'boolean'}, brackets: {type: 'array', maxItems: 10,
+    items: {type: 'object', properties: {maxCostCents: {...money, type: ['integer', 'null']}, markupBps: integer}, required: ['maxCostCents', 'markupBps'], additionalProperties: false}}}, ['version', 'enabled', 'brackets'], 'PUT'),
+  tool('create_part_reservation', '/parts/reservations', {partId: string, repairOrderId: string, customerId: nullableString, quantity: integer}, ['partId', 'repairOrderId', 'quantity'], 'POST'),
+  tool('release_part_reservation', '/parts/reservations/:id/release', {id: string, version: integer, quantity: integer}, ['id', 'version'], 'POST'),
 ];

@@ -31,7 +31,7 @@ import { randomUUID } from 'node:crypto';
 import { vehicleStatuses, type Session, type AuthClaims, type OutboxEvent, type Vehicle } from '@freedms/shared';
 import { authorize, requireWrite } from './auth.js';
 import { ApiError, conflict, missing, requireId } from './errors.js';
-import type { RepositoryFactory } from './repository.js';
+import type { RepositoryFactory, TenantRepository } from './repository.js';
 import type { VinDecoder } from './vin.js';
 import { pageNumber, invalid, object, onlyKeys, text, vehicleInput, version, view, vin } from './validation.js';
 export interface ApiRequest { authorization?: string; agent?: boolean; method: string; path: string; query?: Record<string, string | undefined>; body?: string; claims?: AuthClaims; intakeToken?: string; acceptEncoding?: string }
@@ -80,8 +80,18 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (options.hosted && ((path === '/admin/users' && method === 'POST') || /^\/(account|admin)\/mfa(\/|$)/.test(path)))
           throw new ApiError(403, 'HOSTED_ACCOUNT_MANAGEMENT', 'Pilot accounts and authenticator recovery are managed by the pilot operator.');
         if (/^\/deals\/[^/]+\/(buyers-order\/signatures|documents\/[^/]+\/(signatures|replace))$/.test(path) || /^\/service\/repair-orders\/[^/]+\/signatures$/.test(path)) return await signatures(request, principal, repository, now(), documents);
-        if (/^\/parts(\/|$)/.test(path)) return await parts(request, principal, repository, now());
-        if (/^\/service(\/|$)/.test(path)) return await service(request, principal, repository, now(), documents);
+        if (/^\/(parts|service)(\/|$)/.test(path)) {
+          // Tag every transactional side effect, including stock, reservations and journals.
+          // Keep ordinary REST events and the operation's validation/stock rules unchanged.
+          const crmWrite: TenantRepository['crmWrite'] = (writes, vehicles) => repository.crmWrite(
+            writes.map(write => ({...write, event: {...write.event, actorType: 'agent'}})), vehicles);
+          const repo = request.agent ? new Proxy(repository, {get(target, key) {
+            if (key === 'crmWrite') return crmWrite;
+            const value = Reflect.get(target, key);
+            return typeof value === 'function' ? value.bind(target) : value;
+          }}) : repository;
+          return path.startsWith('/parts') ? await parts(request, principal, repo, now()) : await service(request, principal, repo, now(), documents);
+        }
         if (/^\/compliance(\/|$)/.test(path) || /^\/deals\/[^/]+\/(compliance|compliance-checks)(\/|$)/.test(path)) return await compliance(request, principal, repository, now());
         if (/^\/documents(\/|$)/.test(path)) return await documentControls(request, principal, repository, now(), documents);
         if (/^\/admin\/invites(\/|$)/.test(path)) return await manageInvites(request, principal, repository, now());

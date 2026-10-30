@@ -38,7 +38,7 @@ test('MCP initialize, ping, scoped tool discovery, metadata and adapter dispatch
   const initialized = await s.request('initialize', {protocolVersion: '2025-11-25', capabilities: {}, clientInfo: {name: 'offline', version: '1'}});
   assert.equal(initialized.result.protocolVersion, '2025-11-25'); assert.ok(initialized.result.capabilities.tools);
   assert.deepEqual((await s.request('ping')).result, {});
-  assert.equal((await s.request('tools/list')).result.tools.length, 42);
+  assert.equal((await s.request('tools/list')).result.tools.length, 61);
   const reads = (await s.request('tools/list', {}, token({scope: 'freedms/mcp.read'}))).result.tools;
   assert.equal(reads.length, 17); assert.ok(reads.every((t: {annotations: {readOnlyHint: boolean}}) => t.annotations.readOnlyHint));
   assert.equal((await s.request('tools/call', {name: 'create_vehicle', arguments: {}}, token({scope: 'freedms/mcp.read'}))).error.message, 'Tool unavailable.');
@@ -47,7 +47,7 @@ test('MCP initialize, ping, scoped tool discovery, metadata and adapter dispatch
   assert.deepEqual(JSON.parse(metadata.body).authorization_servers, [config.issuer]); assert.equal(JSON.parse(metadata.body).resource, config.resource);
   const gateway = gatewayHandler(s.handle, 'web-issuer', 'web-audience');
   const result = await gateway({rawPath: '/mcp', requestContext: {http: {method: 'POST'}}, headers: {Authorization: `Bearer ${token()}`}, body: JSON.stringify({jsonrpc: '2.0', id: 7, method: 'tools/list'})});
-  assert.equal(JSON.parse(result.body).result.tools.length, 42);
+  assert.equal(JSON.parse(result.body).result.tools.length, 61);
   assert.deepEqual(localAuth('/mcp', false, 'access-token', {verify: () => {throw Error('Must not verify as ID token');}}), {authorization: 'Bearer access-token'});
 });
 test('MCP rejects invalid access tokens with a resource challenge and caches offline JWKS', async () => {
@@ -411,4 +411,177 @@ test('desking MCP validation, tenant isolation, scope and role refusals', async 
   const product = data(await s.call('create_fi_product', fiInput));
   data(await s.call('update_fi_product', {id: product.id, version: 1, ...fiInput}));
   refused(await s.call('update_fi_product', {id: product.id, version: 1, ...fiInput}), 'CONFLICT');
+});
+
+const servicePartsWrites = ['create_appointment', 'update_appointment', 'create_repair_order', 'update_repair_order', 'set_repair_order_status',
+  'create_technician', 'update_technician', 'create_labor_rate', 'update_labor_rate', 'create_part', 'update_part', 'record_part_sale',
+  'create_purchase_order', 'receive_purchase_order', 'fulfill_special_order', 'create_part_return', 'update_pricing_matrix', 'create_part_reservation', 'release_part_reservation'];
+const partInput = {partNumber: 'MCP-PART', description: 'Filter', binLocation: 'A1', location: 'Main', costCents: 123, retailPriceCents: 456, quantityOnHand: 10, reorderPoint: 2};
+const partsLine = (partId: string, quantity = 1) => ({kind: 'parts', description: 'Filter', partId, quantity, unitPriceCents: 456, laborHoursHundredths: null, laborRateCents: null});
+const appointmentInput = {scheduledStart: '2026-11-01T10:00:00Z', scheduledEnd: '2026-11-01T11:00:00Z', concern: 'Oil change'};
+
+test('service MCP creates and partially updates appointments, catalogs and repair orders with agent attribution', async () => {
+  const s = await setup(), repo = s.repositories.forTenant('A'), customerId = (await repo.crmList('customer'))[0].id;
+  const before = (await repo.events()).length;
+  const tech = data(await s.call('create_technician', {name: 'MCP Tech', skills: ['brakes']}));
+  const updatedTech = data(await s.call('update_technician', {id: tech.id, version: 1, name: 'Renamed'}));
+  assert.deepEqual(updatedTech.skills, ['brakes']);
+  refused(await s.call('update_technician', {id: tech.id, version: 1, name: 'Stale'}), 'CONFLICT');
+  // Remove no seed data: choose an unconfigured skill for the create path.
+  const configured = await repo.crmList('labor-rate');
+  const skill = ['general', 'brakes', 'diesel', 'electrical', 'diagnostics', 'engine', 'transmission', 'suspension', 'hvac', 'tires'].find(k => !configured.some(r => r.skill === k))!;
+  assert.ok(skill);
+  const rate = data(await s.call('create_labor_rate', {skill, laborRateCents: 10001}));
+  assert.equal(rate.id, skill);
+  assert.equal(data(await s.call('update_labor_rate', {id: rate.id, version: 1, laborRateCents: 12001})).skill, skill);
+  refused(await s.call('update_labor_rate', {id: rate.id, version: 1, laborRateCents: 12002}), 'CONFLICT');
+  refused(await s.call('update_labor_rate', {id: rate.id, version: 2, skill: skill === 'brakes' ? 'general' : 'brakes'}), 'VALIDATION');
+  const appointment = data(await s.call('create_appointment', {customerId, ...appointmentInput, technicianId: tech.id, requiredSkill: 'brakes'}));
+  const changed = data(await s.call('update_appointment', {id: appointment.id, version: 1, status: 'checked-in'}));
+  assert.equal(changed.concern, appointmentInput.concern); assert.equal(changed.scheduledStart, appointment.scheduledStart);
+  refused(await s.call('update_appointment', {id: appointment.id, version: 1, concern: 'Stale'}), 'CONFLICT');
+  refused(await s.call('update_appointment', {id: appointment.id, version: 2, requiredSkill: 'diesel'}), 'VALIDATION');
+  assert.equal(data(await s.call('update_appointment', {id: appointment.id, version: 2, requiredSkill: 'diesel', acknowledgeSkillMismatch: true})).skillMismatchWarning.acknowledgedBy, 'admin-A');
+  const part = data(await s.call('create_part', partInput));
+  const labor = {kind: 'labor', description: 'Labor', skill, laborHoursHundredths: 100, quantity: null, unitPriceCents: null, partId: null};
+  let ro = data(await s.call('create_repair_order', {appointmentId: appointment.id, payType: 'customer-pay', lineItems: [labor, partsLine(part.id)]}));
+  assert.equal(ro.customerId, customerId); assert.equal(ro.lineItems[0].laborRateCents, 12001);
+  const originalLabor = ro.lineItems[0];
+  ro = data(await s.call('update_repair_order', {id: ro.id, version: ro.version, lineItems: [originalLabor, partsLine(part.id, 2)]}));
+  assert.deepEqual(ro.lineItems[0], originalLabor); assert.equal(ro.lineItems.length, 2); assert.equal(ro.lineItems[1].quantity, 2);
+  assert.equal(ro.payType, 'customer-pay'); assert.equal(ro.concern, appointmentInput.concern);
+  refused(await s.call('update_repair_order', {id: ro.id, version: 1, concern: 'Stale'}), 'CONFLICT');
+  ro = data(await s.call('set_repair_order_status', {id: ro.id, version: ro.version, status: 'completed'}));
+  assert.equal(ro.status, 'completed'); assert.equal((await repo.crmGet('part', part.id))!.quantityOnHand, 8);
+  assert.equal((await repo.crmGet('service-appointment', appointment.id))!.status, 'done');
+  const events = (await repo.events()).slice(before);
+  assert.ok(events.length > 10); assert.ok(events.every(e => e.actorType === 'agent' && e.actorId === 'admin-A'));
+});
+
+test('parts MCP sales, receiving, special fulfillment, returns, matrix and RO reservations preserve stock semantics', async () => {
+  const s = await setup(), repo = s.repositories.forTenant('A'), customerId = (await repo.crmList('customer'))[0].id;
+  const before = (await repo.events()).length;
+  const part = data(await s.call('create_part', partInput));
+  const updated = data(await s.call('update_part', {id: part.id, version: 1, description: 'Updated filter'}));
+  assert.equal(updated.costCents, 123); assert.equal(updated.quantityOnHand, 10); assert.equal(updated.partNumber, partInput.partNumber);
+  refused(await s.call('update_part', {id: part.id, version: 1, description: 'Stale'}), 'CONFLICT');
+  const stock = async (onHand: number, reserved: number) => {
+    const p = (await repo.crmGet('part', part.id))!; assert.equal(p.quantityOnHand, onHand); assert.equal(p.quantityReserved, reserved);
+  };
+  assert.equal(data(await s.call('record_part_sale', {partId: part.id, quantity: 2})).unitPriceCents, 456); await stock(8, 0);
+  let ro = data(await s.call('create_repair_order', {customerId, payType: 'customer-pay', lineItems: [partsLine(part.id, 2)]}));
+  const po = data(await s.call('create_purchase_order', {vendorName: 'Vendor', lines: [{partId: part.id, quantityOrdered: 3, costCents: 125, specialOrder: {customerId, repairOrderId: ro.id}}]}));
+  const received = data(await s.call('receive_purchase_order', {id: po.id, version: 1, lines: [{lineId: po.lines[0].id, quantity: 3}]}));
+  assert.equal(received.status, 'received'); await stock(11, 3);
+  refused(await s.call('receive_purchase_order', {id: po.id, version: 1, lines: [{lineId: po.lines[0].id, quantity: 1}]}), 'CONFLICT');
+  data(await s.call('fulfill_special_order', {id: po.id, version: 2, lineId: po.lines[0].id})); await stock(8, 0);
+  refused(await s.call('fulfill_special_order', {id: po.id, version: 2, lineId: po.lines[0].id}), 'CONFLICT');
+  data(await s.call('create_part_return', {partId: part.id, vendorName: 'Vendor', quantity: 1, reason: 'Damaged', purchaseOrderId: po.id})); await stock(7, 0);
+  const matrix = (await repo.crmGet('pricing-matrix', 'pricing-matrix'));
+  const pricing = {version: matrix?.version ?? 0, enabled: true, brackets: [{maxCostCents: 500, markupBps: 5000}, {maxCostCents: null, markupBps: 2500}]};
+  assert.deepEqual(data(await s.call('update_pricing_matrix', pricing)).brackets, pricing.brackets);
+  refused(await s.call('update_pricing_matrix', pricing), 'CONFLICT');
+  const reservation = data(await s.call('create_part_reservation', {partId: part.id, repairOrderId: ro.id, quantity: 3}));
+  assert.equal(reservation.customerId, customerId); await stock(7, 3);
+  data(await s.call('release_part_reservation', {id: reservation.id, version: 1, quantity: 1})); await stock(7, 2);
+  refused(await s.call('release_part_reservation', {id: reservation.id, version: 1}), 'CONFLICT');
+  ro = data(await s.call('set_repair_order_status', {id: ro.id, version: ro.version, status: 'completed'})); await stock(5, 0);
+  assert.equal((await repo.crmGet('parts-reservation', reservation.id))!.quantityConsumed, 2);
+  ro = data(await s.call('set_repair_order_status', {id: ro.id, version: ro.version, status: 'open'})); await stock(7, 2);
+  const restored = (await repo.crmGet('parts-reservation', reservation.id))!;
+  assert.equal(restored.quantityConsumed, 0);
+  data(await s.call('release_part_reservation', {id: reservation.id, version: restored.version})); await stock(7, 0);
+  const events = (await repo.events()).slice(before);
+  assert.ok(events.length > 20); assert.ok(events.every(e => e.actorType === 'agent' && e.actorId === 'admin-A'));
+});
+
+test('MCP reserved-stock and negative-stock overrides require explicit acknowledgement and record the OAuth actor', async () => {
+  const s = await setup(), repo = s.repositories.forTenant('A'), customerId = (await repo.crmList('customer'))[0].id;
+  const part = data(await s.call('create_part', {...partInput, quantityOnHand: 0}));
+  const owner = data(await s.call('create_repair_order', {customerId, payType: 'customer-pay'}));
+  const po = data(await s.call('create_purchase_order', {vendorName: 'Vendor', lines: [{partId: part.id, quantityOrdered: 2, costCents: 123, specialOrder: {repairOrderId: owner.id}}]}));
+  data(await s.call('receive_purchase_order', {id: po.id, version: 1, lines: [{lineId: po.lines[0].id, quantity: 2}]}));
+  const ro = data(await s.call('create_repair_order', {customerId, payType: 'customer-pay', lineItems: [partsLine(part.id, 2)]}));
+  const args = {id: ro.id, version: 1, status: 'completed'};
+  const before = (await repo.events()).length;
+  refused(await s.call('set_repair_order_status', args), 'VALIDATION');
+  refused(await s.call('set_repair_order_status', {...args, acknowledgeReservedStock: false}), 'VALIDATION');
+  assert.equal((await repo.events()).length, before);
+  const completed = data(await s.call('set_repair_order_status', {...args, acknowledgeReservedStock: true}));
+  assert.equal(completed.reservedStockWarning.acknowledgedBy, 'admin-A');
+  assert.ok((await repo.events()).slice(before).some(e => e.action?.startsWith('repair-order.reserved-stock-acknowledged') && e.actorType === 'agent' && e.actorId === 'admin-A'));
+  const empty = data(await s.call('create_part', {...partInput, partNumber: 'EMPTY', quantityOnHand: 0}));
+  const sale = {partId: empty.id, quantity: 1};
+  refused(await s.call('record_part_sale', sale), 'VALIDATION');
+  assert.equal(data(await s.call('record_part_sale', {...sale, allowNegativeStock: true})).stockNegative, true);
+  assert.equal((await repo.crmGet('part', empty.id))!.quantityOnHand, -1);
+  const negativeRo = data(await s.call('create_repair_order', {customerId, payType: 'customer-pay', lineItems: [partsLine(empty.id)]}));
+  const transition = {id: negativeRo.id, version: 1, status: 'completed'};
+  refused(await s.call('set_repair_order_status', transition), 'VALIDATION');
+  data(await s.call('set_repair_order_status', {...transition, allowNegativeStock: true}));
+  assert.equal((await repo.crmGet('part', empty.id))!.quantityOnHand, -2);
+});
+
+test('all service/parts MCP writes enforce scopes, roles and tenant isolation without side effects', async () => {
+  const s = await setup(), repo = s.repositories.forTenant('A'), other = s.repositories.forTenant('B'), jwt = token({sub: 'admin-B'});
+  const customerId = (await other.crmList('customer'))[0].id;
+  const part = data(await s.call('create_part', partInput, jwt));
+  const appointment = data(await s.call('create_appointment', {customerId, ...appointmentInput}, jwt));
+  const ro = data(await s.call('create_repair_order', {customerId, payType: 'customer-pay'}, jwt));
+  const tech = data(await s.call('create_technician', {name: 'Foreign', skills: ['general']}, jwt));
+  const configured = await repo.crmList('labor-rate');
+  const skill = ['general', 'brakes', 'diesel', 'electrical', 'diagnostics', 'engine', 'transmission', 'suspension', 'hvac', 'tires'].find(k => !configured.some(r => r.skill === k))!;
+  data(await s.call('create_labor_rate', {skill, laborRateCents: 100}, jwt));
+  const po = data(await s.call('create_purchase_order', {vendorName: 'Foreign', lines: [{partId: part.id, quantityOrdered: 1, costCents: 123}]}, jwt));
+  const reservation = data(await s.call('create_part_reservation', {partId: part.id, repairOrderId: ro.id, quantity: 1}, jwt));
+  const cases: [string, Record<string, unknown>, string][] = [
+    ['create_appointment', {customerId, ...appointmentInput}, 'VALIDATION'],
+    ['update_appointment', {id: appointment.id, version: 1, concern: 'Foreign'}, 'NOT_FOUND'],
+    ['create_repair_order', {customerId, payType: 'customer-pay'}, 'VALIDATION'],
+    ['update_repair_order', {id: ro.id, version: 1, concern: 'Foreign'}, 'NOT_FOUND'],
+    ['set_repair_order_status', {id: ro.id, version: 1, status: 'completed'}, 'NOT_FOUND'],
+    ['update_technician', {id: tech.id, version: 1, name: 'Foreign'}, 'NOT_FOUND'],
+    ['update_labor_rate', {id: skill, version: 1, laborRateCents: 200}, 'NOT_FOUND'],
+    ['update_part', {id: part.id, version: 1, description: 'Foreign'}, 'NOT_FOUND'],
+    ['record_part_sale', {partId: part.id, quantity: 1}, 'VALIDATION'],
+    ['create_purchase_order', {vendorName: 'Foreign', lines: [{partId: part.id, quantityOrdered: 1, costCents: 123}]}, 'VALIDATION'],
+    ['receive_purchase_order', {id: po.id, version: 1, lines: [{lineId: po.lines[0].id, quantity: 1}]}, 'NOT_FOUND'],
+    ['fulfill_special_order', {id: po.id, version: 1, lineId: po.lines[0].id}, 'NOT_FOUND'],
+    ['create_part_return', {partId: part.id, vendorName: 'Foreign', quantity: 1, reason: 'Return'}, 'VALIDATION'],
+    ['create_part_reservation', {partId: part.id, repairOrderId: ro.id, quantity: 1}, 'VALIDATION'],
+    ['release_part_reservation', {id: reservation.id, version: 1}, 'NOT_FOUND'],
+  ];
+  const before = (await repo.events()).length, otherBefore = (await other.events()).length;
+  for (const [name, args, code] of cases) refused(await s.call(name, args), code);
+  const reads = (await s.request('tools/list', {}, token({scope: 'freedms/mcp.read'}))).result.tools;
+  const listed = (await s.request('tools/list')).result.tools;
+  assert.equal(servicePartsWrites.length, 19);
+  for (const name of servicePartsWrites) {
+    assert.ok(listed.some((t: any) => t.name === name)); assert.ok(!reads.some((t: any) => t.name === name));
+    assert.equal((await s.request('tools/call', {name}, token({scope: 'freedms/mcp.read'}))).error.message, 'Tool unavailable.');
+    refused(await s.call(name, {tenantId: 'B'}), 'VALIDATION');
+  }
+  for (const role of ['viewer', 'inactive']) {
+    const factory = {tenantForSubject: async () => 'A', forTenant: () => ({...repo, membership: async () => ({tenantId: 'A', userId: 'admin-A', active: role !== 'inactive', role: (role === 'inactive' ? 'admin' : 'viewer') as 'admin'})})};
+    const handle = createHandler(factory, {decode: async () => {throw Error('Network forbidden');}}, () => now, undefined, undefined, undefined, undefined, {mcp: config});
+    for (const name of servicePartsWrites) {
+      const response = await handle({method: 'POST', path: '/mcp', authorization: `Bearer ${token()}`, body: JSON.stringify({jsonrpc: '2.0', id: 1, method: 'tools/call', params: {name, arguments: cases.find(c => c[0] === name)?.[1] ?? {}}})});
+      assert.equal(JSON.parse(response.body).error.message, 'Tool unavailable.', name);
+    }
+  }
+  assert.ok(!tools.some(t => /signatures|photos/.test(t.path) || t.method === 'DELETE'));
+  assert.equal((await repo.events()).length, before); assert.equal((await other.events()).length, otherBefore);
+  // Creates and singleton updates without foreign IDs always remain in the OAuth tenant.
+  data(await s.call('create_part', partInput));
+  data(await s.call('create_technician', {name: 'Local', skills: []}));
+  data(await s.call('create_labor_rate', {skill, laborRateCents: 300}));
+  data(await s.call('update_pricing_matrix', {version: (await repo.crmGet('pricing-matrix', 'pricing-matrix'))?.version ?? 0, enabled: false, brackets: []}));
+  assert.equal((await other.events()).length, otherBefore);
+  assert.equal((await other.crmGet('labor-rate', skill))!.laborRateCents, 100);
+  const restBefore = (await repo.events()).length;
+  for (const [path, body] of [['/parts', {...partInput, partNumber: 'REST-PART'}], ['/service/technicians', {name: 'REST Tech', skills: []}]] as const) {
+    assert.equal((await s.handle({method: 'POST', path, claims: restClaims, body: JSON.stringify(body)})).statusCode, 201);
+  }
+  const restEvents = (await repo.events()).slice(restBefore);
+  assert.equal(restEvents.length, 2); assert.ok(restEvents.every(e => !('actorType' in e)));
 });

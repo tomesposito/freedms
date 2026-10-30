@@ -71,6 +71,13 @@ export function createMcpHandler(repositories: RepositoryFactory, execute: (requ
           if (existing.statusCode !== 200) return rpc(id, {isError: true, content: [{type: 'text', text: existing.body}]});
           const vehicle = JSON.parse(existing.body).data;
           internal.body = JSON.stringify({...Object.fromEntries(Object.keys(vehicleFields).map(k => [k, vehicle[k]])), ...fields});
+        } else if (tool.name === 'update_technician' || tool.name === 'update_labor_rate') {
+          // Catalog PUTs require full forms, unlike appointment/RO/part PUTs.
+          const existing = await execute({method: 'GET', path, claims});
+          if (existing.statusCode !== 200) return rpc(id, {isError: true, content: [{type: 'text', text: existing.body}]});
+          const record = JSON.parse(existing.body).data;
+          const keys = tool.name === 'update_technician' ? ['name', 'skills'] : ['skill', 'laborRateCents'];
+          internal.body = JSON.stringify({...Object.fromEntries(keys.map(key => [key, record[key]])), ...fields});
         } else if (tool.name === 'set_lead_stage' || tool.name === 'assign_lead') {
           const existing = await execute({method: 'GET', path, claims});
           if (existing.statusCode !== 200) return rpc(id, {isError: true, content: [{type: 'text', text: existing.body}]});
