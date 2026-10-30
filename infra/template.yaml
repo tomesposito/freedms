@@ -2,6 +2,14 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: freeDMS invite-only pilot - deploy in us-east-1
 Parameters:
+  MailFrom:
+    Type: String
+    Default: ''
+    Description: Verified SES sender address for application email
+  AccessRequestNotifyTo:
+    Type: String
+    Default: ''
+    Description: Operator inbox for new pilot access requests
   McpCallbackURLs:
     Type: CommaDelimitedList
     Description: Registered MCP consumer redirect URIs (authorization code with PKCE S256)
@@ -245,6 +253,8 @@ Resources:
       Timeout: 15
       Environment:
         Variables:
+          MAIL_FROM: !Ref MailFrom
+          ACCESS_REQUEST_NOTIFY_TO: !Ref AccessRequestNotifyTo
           TABLE_NAME: !Ref Table
           DOCUMENTS_BUCKET: !Ref Documents
           ORIGIN_SECRET: !Ref OriginSecret
@@ -254,6 +264,12 @@ Resources:
           MCP_RESOURCE_URI: !Sub 'https://app.${RootDomain}/api/mcp'
       Policies:
         - Statement:
+            - Effect: Allow
+              Action: [ses:SendEmail]
+              Resource: '*'
+              Condition:
+                StringEquals:
+                  ses:FromAddress: !Ref MailFrom
             - Effect: Allow
               Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:PutItem, dynamodb:DeleteItem]
               Resource: !GetAtt Table.Arn

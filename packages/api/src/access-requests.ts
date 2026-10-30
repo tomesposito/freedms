@@ -1,12 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { inventorySizes, type AccessRequest } from '@freedms/shared';
+import type { MailSender } from './mail.js';
 import { ApiError } from './errors.js';
 import { parseBody, response, type ApiRequest, type ApiResponse } from './handler.js';
 import { OPERATOR_TENANT_ID, type RepositoryFactory } from './repository.js';
 import { emailAddress } from './users.js';
 import { invalid, onlyKeys, text } from './validation.js';
 
-export async function submitAccessRequest(request: ApiRequest, repositories: RepositoryFactory, now: Date): Promise<ApiResponse> {
+export interface AccessRequestMail {
+  sender: MailSender;
+  notifyTo?: string;
+}
+
+export async function submitAccessRequest(request: ApiRequest, repositories: RepositoryFactory, now: Date, mail?: AccessRequestMail): Promise<ApiResponse> {
   if (request.method !== 'POST') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
   const body = parseBody(request.body, 16 * 1024);
   onlyKeys(body, ['contactName', 'dealershipName', 'email', 'phone', 'inventorySize', 'currentDms', 'message', 'website']);
@@ -29,6 +35,22 @@ export async function submitAccessRequest(request: ApiRequest, repositories: Rep
     version: (existing?.version ?? 0) + 1, createdAt: existing?.createdAt ?? timestamp, updatedAt: timestamp
   };
   await repository.saveAccessRequest(record, existing?.version ?? 0);
+  const notifyTo = mail?.notifyTo?.trim();
+  if (!existing && mail?.sender.configured && notifyTo) {
+    try {
+      await mail.sender.send({
+        to: notifyTo, replyTo: record.email,
+        subject: `New freeDMS pilot access request — ${record.dealershipName}`,
+        text: [
+          `Contact name: ${record.contactName}`, `Dealership name: ${record.dealershipName}`,
+          `Email: ${record.email}`, `Phone: ${record.phone}`, `Inventory size: ${record.inventorySize}`,
+          `Current DMS: ${record.currentDms}`, `Message: ${record.message}`, `Submitted: ${record.createdAt}`
+        ].join('\n')
+      });
+    } catch (error) {
+      console.error('Access request notification failed:', error instanceof Error ? error.name : 'UnknownError');
+    }
+  }
   return response(201, {data: {received: true}});
 }
 

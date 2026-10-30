@@ -1,3 +1,6 @@
+import { SendEmailCommand } from '@aws-sdk/client-ses';
+import { mailSenderFromEnv, SesMailSender, type MailInput } from '../src/mail.js';
+import type { AccessRequestMail } from '../src/access-requests.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
@@ -10,10 +13,10 @@ import { localAuth } from '../src/local-auth.js';
 
 const fields = {contactName: 'Test Dealer', dealershipName: 'Test Motors', email: 'dealer@example.com', phone: '555-0100', inventorySize: '26-50', currentDms: 'Manual', message: 'Pilot please'};
 const start = new Date('2026-10-30T12:00:00Z');
-function setup() {
+function setup(mail?: AccessRequestMail) {
   const repositories = new MemoryRepositories();
   let now = start;
-  const handle = createHandler(repositories, {decode: async () => { throw new Error('Unexpected VIN lookup'); }}, () => now);
+  const handle = createHandler(repositories, {decode: async () => { throw new Error('Unexpected VIN lookup'); }}, () => now, undefined, undefined, undefined, undefined, {mail});
   return {repositories, repo: repositories.forTenant(OPERATOR_TENANT_ID), setNow: (date: Date) => { now = date; },
     post: (body: unknown = fields, method = 'POST') => handle({method, path: '/access-requests', body: JSON.stringify(body)})};
 }
@@ -126,4 +129,88 @@ test('access capture refuses oversized UTF-8 bodies before saving', async () => 
   const result = await post({...fields, message: 'é'.repeat(8192)});
   assert.equal(result.statusCode, 400); assert.equal(JSON.parse(result.body).error.code, 'VALIDATION');
   assert.deepEqual(await repo.accessRequests(), []);
+});
+
+const notifyTo = `operator-${fields.email}`;
+const mailFrom = `sender-${fields.email}`;
+function fakeMail(configured = true) {
+  const sent: MailInput[] = [];
+  return {sent, mail: {notifyTo, sender: {configured, send: async (input: MailInput) => { sent.push(input); }}}};
+}
+
+test('new access request emails the operator after saving, and repeats never email again', async () => {
+  const {sent, mail} = fakeMail();
+  const {post, repo} = setup({...mail, sender: {configured: true, send: async input => {
+    assert.equal((await repo.accessRequests()).length, 1);
+    sent.push(input);
+  }}});
+  assert.equal((await post()).statusCode, 201);
+  assert.deepEqual(sent, [{to: notifyTo, replyTo: fields.email,
+    subject: `New freeDMS pilot access request — ${fields.dealershipName}`,
+    text: `Contact name: ${fields.contactName}\nDealership name: ${fields.dealershipName}\nEmail: ${fields.email}\nPhone: ${fields.phone}\nInventory size: ${fields.inventorySize}\nCurrent DMS: ${fields.currentDms}\nMessage: ${fields.message}\nSubmitted: ${start.toISOString()}`}]);
+  assert.equal((await post({...fields, message: 'Updated'})).statusCode, 201);
+  assert.equal(sent.length, 1);
+  assert.equal((await repo.accessRequest(fields.email))?.message, 'Updated');
+});
+
+test('notification labels include blank optional fields', async () => {
+  const {sent, mail} = fakeMail(); const {post} = setup(mail);
+  await post({contactName: fields.contactName, dealershipName: fields.dealershipName, email: fields.email});
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].text.includes('\nPhone: \nInventory size: \nCurrent DMS: \nMessage: \nSubmitted: '));
+});
+
+test('honeypot and rejected requests never send email', async () => {
+  const {sent, mail} = fakeMail(); const {post, repo} = setup(mail);
+  assert.equal((await post({website: 'bot'})).statusCode, 201);
+  assert.equal((await post({...fields, email: ''})).statusCode, 400);
+  assert.deepEqual(sent, []); assert.deepEqual(await repo.accessRequests(), []);
+});
+
+test('notification failures preserve success and log only the error name', async t => {
+  const logs: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => { logs.push(args); });
+  for (const failure of [new TypeError(JSON.stringify(fields)), fields]) {
+    const {post, repo} = setup({notifyTo, sender: {configured: true, send: async () => { throw failure; }}});
+    const result = await post();
+    assert.equal(result.statusCode, 201);
+    assert.deepEqual(JSON.parse(result.body), {data: {received: true}});
+    assert.equal((await repo.accessRequests()).length, 1);
+  }
+  assert.deepEqual(logs, [['Access request notification failed:', 'TypeError'], ['Access request notification failed:', 'UnknownError']]);
+});
+
+test('absent or blank mail configuration silently stores submissions without sending', async () => {
+  for (const recipient of [undefined, '', '  ']) {
+    const {sent, mail} = fakeMail(); const {post, repo} = setup({...mail, notifyTo: recipient});
+    assert.equal((await post()).statusCode, 201);
+    assert.equal((await repo.accessRequests()).length, 1); assert.deepEqual(sent, []);
+  }
+  const {sent, mail} = fakeMail(false); const {post, repo} = setup(mail);
+  assert.equal((await post()).statusCode, 201);
+  assert.equal((await repo.accessRequests()).length, 1); assert.deepEqual(sent, []);
+  const unconfigured = setup({notifyTo, sender: mailSenderFromEnv({})});
+  assert.equal((await unconfigured.post()).statusCode, 201);
+  assert.equal((await unconfigured.repo.accessRequests()).length, 1);
+});
+
+test('mail factory defaults to no-op and SES shapes text commands with optional reply-to', async () => {
+  const commands: SendEmailCommand[] = [];
+  const client = {send: async (command: SendEmailCommand) => { commands.push(command); return {}; }};
+  const input = {to: notifyTo, subject: 'Test — notification', text: 'Plain text'};
+  for (const env of [{}, {MAIL_FROM: ''}, {MAIL_FROM: '  '}]) {
+    const sender = mailSenderFromEnv(env, client);
+    assert.equal(sender.configured, false); await sender.send(input);
+  }
+  assert.equal(commands.length, 0);
+  const sender = mailSenderFromEnv({MAIL_FROM: `  ${mailFrom}  `}, client);
+  assert.equal(sender.configured, true); assert.ok(sender instanceof SesMailSender);
+  await sender.send({...input, replyTo: fields.email}); await sender.send(input);
+  assert.equal(commands.length, 2);
+  const expected = {Source: mailFrom, Destination: {ToAddresses: [notifyTo]}, Message: {
+    Subject: {Data: input.subject, Charset: 'UTF-8'}, Body: {Text: {Data: input.text, Charset: 'UTF-8'}}
+  }};
+  assert.ok(commands[0] instanceof SendEmailCommand);
+  assert.deepEqual(commands[0].input, {...expected, ReplyToAddresses: [fields.email]});
+  assert.deepEqual(commands[1].input, expected);
 });

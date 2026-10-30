@@ -1,3 +1,4 @@
+import { mailSenderFromEnv } from './mail.js';
 import { analyticsFromEnv } from './analytics.js';
 import { providerFromEnv } from './ai-provider.js';
 import { DynamoRepositories } from './dynamo.js';
@@ -8,5 +9,5 @@ import { NhtsaVinDecoder } from './vin.js';
 if (!process.env.ORIGIN_SECRET || process.env.ORIGIN_SECRET.length < 32) throw new Error('ORIGIN_SECRET is required');
 const repositories = new DynamoRepositories(process.env.TABLE_NAME!, undefined, true);
 const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(),
-  new S3DocumentStore(process.env.DOCUMENTS_BUCKET!), providerFromEnv(), analyticsFromEnv(), undefined, {hosted: true});
+  new S3DocumentStore(process.env.DOCUMENTS_BUCKET!), providerFromEnv(), analyticsFromEnv(), undefined, {hosted: true, mail: {sender: mailSenderFromEnv(), notifyTo: process.env.ACCESS_REQUEST_NOTIFY_TO}});
 export const handler = gatewayHandler(handle, process.env.TOKEN_ISSUER!, process.env.TOKEN_AUDIENCE!, process.env.ORIGIN_SECRET);

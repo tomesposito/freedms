@@ -1,4 +1,4 @@
-import { submitAccessRequest } from './access-requests.js';
+import { submitAccessRequest, type AccessRequestMail } from './access-requests.js';
 import { createMcpHandler, isMcpPath } from './mcp/server.js';
 import { mcpConfig, type McpConfig } from './mcp/auth.js';
 import { compressResponse } from './compression.js';
@@ -52,7 +52,7 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
   if (!body || Buffer.byteLength(body) > limit) throw invalid(`A JSON body of at most ${limit} bytes is required.`);
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
-export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender = fetchWebhookSender, options: {hosted?: boolean; mcp?: McpConfig} = {}) {
+export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender = fetchWebhookSender, options: {hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail} = {}) {
   const handle = async (request: ApiRequest): Promise<ApiResponse> => {
     if (isMcpPath(request.path)) return mcp(request);
     try {
@@ -72,7 +72,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         return compressResponse(result, request.acceptEncoding);
       }
       if (request.path.startsWith('/invite/')) return compressResponse(await publicInvite(request, repositories, now(), options.hosted), request.acceptEncoding);
-      if (request.path.replace(/\/$/, '') === '/access-requests') return compressResponse(await submitAccessRequest(request, repositories, now()), request.acceptEncoding);
+      if (request.path.replace(/\/$/, '') === '/access-requests') return compressResponse(await submitAccessRequest(request, repositories, now(), options.mail), request.acceptEncoding);
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');

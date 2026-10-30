@@ -33,6 +33,20 @@ request checks active membership, so deactivation blocks existing sessions.
 Adding identities and recovering authenticators remain operator responsibilities.
 Hosted account screens do not expose the independent local-development MFA system.
 
+## Access-request email
+
+Verify your sender address or domain in SES in the deployment region and publish
+its DKIM DNS records. Set the template parameters `MailFrom` (your verified sender
+address) and `AccessRequestNotifyTo` (your operator inbox); these supply `MAIL_FROM`
+and `ACCESS_REQUEST_NOTIFY_TO` to the API. Both default to empty. With either value
+unset, submissions are still stored and no email is attempted.
+
+SES starts in the sandbox, where recipients must also be verified. Verifying your
+own operator inbox is enough for the pilot. Request SES production access when
+you want to send to unverified recipients; filing that request is an operator step.
+Only new requests trigger email; repeat submissions update the stored record.
+Mail failures leave the saved request intact for the operator readout.
+
 ## Local verification
 
 Use Node 24 (`.nvmrc`), then:
