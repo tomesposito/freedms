@@ -80,8 +80,8 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (options.hosted && ((path === '/admin/users' && method === 'POST') || /^\/(account|admin)\/mfa(\/|$)/.test(path)))
           throw new ApiError(403, 'HOSTED_ACCOUNT_MANAGEMENT', 'Pilot accounts and authenticator recovery are managed by the pilot operator.');
         if (/^\/deals\/[^/]+\/(buyers-order\/signatures|documents\/[^/]+\/(signatures|replace))$/.test(path) || /^\/service\/repair-orders\/[^/]+\/signatures$/.test(path)) return await signatures(request, principal, repository, now(), documents);
-        if (/^\/(parts|service)(\/|$)/.test(path)) {
-          // Tag every transactional side effect, including stock, reservations and journals.
+        if (/^\/(parts|service|accounting)(\/|$)/.test(path)) {
+          // Tag every transactional side effect, including stock, reservations, journals and reconciliation locks.
           // Keep ordinary REST events and the operation's validation/stock rules unchanged.
           const crmWrite: TenantRepository['crmWrite'] = (writes, vehicles) => repository.crmWrite(
             writes.map(write => ({...write, event: {...write.event, actorType: 'agent'}})), vehicles);
@@ -90,6 +90,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
             const value = Reflect.get(target, key);
             return typeof value === 'function' ? value.bind(target) : value;
           }}) : repository;
+          if (path.startsWith('/accounting')) return await accounting(request, principal, repo, now());
           return path.startsWith('/parts') ? await parts(request, principal, repo, now()) : await service(request, principal, repo, now(), documents);
         }
         if (/^\/compliance(\/|$)/.test(path) || /^\/deals\/[^/]+\/(compliance|compliance-checks)(\/|$)/.test(path)) return await compliance(request, principal, repository, now());
@@ -107,7 +108,6 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         const record = (data: import('@freedms/shared').BehavioralEvent) => track(repository, principal, now(), data, vendor);
         if (/^\/analytics(\/|$)/.test(path)) return await analytics(request, principal, repository, record);
         if (/^\/quick-entry(\/|$)/.test(path)) return await quickEntry(request, principal, repository, now(), provider);
-        if (/^\/accounting(\/|$)/.test(path)) return await accounting(request, principal, repository, now());
         if (/^\/fi-products(\/|$)/.test(path)) return await fiProducts(request, principal, repository, now(), request.agent);
         if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repository, now());
         if (/^\/reports\/(technicians|departments|forecasts)([/.]|$)/.test(path)) return await reportsP3(request, repository, now());

@@ -17,7 +17,7 @@ function token(overrides: Record<string, unknown> = {}, header = {alg: 'RS256', 
   const data = [header, {sub: 'admin-A', iss: config.issuer, client_id: config.clientId, token_use: 'access', scope: 'freedms/mcp.write', exp: now.getTime() / 1000 + 3600, ...overrides}].map(v => Buffer.from(JSON.stringify(v)).toString('base64url')).join('.');
   return `${data}.${sign('RSA-SHA256', Buffer.from(data), privateKey).toString('base64url')}`;
 }
-async function setup(provider?: QuickEntryProvider) {
+async function setup(provider?: QuickEntryProvider, clock: () => Date = () => now) {
   const repositories = new MemoryRepositories();
   for (const tenantId of ['A', 'B']) {
     const userId = `admin-${tenantId}`;
@@ -25,7 +25,7 @@ async function setup(provider?: QuickEntryProvider) {
       {id: 'provision', tenantId, actorId: userId, aggregateId: tenantId, aggregateVersion: 1, type: 'tenant.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'});
     await seedDemo(repositories, tenantId, userId, now);
   }
-  const handle = createHandler(repositories, {decode: async () => {throw Error('Network forbidden');}}, () => now, undefined, provider, undefined, async () => ({status: 204}), {mcp: config});
+  const handle = createHandler(repositories, {decode: async () => {throw Error('Network forbidden');}}, clock, undefined, provider, undefined, async () => ({status: 204}), {mcp: config});
   const request = async (method: string, params: unknown = {}, jwt = token()) => {
     const response = await handle({method: 'POST', path: '/mcp', authorization: `Bearer ${jwt}`, body: JSON.stringify({jsonrpc: '2.0', id: 1, method, params})});
     return {response, ...JSON.parse(response.body)};
@@ -38,16 +38,16 @@ test('MCP initialize, ping, scoped tool discovery, metadata and adapter dispatch
   const initialized = await s.request('initialize', {protocolVersion: '2025-11-25', capabilities: {}, clientInfo: {name: 'offline', version: '1'}});
   assert.equal(initialized.result.protocolVersion, '2025-11-25'); assert.ok(initialized.result.capabilities.tools);
   assert.deepEqual((await s.request('ping')).result, {});
-  assert.equal((await s.request('tools/list')).result.tools.length, 61);
+  assert.equal((await s.request('tools/list')).result.tools.length, 89);
   const reads = (await s.request('tools/list', {}, token({scope: 'freedms/mcp.read'}))).result.tools;
-  assert.equal(reads.length, 17); assert.ok(reads.every((t: {annotations: {readOnlyHint: boolean}}) => t.annotations.readOnlyHint));
+  assert.equal(reads.length, 29); assert.ok(reads.every((t: {annotations: {readOnlyHint: boolean}}) => t.annotations.readOnlyHint));
   assert.equal((await s.request('tools/call', {name: 'create_vehicle', arguments: {}}, token({scope: 'freedms/mcp.read'}))).error.message, 'Tool unavailable.');
   for (const sub of ['unknown', 'admin-C']) assert.deepEqual((await s.request('tools/list', {}, token({sub}))).result.tools, []);
   const metadata = await s.handle({method: 'GET', path: '/.well-known/oauth-protected-resource'});
   assert.deepEqual(JSON.parse(metadata.body).authorization_servers, [config.issuer]); assert.equal(JSON.parse(metadata.body).resource, config.resource);
   const gateway = gatewayHandler(s.handle, 'web-issuer', 'web-audience');
   const result = await gateway({rawPath: '/mcp', requestContext: {http: {method: 'POST'}}, headers: {Authorization: `Bearer ${token()}`}, body: JSON.stringify({jsonrpc: '2.0', id: 7, method: 'tools/list'})});
-  assert.equal(JSON.parse(result.body).result.tools.length, 61);
+  assert.equal(JSON.parse(result.body).result.tools.length, 89);
   assert.deepEqual(localAuth('/mcp', false, 'access-token', {verify: () => {throw Error('Must not verify as ID token');}}), {authorization: 'Bearer access-token'});
 });
 test('MCP rejects invalid access tokens with a resource challenge and caches offline JWKS', async () => {
@@ -66,7 +66,7 @@ test('original fourteen MCP reads preserve REST resources and tenant isolation',
   const s = await setup(), repo = s.repositories.forTenant('A');
   const ids: Record<string, string> = {get_vehicle: (await repo.list({}))[0].id, get_lead: (await repo.crmList('lead'))[0].id, get_customer: (await repo.crmList('customer'))[0].id, get_deal: (await repo.crmList('deal'))[0].id};
   const before = (await repo.events()).length;
-  for (const tool of tools.filter(t => t.method === 'GET' && !deskingReads.includes(t.name))) {
+  for (const tool of tools.filter(t => t.method === 'GET' && !deskingReads.includes(t.name) && !accountingTools.includes(t))) {
     const args = ids[tool.name] ? {id: ids[tool.name]} : {};
     const result = await s.call(tool.name, args); assert.equal(result.isError, false, tool.name);
     const rest = await s.handle({method: 'GET', path: tool.path.replace(':id', ids[tool.name]), claims: {sub: 'admin-A', 'custom:tenant_id': 'A', iss: '', aud: '', exp: 1, token_use: 'id'}});
@@ -584,4 +584,167 @@ test('all service/parts MCP writes enforce scopes, roles and tenant isolation wi
   }
   const restEvents = (await repo.events()).slice(restBefore);
   assert.equal(restEvents.length, 2); assert.ok(restEvents.every(e => !('actorType' in e)));
+});
+
+const accountingTools = tools.filter(t => t.path.startsWith('/accounting/') && t.name !== 'get_trial_balance');
+const billInput = {amount: 10000, party: 'Vendor', reference: 'MCP bill', dueDate: '2026-11-01', offsetAccountId: 'account-5000', vehicleId: null};
+const periodInput = {from: '2026-10-01', to: '2026-10-29', opening: 0, closing: 0};
+const statementCsv = 'id,date,description,amountCents\nimported,2026-10-28,Withdrawal,-100';
+const manualLine = {id: 'manual', date: '2026-10-28', description: 'Payment', amount: -4000};
+function balanced(entry: any) {
+  assert.ok(entry.lines.every((l: any) => Number.isSafeInteger(l.debit) && Number.isSafeInteger(l.credit)));
+  assert.equal(entry.lines.reduce((n: number, l: any) => n + l.debit, 0), entry.lines.reduce((n: number, l: any) => n + l.credit, 0));
+}
+
+test('accounting MCP accounts, AP/AR, reversals and reports preserve REST rules and attribution', async () => {
+  const s = await setup(), repo = s.repositories.forTenant('A'), before = (await repo.events()).length;
+  const account = data(await s.call('create_gl_account', {code: '5999', name: 'Expense', type: 'expense', active: true}));
+  assert.equal(account.id, 'account-5999');
+  const update = {id: account.id, version: 1, name: 'Renamed expense', active: true};
+  assert.equal(data(await s.call('update_gl_account', update)).name, update.name);
+  refused(await s.call('update_gl_account', update), 'CONFLICT');
+  refused(await s.call('create_gl_account', {code: '5999', name: 'Duplicate', type: 'expense'}), 'CONFLICT');
+  for (const extra of [{code: '5998'}, {type: 'asset'}]) {
+    refused(await s.call('update_gl_account', {...update, version: 2, ...extra}), 'VALIDATION');
+    const rest = await s.handle({method: 'PUT', path: `/accounting/accounts/${account.id}`, claims: restClaims, body: JSON.stringify({version: 2, name: 'No change', active: true, ...extra})});
+    assert.equal(JSON.parse(rest.body).error.code, 'VALIDATION');
+  }
+  const cash = data(await s.call('create_cash_account', {code: '1099', name: 'MCP bank'}));
+  assert.deepEqual(data(await s.call('get_cash_register', {id: cash.id})), []);
+  for (const kind of ['ap', 'ar']) {
+    const input = {...billInput, offsetAccountId: kind === 'ap' ? account.id : 'account-4000'};
+    const entry = data(await s.call(kind === 'ap' ? 'create_ap_bill' : 'create_ar_invoice', input)); balanced(entry);
+    const report = data(await s.call(`get_${kind}_aging`, {asOf: '2026-10-30'}));
+    const item = report.rows.find((r: any) => r.id === entry.lines[0].itemId); assert.ok(item); assert.equal(item.balance, 10000);
+    const payment = {id: item.id, amount: 4000, cashAccountId: cash.id, reference: 'Partial payment'};
+    refused(await s.call(`record_${kind}_payment`, {...payment, amount: 10001}), 'VALIDATION');
+    balanced(data(await s.call(`record_${kind}_payment`, payment)));
+    assert.equal(data(await s.call(`get_${kind}_aging`)).rows.find((r: any) => r.id === item.id).balance, 6000);
+    for (const amount of [-1, 1.5, 0]) refused(await s.call(kind === 'ap' ? 'create_ap_bill' : 'create_ar_invoice', {...input, amount}), 'VALIDATION');
+  }
+  refused(await s.call('create_ap_bill', {...billInput, offsetAccountId: 'account-4000'}), 'VALIDATION');
+  const original = data(await s.call('list_journal_entries')).find((e: any) => e.source === 'ap');
+  const reversal = data(await s.call('reverse_journal_entry', {id: original.id})); balanced(reversal);
+  assert.deepEqual(reversal.lines.map((l: any) => [l.debit, l.credit]), original.lines.map((l: any) => [l.credit, l.debit]));
+  assert.equal(data(await s.call('list_journal_entries')).find((e: any) => e.id === original.id).reversed, true);
+  refused(await s.call('reverse_journal_entry', {id: original.id}), 'CONFLICT');
+  refused(await s.call('reverse_journal_entry', {id: reversal.id}), 'CONFLICT');
+  const period = data(await s.call('create_reconciliation', {accountId: cash.id, ...periodInput}));
+  const events = (await repo.events()).slice(before); assert.ok(events.length > 10);
+  assert.ok(events.every(e => e.actorType === 'agent' && e.actorId === 'admin-A'));
+  const readBefore = (await repo.events()).length;
+  for (const t of accountingTools.filter(t => t.method === 'GET')) {
+    const args = t.name === 'get_deal_accounting' ? {id: (await repo.crmList('deal'))[0].id} : t.name === 'get_cash_register' ? {id: cash.id} : t.name === 'get_reconciliation' ? {id: period.id} : {};
+    const result = await s.call(t.name, args, token({scope: 'freedms/mcp.read'})); data(result);
+    const rest = await s.handle({method: 'GET', path: t.path.replace(':id', args.id!), claims: restClaims});
+    assert.deepEqual(result.structuredContent, JSON.parse(rest.body), t.name);
+  }
+  for (const [name, query] of [['list_journal_entries', {from: '2026-10-01', to: '2026-10-30', accountId: cash.id}], ['get_departmental_statement', {from: '2026-10-01', to: '2026-10-29'}], ['get_commissions', {from: '2026-10-01', to: '2026-10-29'}]] as const) {
+    const t = tools.find(t => t.name === name)!;
+    const rest = await s.handle({method: 'GET', path: t.path, query, claims: restClaims});
+    assert.deepEqual((await s.call(name, query)).structuredContent, JSON.parse(rest.body));
+  }
+  assert.equal((await repo.events()).length, readBefore);
+  const rest = await s.handle({method: 'POST', path: '/accounting/cash', claims: restClaims, body: JSON.stringify({code: '1096', name: 'REST bank'})});
+  assert.equal(rest.statusCode, 201);
+  const restEvents = (await repo.events()).slice(readBefore);
+  assert.equal(restEvents.length, 2); assert.ok(restEvents.every(e => !('actorType' in e)));
+});
+
+test('accounting MCP reconciliation preview/import, signed amounts, matching and closing use service invariants', async () => {
+  let date = new Date('2026-10-28T12:00:00Z');
+  const s = await setup(undefined, () => date), repo = s.repositories.forTenant('A'), before = (await repo.events()).length;
+  const cash = data(await s.call('create_cash_account', {code: '1098', name: 'Reconciliation bank'}));
+  const bill = data(await s.call('create_ap_bill', billInput));
+  data(await s.call('record_ap_payment', {id: bill.lines[0].itemId, amount: 4000, cashAccountId: cash.id, reference: 'Withdrawal'}));
+  const register = data(await s.call('get_cash_register', {id: cash.id})); assert.equal(register[0].amount, -4000);
+  date = now;
+  refused(await s.call('create_reconciliation', {accountId: cash.id, ...periodInput, to: '2026-10-30'}), 'VALIDATION');
+  refused(await s.call('create_reconciliation', {accountId: cash.id, ...periodInput, opening: -100}), 'VALIDATION');
+  let period = data(await s.call('create_reconciliation', {accountId: cash.id, ...periodInput, closing: -4000}));
+  const previewBefore = (await repo.events()).length;
+  const preview = data(await s.call('preview_reconciliation_statement', {id: period.id, csv: statementCsv}));
+  assert.equal(preview.validCount, 1); assert.equal((await repo.events()).length, previewBefore);
+  const importArgs = {id: period.id, version: period.version, csv: statementCsv, previewToken: preview.previewToken};
+  refused(await s.call('import_reconciliation_statement', {...importArgs, previewToken: 'wrong'}), 'CONFLICT');
+  period = data(await s.call('import_reconciliation_statement', importArgs));
+  refused(await s.call('import_reconciliation_statement', importArgs), 'CONFLICT');
+  for (const csv of [statementCsv, 'id,date,description,amountCents\nbad,2026-10-30,Bad,1']) {
+    const p = data(await s.call('preview_reconciliation_statement', {id: period.id, csv}));
+    refused(await s.call('import_reconciliation_statement', {id: period.id, version: period.version, csv, previewToken: p.previewToken}), 'VALIDATION');
+  }
+  period = data(await s.call('add_reconciliation_line', {id: period.id, version: period.version, line: manualLine}));
+  refused(await s.call('close_reconciliation', {id: period.id, version: period.version}), 'VALIDATION');
+  refused(await s.call('add_reconciliation_line', {id: period.id, version: 1, line: {...manualLine, id: 'stale'}}), 'CONFLICT');
+  refused(await s.call('match_reconciliation_line', {id: period.id, version: period.version, lineId: 'imported', registerId: register[0].id}), 'VALIDATION');
+  const match = (registerId: string | null) => s.call('match_reconciliation_line', {id: period.id, version: period.version, lineId: manualLine.id, registerId});
+  period = data(await match(register[0].id)); assert.equal(period.lines.find((l: any) => l.id === 'manual').registerId, register[0].id);
+  refused(await s.call('match_reconciliation_line', {id: period.id, version: 1, lineId: 'manual', registerId: null}), 'CONFLICT');
+  period = data(await match(null)); assert.equal(period.lines.find((l: any) => l.id === 'manual').registerId, null);
+  period = data(await match(register[0].id));
+  period = data(await s.call('amend_reconciliation', {id: period.id, version: period.version, closing: -4100}));
+  refused(await s.call('amend_reconciliation', {id: period.id, version: 1, closing: -4000}), 'CONFLICT');
+  refused(await s.call('remove_reconciliation_line', {id: period.id, version: 1, lineId: 'imported'}), 'CONFLICT');
+  period = data(await s.call('remove_reconciliation_line', {id: period.id, version: period.version, lineId: 'imported'}));
+  refused(await s.call('close_reconciliation', {id: period.id, version: period.version}), 'VALIDATION');
+  period = data(await s.call('amend_reconciliation', {id: period.id, version: period.version, closing: -4000}));
+  assert.equal(period.difference, 0); assert.equal(period.statementDifference, 0); assert.equal(period.unmatchedCount, 0);
+  refused(await s.call('close_reconciliation', {id: period.id, version: 1}), 'CONFLICT');
+  period = data(await s.call('close_reconciliation', {id: period.id, version: period.version})); assert.equal(period.status, 'reconciled');
+  refused(await s.call('amend_reconciliation', {id: period.id, version: period.version, closing: 0}), 'CONFLICT');
+  refused(await s.call('create_reconciliation', {accountId: cash.id, from: '2026-10-29', to: '2026-10-29', opening: -4000, closing: -4000}), 'VALIDATION');
+  const events = (await repo.events()).slice(before); assert.ok(events.every(e => e.actorType === 'agent' && e.actorId === 'admin-A'));
+});
+
+test('every accounting MCP tool enforces scope, membership and tenant isolation without refused-call events', async () => {
+  const s = await setup(), repo = s.repositories.forTenant('A'), other = s.repositories.forTenant('B'), jwt = token({sub: 'admin-B'});
+  const cash = data(await s.call('create_cash_account', {code: '1097', name: 'Foreign bank'}, jwt));
+  const gl = data(await s.call('create_gl_account', {code: '5997', name: 'Foreign expense', type: 'expense'}, jwt));
+  const bill = data(await s.call('create_ap_bill', billInput, jwt));
+  const invoice = data(await s.call('create_ar_invoice', {...billInput, offsetAccountId: 'account-4000'}, jwt));
+  const period = data(await s.call('create_reconciliation', {accountId: cash.id, ...periodInput}, jwt));
+  const cases: [string, Record<string, unknown>, string][] = [
+    ['update_gl_account', {id: gl.id, version: 1, name: 'Foreign', active: true}, 'NOT_FOUND'],
+    ['get_cash_register', {id: cash.id}, 'NOT_FOUND'],
+    ['reverse_journal_entry', {id: bill.id}, 'NOT_FOUND'],
+    ['get_deal_accounting', {id: (await other.crmList('deal'))[0].id}, 'NOT_FOUND'],
+    ['record_ap_payment', {id: bill.lines[0].itemId, amount: 1, cashAccountId: cash.id, reference: 'Foreign'}, 'NOT_FOUND'],
+    ['record_ar_payment', {id: invoice.lines[0].itemId, amount: 1, cashAccountId: cash.id, reference: 'Foreign'}, 'NOT_FOUND'],
+    ['create_ap_bill', {...billInput, offsetAccountId: gl.id}, 'NOT_FOUND'],
+    ['create_ar_invoice', {...billInput, offsetAccountId: gl.id}, 'NOT_FOUND'],
+    ['create_reconciliation', {accountId: cash.id, ...periodInput}, 'NOT_FOUND'],
+    ['get_reconciliation', {id: period.id}, 'NOT_FOUND'],
+    ['preview_reconciliation_statement', {id: period.id, csv: statementCsv}, 'NOT_FOUND'],
+    ['import_reconciliation_statement', {id: period.id, version: 1, csv: statementCsv, previewToken: 'foreign'}, 'NOT_FOUND'],
+    ['add_reconciliation_line', {id: period.id, version: 1, line: manualLine}, 'NOT_FOUND'],
+    ['amend_reconciliation', {id: period.id, version: 1, closing: 0}, 'NOT_FOUND'],
+    ['remove_reconciliation_line', {id: period.id, version: 1, lineId: 'foreign'}, 'NOT_FOUND'],
+    ['match_reconciliation_line', {id: period.id, version: 1, lineId: 'foreign', registerId: null}, 'NOT_FOUND'],
+    ['close_reconciliation', {id: period.id, version: 1}, 'NOT_FOUND'],
+  ];
+  const before = (await repo.events()).length, otherBefore = (await other.events()).length;
+  for (const [name, args, code] of cases) refused(await s.call(name, args), code);
+  const reads = (await s.request('tools/list', {}, token({scope: 'freedms/mcp.read'}))).result.tools;
+  const listed = (await s.request('tools/list')).result.tools;
+  assert.equal(accountingTools.length, 28);
+  for (const t of accountingTools) {
+    assert.ok(listed.some((r: any) => r.name === t.name));
+    assert.equal(reads.some((r: any) => r.name === t.name), t.method === 'GET', t.name);
+    if (t.method !== 'GET') assert.equal((await s.request('tools/call', {name: t.name}, token({scope: 'freedms/mcp.read'}))).error.message, 'Tool unavailable.');
+    refused(await s.call(t.name, {tenantId: 'B'}), 'VALIDATION');
+  }
+  for (const role of ['viewer', 'inactive']) {
+    const factory = {tenantForSubject: async () => 'A', forTenant: () => ({...repo, membership: async () => ({tenantId: 'A', userId: 'admin-A', active: role !== 'inactive', role: (role === 'inactive' ? 'admin' : 'viewer') as 'admin'})})};
+    const handle = createHandler(factory, {decode: async () => {throw Error('Network forbidden');}}, () => now, undefined, undefined, undefined, undefined, {mcp: config});
+    for (const t of accountingTools) {
+      const response = await handle({method: 'POST', path: '/mcp', authorization: `Bearer ${token()}`, body: JSON.stringify({jsonrpc: '2.0', id: 1, method: 'tools/call', params: {name: t.name}})});
+      assert.equal(JSON.parse(response.body).error.message, 'Tool unavailable.', t.name);
+    }
+  }
+  for (const t of accountingTools.filter(t => t.method === 'GET' && !t.path.includes(':id'))) {
+    const result = await s.call(t.name); data(result);
+    assert.ok(!result.content[0].text.includes('"tenantId":"B"'));
+    for (const id of [cash.id, gl.id, bill.id, invoice.id, period.id]) assert.ok(!result.content[0].text.includes(id), t.name);
+  }
+  assert.equal((await repo.events()).length, before); assert.equal((await other.events()).length, otherBefore);
 });

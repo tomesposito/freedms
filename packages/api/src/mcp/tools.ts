@@ -1,5 +1,9 @@
-import { appointmentStatuses, repairOrderStatuses, repairOrderPayTypes, serviceSkills, communicationTypes, dealStatuses, fiCategories, housingStatuses, leadSources, leadStages } from '@freedms/shared';
+import { accountTypes, appointmentStatuses, repairOrderStatuses, repairOrderPayTypes, serviceSkills, communicationTypes, dealStatuses, fiCategories, housingStatuses, leadSources, leadStages } from '@freedms/shared';
 const string = {type: 'string'}, integer = {type: 'integer'}, money = {type: 'integer', minimum: 0, description: 'Integer USD cents'};
+const signedMoney = {type: 'integer', description: 'Signed integer USD cents'};
+const payableFields = {amount: money, party: string, reference: string, dueDate: string, offsetAccountId: string, vehicleId: {type: ['string', 'null']}};
+const paymentFields = {id: string, amount: money, cashAccountId: string, reference: string};
+const periodVersion = {id: string, version: integer};
 const page = {limit: integer, offset: integer}, range = {from: string, to: string};
 export const vehicleFields = {
   stockNumber: string, vin: string, year: integer, make: string, model: string, trim: string,
@@ -76,6 +80,37 @@ function tool(name: string, path: string, properties: Record<string, unknown> = 
   return {name, path, method, description, inputSchema: {type: 'object', properties, required, additionalProperties: false}};
 }
 export const tools = [
+
+  tool('list_gl_accounts', '/accounting/accounts'),
+  tool('create_gl_account', '/accounting/accounts', {code: string, name: string, type: {type: 'string', enum: accountTypes}, active: {type: 'boolean'}}, ['code', 'name', 'type'], 'POST'),
+  tool('update_gl_account', '/accounting/accounts/:id', {...periodVersion, name: string, active: {type: 'boolean'}}, ['id', 'version', 'name', 'active'], 'PUT'),
+  tool('list_journal_entries', '/accounting/journal', {...range, accountId: string, dealId: string, repairOrderId: string, partsSaleId: string}),
+  // The UI reverses on a single click without a confirmation dialog; no confirm argument is needed.
+  tool('reverse_journal_entry', '/accounting/journal/:id/reverse', {id: string}, ['id'], 'POST'),
+  // Deal posting remains automatic via set_deal_status; there is deliberately no separate posting tool.
+  tool('get_deal_accounting', '/accounting/deals/:id', {id: string}, ['id']),
+  tool('get_commissions', '/accounting/commissions', range),
+  tool('get_account_balances', '/accounting/balances'),
+  tool('get_departmental_statement', '/accounting/departmental', range),
+  tool('get_ap_aging', '/accounting/ap', {asOf: string}),
+  tool('get_ar_aging', '/accounting/ar', {asOf: string}),
+  tool('create_ap_bill', '/accounting/ap', payableFields, ['amount', 'party', 'reference', 'dueDate', 'offsetAccountId'], 'POST'),
+  tool('create_ar_invoice', '/accounting/ar', payableFields, ['amount', 'party', 'reference', 'dueDate', 'offsetAccountId'], 'POST'),
+  tool('record_ap_payment', '/accounting/ap/:id/payments', paymentFields, Object.keys(paymentFields), 'POST', 'Record payment against an item id from get_ap_aging.'),
+  tool('record_ar_payment', '/accounting/ar/:id/payments', paymentFields, Object.keys(paymentFields), 'POST', 'Record payment against an item id from get_ar_aging.'),
+  tool('list_cash_accounts', '/accounting/cash'),
+  tool('get_cash_register', '/accounting/cash/:id', {id: string}, ['id']),
+  tool('create_cash_account', '/accounting/cash', {code: string, name: string}, ['code', 'name'], 'POST'),
+  tool('list_reconciliations', '/accounting/reconciliations'),
+  tool('get_reconciliation', '/accounting/reconciliations/:id', {id: string}, ['id']),
+  tool('create_reconciliation', '/accounting/reconciliations', {accountId: string, ...range, opening: signedMoney, closing: signedMoney}, ['accountId', 'from', 'to', 'opening', 'closing'], 'POST'),
+  tool('preview_reconciliation_statement', '/accounting/reconciliations/:id/preview', {id: string, csv: string}, ['id', 'csv'], 'POST', 'Preview statement CSV (id,date,description,amountCents); changes nothing and returns the token required for import.'),
+  tool('import_reconciliation_statement', '/accounting/reconciliations/:id/import', {...periodVersion, csv: string, previewToken: string}, ['id', 'version', 'csv', 'previewToken'], 'POST'),
+  tool('add_reconciliation_line', '/accounting/reconciliations/:id/lines', {...periodVersion, line: {type: 'object', properties: {id: string, date: string, description: string, amount: {...signedMoney, not: {const: 0}}}, required: ['id', 'date', 'description', 'amount'], additionalProperties: false}}, ['id', 'version', 'line'], 'POST'),
+  tool('amend_reconciliation', '/accounting/reconciliations/:id/amend', {...periodVersion, closing: signedMoney}, ['id', 'version', 'closing'], 'POST'),
+  tool('remove_reconciliation_line', '/accounting/reconciliations/:id/remove', {...periodVersion, lineId: string}, ['id', 'version', 'lineId'], 'POST'),
+  tool('match_reconciliation_line', '/accounting/reconciliations/:id/match', {...periodVersion, lineId: string, registerId: nullableString}, ['id', 'version', 'lineId', 'registerId'], 'POST', 'Match a statement line to a cash register entry; pass null to unmatch.'),
+  tool('close_reconciliation', '/accounting/reconciliations/:id/close', periodVersion, ['id', 'version'], 'POST'),
   tool('search_vehicles', '/vehicles', {...page, status: vehicleFields.status, search: string}),
   tool('get_vehicle', '/vehicles/:id', {id: string}, ['id']),
   tool('list_leads', '/leads', {...page, search: string, stage: string, assignee: string}),
