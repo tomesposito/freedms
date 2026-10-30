@@ -6,7 +6,7 @@ import { parseBody, response, type ApiRequest } from './handler.js';
 import { choice } from './crm-validation.js';
 import { invalid, money, onlyKeys, text, version } from './validation.js';
 import type { TenantRepository } from './repository.js';
-export async function fiProducts(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date) {
+export async function fiProducts(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date, agent = false) {
   const path = request.path.replace(/\/$/, ''), method = request.method.toUpperCase();
   if (path !== '/fi-products' && !/^\/fi-products\/[^/]+$/.test(path)) throw missing();
   const id = path === '/fi-products' ? undefined : requireId(path.split('/')[2]);
@@ -25,6 +25,6 @@ export async function fiProducts(request: ApiRequest, principal: Principal, repo
   const date = now.toISOString();
   const record: FiProduct = {id: id ?? randomUUID(), kind: 'fi-product', tenantId: principal.tenantId, version: expected + 1, createdAt: old?.createdAt ?? date, updatedAt: date,
     name: text(b.name, 'Name', 120), category: choice(b.category, fiCategories, 'category'), cost: money(b.cost, 'Cost'), retailPrice: money(b.retailPrice, 'Retail price'), termNotes: text(b.termNotes, 'Term/coverage notes', 500, true), active};
-  await repo.crmWrite([{record, expectedVersion: expected, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: id ? 'fi-product.updated' : 'fi-product.created', occurredAt: date, deliveryStatus: 'pending'}}]);
+  await repo.crmWrite([{record, expectedVersion: expected, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, ...(agent ? {actorType: 'agent' as const} : {}), aggregateId: record.id, aggregateVersion: record.version, type: id ? 'fi-product.updated' : 'fi-product.created', occurredAt: date, deliveryStatus: 'pending'}}]);
   return response(id ? 200 : 201, {data: record});
 }

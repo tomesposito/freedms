@@ -36,7 +36,7 @@ function applicant(value: unknown, now: Date, old?: CreditApplicant): CreditAppl
     employerName: text(b.employerName, 'Employer', 120, true), jobTitle: text(b.jobTitle, 'Job title', 120, true), yearsEmployed: years(b.yearsEmployed),
     grossMonthlyIncome: money(b.grossMonthlyIncome, 'Income'), otherMonthlyIncome: money(b.otherMonthlyIncome, 'Other income'), otherIncomeSource: text(b.otherIncomeSource, 'Other income source', 500, true)};
 }
-export async function credit(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date) {
+export async function credit(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date, agent = false) {
   const match = /^\/deals\/([^/]+)\/(credit-application|payoff-quotes)\/?$/.exec(request.path);
   if (!match) throw missing();
   onlyKeys(request.query ?? {}, []);
@@ -80,7 +80,7 @@ export async function credit(request: ApiRequest, principal: Principal, repo: Te
     record = {kind: 'credit-application', id: deal.id, tenantId: principal.tenantId, version: expected + 1, createdAt: old?.createdAt ?? time, updatedAt: time,
       dealId: deal.id, customerId: deal.customerId, applicant: person, coApplicant, consentAt: timestamp(b.consentAt, 'Consent'), status, decision};
   }
-  try { await repo.crmWrite([{record, expectedVersion: expected, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version,
+  try { await repo.crmWrite([{record, expectedVersion: expected, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, ...(agent ? {actorType: 'agent' as const} : {}), aggregateId: record.id, aggregateVersion: record.version,
     type: record.kind === 'payoff-quote' ? 'payoff-quote.created' : expected ? 'credit-application.updated' : 'credit-application.created', occurredAt: time, deliveryStatus: 'pending'}}]); }
   catch (error) {
     // A deterministic application ID also enforces one-per-deal for concurrent POSTs.

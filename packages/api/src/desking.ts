@@ -60,11 +60,11 @@ async function view(repo: TenantRepository, d: Deal): Promise<DealView> {
   if (!vehicle || !customer) throw missing();
   return {...d, pencils: d.pencils.map(p => ({...p, type: p.type ?? d.type})), vehicle, customer};
 }
-export async function desking(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date) {
+export async function desking(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date, agent = false) {
   const method = request.method.toUpperCase(), path = request.path.replace(/\/$/, ''), query = request.query ?? {};
   const date = now.toISOString();
   const base = () => ({id: randomUUID(), tenantId: principal.tenantId, version: 1, createdAt: date, updatedAt: date});
-  const write = (record: Exclude<CrmEntity, {kind: 'terms-acceptance'}>, expectedVersion = 0): CrmWrite => ({record, expectedVersion, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: record.kind === 'signature' ? 'signature.created' : record.kind === 'parts-return' ? 'parts-return.created' : record.kind === 'parts-sale' ? 'parts-sale.created' : record.kind === 'compliance-check' ? 'compliance-check.created' : record.kind === 'share-response' ? 'share-response.created' : record.kind === 'payoff-quote' ? 'payoff-quote.created' : record.kind === 'journal-entry' ? 'journal-entry.created' : `${record.kind}.${expectedVersion ? 'updated' : 'created'}`, occurredAt: date, deliveryStatus: 'pending'}});
+  const write = (record: Exclude<CrmEntity, {kind: 'terms-acceptance'}>, expectedVersion = 0): CrmWrite => ({record, expectedVersion, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, ...(agent ? {actorType: 'agent' as const} : {}), aggregateId: record.id, aggregateVersion: record.version, type: record.kind === 'signature' ? 'signature.created' : record.kind === 'parts-return' ? 'parts-return.created' : record.kind === 'parts-sale' ? 'parts-sale.created' : record.kind === 'compliance-check' ? 'compliance-check.created' : record.kind === 'share-response' ? 'share-response.created' : record.kind === 'payoff-quote' ? 'payoff-quote.created' : record.kind === 'journal-entry' ? 'journal-entry.created' : `${record.kind}.${expectedVersion ? 'updated' : 'created'}`, occurredAt: date, deliveryStatus: 'pending'}});
   if (path === '/settings') {
     onlyKeys(query, []);
     const old = await repo.crmGet('settings', 'workspace');

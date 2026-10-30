@@ -1,6 +1,6 @@
-import type { AuthClaims } from '@freedms/shared';
+import type { AuthClaims, DealView } from '@freedms/shared';
 import { authorize } from '../auth.js';
-import { ApiError, requireId } from '../errors.js';
+import { ApiError, missing, requireId } from '../errors.js';
 import { response, errorResponse, type ApiRequest, type ApiResponse } from '../handler.js';
 import type { RepositoryFactory } from '../repository.js';
 import { invalid, object, onlyKeys } from '../validation.js';
@@ -54,7 +54,7 @@ export function createMcpHandler(repositories: RepositoryFactory, execute: (requ
       if (!tool) return fail(id, -32602, 'Tool unavailable.');
       const args = object(params.arguments ?? {}); onlyKeys(args, Object.keys(tool.inputSchema.properties));
       if (tool.inputSchema.required.some(key => args[key] === undefined)) throw invalid('Required tool arguments are missing.');
-      const {id: entityId, taskId, ...fields} = args;
+      const {id: entityId, taskId, pencilId, ...fields} = args;
       let path = tool.path.includes(':id') ? tool.path.replace(':id', requireId(entityId)) : tool.path;
       if ('taskId' in tool.inputSchema.properties) path = path.replace(':taskId', requireId(taskId));
       const internal: ApiRequest = {method: tool.method, path, claims, agent: true};
@@ -77,6 +77,26 @@ export function createMcpHandler(repositories: RepositoryFactory, execute: (requ
           const lead = JSON.parse(existing.body).data;
           internal.body = JSON.stringify({version: fields.version, stage: fields.stage ?? lead.stage,
             assigneeId: 'assigneeId' in fields ? fields.assigneeId : lead.assigneeId, vehicleId: lead.vehicleId});
+        } else if (tool.name === 'set_working_pencil') {
+          internal.body = JSON.stringify({version: fields.version, workingPencilId: requireId(pencilId)});
+        } else if (tool.name === 'create_pencil' || tool.name === 'update_pencil') {
+          const existing = await execute({method: 'GET', path, claims});
+          if (existing.statusCode !== 200) return rpc(id, {isError: true, content: [{type: 'text', text: existing.body}]});
+          const deal: DealView = JSON.parse(existing.body).data;
+          const pencils = deal.pencils.map(({id, type, name, price, down, term, aprBps, lease, fiSelections}) => ({
+            id, type, name, price, down, term, aprBps,
+            // Stored leases contain both residual values; REST accepts exactly one driver.
+            lease: lease ? {msrp: lease.msrp, residualAmount: lease.residualAmount, moneyFactorMicro: lease.moneyFactorMicro,
+              acquisitionFee: lease.acquisitionFee, securityDeposit: lease.securityDeposit, milesPerYear: lease.milesPerYear} : null,
+            fiSelections: fiSelections.map(({productId, status}) => ({productId, status})),
+          }));
+          const key = requireId(pencilId), saved = pencils.find(p => p.id === key);
+          const create = tool.name === 'create_pencil';
+          if (create && saved) throw invalid('Pencil IDs must be unique.');
+          if (!create && !saved) throw missing();
+          const {version, ...input} = fields;
+          const pencil = {id: key, fiSelections: create ? [] : saved!.fiSelections, ...input};
+          internal.body = JSON.stringify({version, pencils: create ? [...pencils, pencil] : pencils.map(p => p.id === key ? pencil : p)});
         } else internal.body = JSON.stringify(fields);
       }
       // Direct in-process REST operation dispatch: no HTTP self-call. Reads are not audited

@@ -1,4 +1,4 @@
-import { communicationTypes, leadSources, leadStages } from '@freedms/shared';
+import { communicationTypes, dealStatuses, fiCategories, housingStatuses, leadSources, leadStages } from '@freedms/shared';
 const string = {type: 'string'}, integer = {type: 'integer'}, money = {type: 'integer', minimum: 0, description: 'Integer USD cents'};
 const page = {limit: integer, offset: integer}, range = {from: string, to: string};
 export const vehicleFields = {
@@ -21,6 +21,27 @@ const leadFields = {
   sourceDetail: string, assigneeId: nullableString,
 };
 const leadStage = {type: 'string', enum: leadStages}, communicationType = {type: 'string', enum: communicationTypes};
+const dealType = {type: 'string', enum: ['cash', 'finance', 'lease']};
+const fiSelections = {type: 'array', maxItems: 50, items: {type: 'object', properties: {
+  productId: string, status: {type: 'string', enum: ['accepted', 'declined']},
+}, required: ['productId', 'status'], additionalProperties: false}};
+const lease = {type: ['object', 'null'], properties: {
+  msrp: money, residualPercentBps: integer, residualAmount: money, moneyFactorMicro: integer,
+  acquisitionFee: money, securityDeposit: money, milesPerYear: integer,
+}, required: ['msrp', 'moneyFactorMicro', 'acquisitionFee', 'securityDeposit', 'milesPerYear'],
+  oneOf: [{type: 'object', required: ['residualPercentBps']}, {type: 'object', required: ['residualAmount']}, {type: 'null'}], additionalProperties: false};
+const pencilFields = {type: dealType, name: string, price: money, down: money, term: integer, aprBps: integer,
+  fiSelections, lease, sourcePencilId: string};
+const requiredPencil = ['name', 'price', 'down', 'term', 'aprBps'];
+const tradeFields = {year: string, make: string, model: string, vin: string, allowance: money, payoff: money, actualCashValue: money};
+const fiFields = {name: string, category: {type: 'string', enum: fiCategories}, cost: money, retailPrice: money, termNotes: string, active: {type: 'boolean'}};
+const applicant = {type: 'object', properties: {
+  fullName: string, dateOfBirth: string, ssn: string, address: string, phone: string, email: string,
+  housingStatus: {type: 'string', enum: housingStatuses}, monthlyHousingPayment: money, yearsAtAddress: integer,
+  employerName: string, jobTitle: string, yearsEmployed: integer, grossMonthlyIncome: money, otherMonthlyIncome: money, otherIncomeSource: string,
+}, required: ['fullName', 'dateOfBirth', 'address', 'housingStatus', 'monthlyHousingPayment', 'yearsAtAddress', 'yearsEmployed', 'grossMonthlyIncome', 'otherMonthlyIncome'], additionalProperties: false};
+// Certification and decision attestations are human-only; never expose status or decision here.
+const creditFields = {applicant, coApplicant: {...applicant, type: ['object', 'null']}, consentAt: string};
 function tool(name: string, path: string, properties: Record<string, unknown> = {}, required: string[] = [], method = 'GET', description = name.replaceAll('_', ' ')) {
   return {name, path, method, description, inputSchema: {type: 'object', properties, required, additionalProperties: false}};
 }
@@ -62,4 +83,21 @@ export const tools = [
   tool('quick_entry_draft', '/quick-entry/lead', {text: string}, ['text'], 'POST', 'Return an AI lead draft for review; saves nothing.'),
   tool('quick_entry_confirm', '/leads', leadFields, ['customer', 'source'], 'POST',
     'Create the lead from a reviewed quick-entry draft. This is the step that saves; the draft step alone saves nothing.'),
+  tool('list_fi_products', '/fi-products'),
+  tool('get_credit_application', '/deals/:id/credit-application', {id: string}, ['id']),
+  tool('get_deal_jacket', '/deals/:id/jacket', {id: string}, ['id']),
+  // These desking, deal, F&I and credit operations ask for no UI confirmation; no confirm argument is needed.
+  tool('create_deal', '/deals', {vehicleId: string, customerId: string, leadId: nullableString, type: dealType}, ['vehicleId', 'customerId', 'type'], 'POST'),
+  tool('update_deal', '/deals/:id', {id: string, version: integer, type: dealType,
+    trade: {type: ['object', 'null'], properties: tradeFields, required: Object.keys(tradeFields), additionalProperties: false}, docFee: money,
+    pencils: {type: 'array', items: {type: 'object', properties: {id: string, ...pencilFields}, required: ['id', ...requiredPencil], additionalProperties: false}},
+    workingPencilId: string}, ['id', 'version'], 'PUT'),
+  tool('set_deal_status', '/deals/:id', {id: string, version: integer, status: {type: 'string', enum: dealStatuses}}, ['id', 'version', 'status'], 'PUT'),
+  tool('create_pencil', '/deals/:id', {id: string, version: integer, pencilId: string, ...pencilFields}, ['id', 'version', 'pencilId', ...requiredPencil], 'PUT'),
+  tool('update_pencil', '/deals/:id', {id: string, version: integer, pencilId: string, ...pencilFields}, ['id', 'version', 'pencilId', ...requiredPencil], 'PUT'),
+  tool('set_working_pencil', '/deals/:id', {id: string, version: integer, pencilId: string}, ['id', 'version', 'pencilId'], 'PUT'),
+  tool('create_fi_product', '/fi-products', fiFields, ['name', 'category', 'cost', 'retailPrice', 'termNotes'], 'POST'),
+  tool('update_fi_product', '/fi-products/:id', {id: string, version: integer, ...fiFields}, ['id', 'version', ...Object.keys(fiFields)], 'PUT'),
+  tool('create_credit_application', '/deals/:id/credit-application', {id: string, ...creditFields}, ['id', 'applicant', 'consentAt'], 'POST'),
+  tool('update_credit_application', '/deals/:id/credit-application', {id: string, version: integer, ...creditFields}, ['id', 'version', ...Object.keys(creditFields)], 'PUT'),
 ];

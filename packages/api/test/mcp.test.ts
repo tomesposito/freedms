@@ -1,7 +1,7 @@
 import type { QuickEntryProvider } from '../src/ai-provider.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, sign } from 'node:crypto';
+import { generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { createHandler } from '../src/handler.js';
 import { MemoryRepositories } from '../src/memory.js';
 import { seedDemo } from '../src/demo-seed.js';
@@ -38,16 +38,16 @@ test('MCP initialize, ping, scoped tool discovery, metadata and adapter dispatch
   const initialized = await s.request('initialize', {protocolVersion: '2025-11-25', capabilities: {}, clientInfo: {name: 'offline', version: '1'}});
   assert.equal(initialized.result.protocolVersion, '2025-11-25'); assert.ok(initialized.result.capabilities.tools);
   assert.deepEqual((await s.request('ping')).result, {});
-  assert.equal((await s.request('tools/list')).result.tools.length, 29);
+  assert.equal((await s.request('tools/list')).result.tools.length, 42);
   const reads = (await s.request('tools/list', {}, token({scope: 'freedms/mcp.read'}))).result.tools;
-  assert.equal(reads.length, 14); assert.ok(reads.every((t: {annotations: {readOnlyHint: boolean}}) => t.annotations.readOnlyHint));
+  assert.equal(reads.length, 17); assert.ok(reads.every((t: {annotations: {readOnlyHint: boolean}}) => t.annotations.readOnlyHint));
   assert.equal((await s.request('tools/call', {name: 'create_vehicle', arguments: {}}, token({scope: 'freedms/mcp.read'}))).error.message, 'Tool unavailable.');
   for (const sub of ['unknown', 'admin-C']) assert.deepEqual((await s.request('tools/list', {}, token({sub}))).result.tools, []);
   const metadata = await s.handle({method: 'GET', path: '/.well-known/oauth-protected-resource'});
   assert.deepEqual(JSON.parse(metadata.body).authorization_servers, [config.issuer]); assert.equal(JSON.parse(metadata.body).resource, config.resource);
   const gateway = gatewayHandler(s.handle, 'web-issuer', 'web-audience');
   const result = await gateway({rawPath: '/mcp', requestContext: {http: {method: 'POST'}}, headers: {Authorization: `Bearer ${token()}`}, body: JSON.stringify({jsonrpc: '2.0', id: 7, method: 'tools/list'})});
-  assert.equal(JSON.parse(result.body).result.tools.length, 29);
+  assert.equal(JSON.parse(result.body).result.tools.length, 42);
   assert.deepEqual(localAuth('/mcp', false, 'access-token', {verify: () => {throw Error('Must not verify as ID token');}}), {authorization: 'Bearer access-token'});
 });
 test('MCP rejects invalid access tokens with a resource challenge and caches offline JWKS', async () => {
@@ -62,11 +62,11 @@ test('MCP rejects invalid access tokens with a resource challenge and caches off
   const failing = createHandler(s.repositories, {decode: async () => {throw Error();}}, () => now, undefined, undefined, undefined, undefined, {mcp: {...config, jwks: async () => {throw Error('private network detail');}}});
   assert.equal((await failing({method: 'POST', path: '/mcp', authorization: `Bearer ${token()}`})).statusCode, 401);
 });
-test('all fourteen MCP reads preserve REST resources and tenant isolation', async () => {
+test('original fourteen MCP reads preserve REST resources and tenant isolation', async () => {
   const s = await setup(), repo = s.repositories.forTenant('A');
   const ids: Record<string, string> = {get_vehicle: (await repo.list({}))[0].id, get_lead: (await repo.crmList('lead'))[0].id, get_customer: (await repo.crmList('customer'))[0].id, get_deal: (await repo.crmList('deal'))[0].id};
   const before = (await repo.events()).length;
-  for (const tool of tools.filter(t => t.method === 'GET')) {
+  for (const tool of tools.filter(t => t.method === 'GET' && !deskingReads.includes(t.name))) {
     const args = ids[tool.name] ? {id: ids[tool.name]} : {};
     const result = await s.call(tool.name, args); assert.equal(result.isError, false, tool.name);
     const rest = await s.handle({method: 'GET', path: tool.path.replace(':id', ids[tool.name]), claims: {sub: 'admin-A', 'custom:tenant_id': 'A', iss: '', aud: '', exp: 1, token_use: 'id'}});
@@ -297,4 +297,118 @@ test('CRM quick-entry MCP draft saves nothing and confirm saves the reviewed fie
   assert.ok(events.every(e => e.actorType === 'agent' && e.actorId === 'admin-A' && e.tenantId === 'A'));
   refused(await s.call('get_lead', {id: lead.id}, token({sub: 'admin-B'})), 'NOT_FOUND');
   refused(await s.call('get_customer', {id: lead.customerId}, token({sub: 'admin-B'})), 'NOT_FOUND');
+});
+
+const deskingReads = ['list_fi_products', 'get_credit_application', 'get_deal_jacket'];
+const deskingWrites = ['create_deal', 'update_deal', 'set_deal_status', 'create_pencil', 'update_pencil', 'set_working_pencil',
+  'create_fi_product', 'update_fi_product', 'create_credit_application', 'update_credit_application'];
+const fiInput = {name: 'Coverage', category: 'service-contract', cost: 10000, retailPrice: 30000, termNotes: '36 months', active: true};
+const person = {fullName: 'Test Buyer', dateOfBirth: '1990-01-01', ssn: '123-45-6789', address: '123 Main St',
+  phone: '', email: '', employerName: '', jobTitle: '', otherIncomeSource: '', housingStatus: 'rent', monthlyHousingPayment: 100000, yearsAtAddress: 2, yearsEmployed: 3, grossMonthlyIncome: 500000, otherMonthlyIncome: 0};
+const creditInput = {applicant: person, coApplicant: null, consentAt: now.toISOString()};
+const pencilInput = {name: 'Finance', type: 'finance', price: 2000000, down: 200000, term: 60, aprBps: 500};
+const leaseInput = {msrp: 2500000, residualPercentBps: 5000, moneyFactorMicro: 2000, acquisitionFee: 50000, securityDeposit: 20000, milesPerYear: 12000};
+const restClaims = {sub: 'admin-A', 'custom:tenant_id': 'A', iss: '', aud: '', exp: 1, token_use: 'id' as const};
+test('desking MCP happy paths preserve pencils, product snapshots, credit privacy and agent attribution', async () => {
+  const s = await setup(), repo = s.repositories.forTenant('A'), before = (await repo.events()).length;
+  const createArgs = {vehicleId: (await repo.list({})).find(v => v.status === 'available')!.id, customerId: (await repo.crmList('customer'))[0].id, type: 'finance'};
+  let deal = data(await s.call('create_deal', createArgs));
+  const id = deal.id;
+  refused(await s.call('get_deal_jacket', {id}), 'VALIDATION');
+  const accepted = data(await s.call('create_fi_product', fiInput));
+  const declined = data(await s.call('create_fi_product', {...fiInput, name: 'Declined coverage'}));
+  data(await s.call('update_fi_product', {...fiInput, id: accepted.id, version: 1, retailPrice: 40000}));
+  const selections = [{productId: accepted.id, status: 'accepted'}, {productId: declined.id, status: 'declined'}];
+  const pencilId = randomUUID(), leaseId = randomUUID();
+  deal = data(await s.call('create_pencil', {id, version: deal.version, pencilId, ...pencilInput, fiSelections: selections}));
+  deal = data(await s.call('create_pencil', {id, version: deal.version, pencilId: leaseId, ...pencilInput, type: 'lease', lease: leaseInput}));
+  // Re-saving a different pencil normalizes both stored snapshots and both stored residual values.
+  deal = data(await s.call('update_pencil', {id, version: deal.version, pencilId, ...pencilInput, price: 2100000}));
+  const finance = deal.pencils.find((p: any) => p.id === pencilId);
+  assert.equal(finance.price, 2100000); assert.equal(finance.down, 200000); assert.equal(finance.term, 60); assert.equal(finance.aprBps, 500);
+  assert.deepEqual(finance.fiSelections.map((p: any) => ({productId: p.productId, status: p.status})), selections);
+  assert.equal(finance.fiSelections[0].name, fiInput.name); assert.equal(finance.fiSelections[0].cost, fiInput.cost);
+  assert.equal(finance.fiSelections[0].retailPrice, 40000);
+  assert.equal(deal.pencils.find((p: any) => p.id === leaseId).lease.residualAmount, 1250000);
+  deal = data(await s.call('set_working_pencil', {id, version: deal.version, pencilId}));
+  assert.equal(deal.workingPencilId, pencilId);
+  const pencils = deal.pencils;
+  deal = data(await s.call('update_deal', {id, version: deal.version, docFee: 12345, trade: null}));
+  assert.deepEqual(deal.pencils, pencils); assert.equal(deal.docFee, 12345);
+  deal = data(await s.call('set_deal_status', {id, version: deal.version, status: 'approved'}));
+  assert.equal(deal.status, 'approved');
+  const application = data(await s.call('create_credit_application', {id, ...creditInput}));
+  assert.equal(application.applicant.ssnLast4, '6789'); assert.equal(application.applicant.ssn, undefined);
+  const {ssn: _ssn, ...withoutSsn} = person;
+  const updated = data(await s.call('update_credit_application', {id, version: 1, ...creditInput, applicant: {...withoutSsn, yearsAtAddress: 3}}));
+  assert.equal(updated.applicant.ssnLast4, '6789'); assert.equal(updated.consentAt, creditInput.consentAt); assert.equal(updated.status, 'draft');
+  assert.ok(!JSON.stringify(await repo.crmGet('credit-application', id)).includes(person.ssn));
+  for (const name of deskingReads) data(await s.call(name, name === 'list_fi_products' ? {} : {id}, token({scope: 'freedms/mcp.read'})));
+  const events = (await repo.events()).slice(before);
+  assert.equal(events.length, 12);
+  assert.ok(events.every(e => e.actorType === 'agent' && e.actorId === 'admin-A'));
+  assert.ok(!JSON.stringify(events).includes(person.ssn));
+  const restBefore = (await repo.events()).length;
+  for (const [path, body] of [['/deals', createArgs], ['/fi-products', fiInput]] as const) {
+    assert.equal((await s.handle({method: 'POST', path, claims: restClaims, body: JSON.stringify(body)})).statusCode, 201);
+  }
+  assert.equal((await s.handle({method: 'PUT', path: `/deals/${id}/credit-application`, claims: restClaims, body: JSON.stringify({...creditInput, version: 2, status: 'ready'})})).statusCode, 200);
+  assert.ok((await repo.events()).slice(restBefore).every(e => !('actorType' in e)));
+  assert.equal(data(await s.call('update_credit_application', {id, version: 3, ...creditInput})).status, 'ready');
+});
+
+test('desking MCP validation, tenant isolation, scope and role refusals', async () => {
+  const s = await setup(), repo = s.repositories.forTenant('A'), other = s.repositories.forTenant('B');
+  const deal = data(await s.call('create_deal', {vehicleId: (await repo.list({})).find(v => v.status === 'available')!.id,
+    customerId: (await repo.crmList('customer'))[0].id, type: 'finance'}));
+  const id = deal.id, version = deal.version, pencilId = deal.pencils[0].id;
+  const otherDeal = (await other.crmList('deal'))[0];
+  const foreignProduct = data(await s.call('create_fi_product', fiInput, token({sub: 'admin-B'})));
+  const foreignCases: [string, Record<string, unknown>][] = [
+    ['get_credit_application', {id: otherDeal.id}], ['get_deal_jacket', {id: otherDeal.id}],
+    ['update_deal', {id: otherDeal.id, version: 1}], ['set_deal_status', {id: otherDeal.id, version: 1, status: 'approved'}],
+    ['create_pencil', {id: otherDeal.id, version: 1, pencilId: randomUUID(), ...pencilInput}],
+    ['update_pencil', {id: otherDeal.id, version: 1, pencilId, ...pencilInput}],
+    ['set_working_pencil', {id: otherDeal.id, version: 1, pencilId}],
+    ['update_fi_product', {id: foreignProduct.id, version: 1, ...fiInput}],
+    ['create_credit_application', {id: otherDeal.id, ...creditInput}],
+    ['update_credit_application', {id: otherDeal.id, version: 1, ...creditInput}],
+  ];
+  const before = (await repo.events()).length, otherBefore = (await other.events()).length;
+  for (const [name, args] of foreignCases) refused(await s.call(name, args), 'NOT_FOUND');
+  // Collection creates validate foreign references using the existing REST vocabulary.
+  refused(await s.call('create_deal', {vehicleId: otherDeal.vehicleId, customerId: otherDeal.customerId, type: 'cash'}), 'VALIDATION');
+  for (const name of [...deskingWrites, ...deskingReads]) {
+    if (deskingWrites.includes(name)) assert.equal((await s.request('tools/call', {name}, token({scope: 'freedms/mcp.read'}))).error.message, 'Tool unavailable.');
+    assert.equal((await s.request('tools/call', {name}, token({sub: 'unknown'}))).error.message, 'Tool unavailable.');
+  }
+  for (const role of ['viewer', 'inactive']) {
+    const factory = {tenantForSubject: async () => 'A', forTenant: () => ({...repo, membership: async () => ({tenantId: 'A', userId: 'admin-A', active: role !== 'inactive', role: (role === 'inactive' ? 'admin' : 'viewer') as 'admin'})})};
+    const handle = createHandler(factory, {decode: async () => {throw Error('Network forbidden');}}, () => now, undefined, undefined, undefined, undefined, {mcp: config});
+    for (const name of [...deskingReads, ...deskingWrites]) {
+      const response = await handle({method: 'POST', path: '/mcp', authorization: `Bearer ${token()}`, body: JSON.stringify({jsonrpc: '2.0', id: 1, method: 'tools/call', params: {name}})});
+      assert.equal(JSON.parse(response.body).error.message, 'Tool unavailable.');
+    }
+  }
+  refused(await s.call('set_deal_status', {id, version, status: 'sold'}), 'VALIDATION');
+  refused(await s.call('set_working_pencil', {id, version, pencilId: randomUUID()}), 'VALIDATION');
+  refused(await s.call('create_pencil', {id, version, pencilId, ...pencilInput}), 'VALIDATION');
+  refused(await s.call('update_pencil', {id, version, pencilId: randomUUID(), ...pencilInput}), 'NOT_FOUND');
+  for (const productId of [foreignProduct.id, randomUUID()]) refused(await s.call('update_pencil', {id, version, pencilId, ...pencilInput, fiSelections: [{productId, status: 'accepted'}]}), 'VALIDATION');
+  for (const fields of [{price: -1}, {term: 0}]) refused(await s.call('update_pencil', {id, version, pencilId, ...pencilInput, ...fields}), 'VALIDATION');
+  refused(await s.call('create_credit_application', {id, ...creditInput, applicant: {...person, ssn: 'invalid'}}), 'VALIDATION');
+  for (const name of ['create_credit_application', 'update_credit_application']) for (const extra of [{status: 'ready'}, {decision: {outcome: 'approved'}}]) {
+    refused(await s.call(name, {id, version: 1, ...creditInput, ...extra}), 'VALIDATION');
+  }
+  refused(await s.call('update_deal', {id, version, status: 'approved'}), 'VALIDATION');
+  assert.equal((await repo.events()).length, before); assert.equal((await other.events()).length, otherBefore);
+  data(await s.call('update_deal', {id, version, docFee: 20000}));
+  for (const [name, args] of [['update_deal', {}], ['set_deal_status', {status: 'approved'}], ['create_pencil', {pencilId: randomUUID(), ...pencilInput}],
+    ['update_pencil', {pencilId, ...pencilInput}], ['set_working_pencil', {pencilId}]] as const) refused(await s.call(name, {id, version, ...args}), 'CONFLICT');
+  data(await s.call('create_credit_application', {id, ...creditInput}));
+  data(await s.call('update_credit_application', {id, version: 1, ...creditInput}));
+  refused(await s.call('update_credit_application', {id, version: 1, ...creditInput}), 'CONFLICT');
+  const product = data(await s.call('create_fi_product', fiInput));
+  data(await s.call('update_fi_product', {id: product.id, version: 1, ...fiInput}));
+  refused(await s.call('update_fi_product', {id: product.id, version: 1, ...fiInput}), 'CONFLICT');
 });
