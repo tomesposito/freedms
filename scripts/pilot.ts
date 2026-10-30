@@ -20,7 +20,7 @@ let access: Record<string, string> = {};
 try { access = JSON.parse(await readFile(accessPath, 'utf8')); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
 if (access.email && access.email !== config.email.toLowerCase()) throw new Error('Use a separate access file for each person');
 const save = async () => { await writeFile(accessPath, JSON.stringify(access, null, 2) + '\n', {mode: 0o600}); await chmod(accessPath, 0o600); };
-const repositories = new DynamoRepositories(outputs.TableName);
+const repositories = new DynamoRepositories(outputs.TableName, undefined, true);
 const identity = new CognitoPilotIdentity(outputs.CognitoUserPoolId, async (email, temporaryPassword) => {
   access = {...access, email, temporaryPassword, signInUrl: outputs.WebUrl}; await save();
 });

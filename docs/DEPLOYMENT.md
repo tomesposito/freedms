@@ -316,3 +316,66 @@ This does not disable runtime roles or alter the shared OpenSight OIDC provider.
 GitHub-hosted public builds and the account's included private Actions allowance
 avoid an always-on runner. Private minutes, artifact/release retention, S3 release
 snapshots, and normal AWS requests remain subject to account quotas and charges.
+
+## MCP connector (issue #71; local implementation, not deployed)
+
+The stateless Streamable HTTP endpoint is `https://app.<RootDomain>/api/mcp`.
+Protected Resource Metadata is served at
+`https://app.<RootDomain>/api/.well-known/oauth-protected-resource`; unauthenticated
+requests advertise that URL in the Bearer challenge. CloudFront strips `/api`;
+the API routes are `POST /mcp` and `GET /.well-known/oauth-protected-resource`.
+`MCP_RESOURCE_URI` supplies the canonical endpoint and `TOKEN_ISSUER` the Cognito
+pool issuer. Local defaults use `http://127.0.0.1:3001/mcp` and a mock issuer.
+The local adapter mounts the same handler; offline tests inject RSA JWKS and a
+clock rather than contacting Cognito. Local web ID tokens are not MCP credentials.
+
+Register each consumer with a dedicated public Cognito app client, following
+`McpClient`: authorization code, no secret, refresh tokens, exact callback/logout
+URIs supplied through `McpCallbackURLs` / `McpLogoutURLs`. The consumer must send
+PKCE `code_challenge_method=S256` and its verifier on exchange; Cognito's app-client
+CloudFormation schema has no setting that mandates PKCE. This server trusts only
+access tokens for the configured `MCP_CLIENT_ID`, never web-client ID tokens.
+For additional consumers, provision separate client-bound handler configuration;
+do not reuse the web client or relax client-id validation. There is no dynamic
+client registration (DCR) and no RFC 8707 resource-indicator enforcement in this
+Cognito profile. Scopes are `freedms/mcp.read` and `freedms/mcp.write`; write implies
+read. The latter does not grant rights beyond the user's active membership.
+
+Hosted membership writers atomically maintain an immutable
+`SUBJECT#<cognito-sub>` / `TENANT` binding in the existing table. The handler
+resolves this binding and rechecks the existing tenant membership on every tool
+request. Unknown, inactive, ambiguous (local), or unsupported-role users receive
+no tools. Existing hosted records need the scoped operator migration before use:
+`TABLE_NAME=<table> node --import tsx packages/api/src/mcp-backfill.ts <tenant-id>`.
+Run once for each known dealership; it verifies membership and refuses to move
+an already-bound subject. This migration was not run against cloud resources.
+
+Available reads are `search_vehicles`, `get_vehicle`, `list_leads`, `get_lead`,
+`list_customers`, `get_customer`, `list_deals`, `get_deal`, `get_service_board`,
+`list_parts`, `get_sales_report`, `get_inventory_aging`, `get_trial_balance`, and
+`get_lead_summary`. Inventory writes are `create_vehicle`, `update_vehicle`,
+`set_vehicle_status`, and `import_vehicles`. Inputs retain REST filters, bounds,
+optimistic versions, and integer-cent money. The existing CSV import format is
+an explicit exception at the text boundary: dollar cells are converted by the
+shared importer to cents; stored values and returned resources remain cents.
+
+These tools invoke the same handler operations in-process. Reads create no new
+audit records, matching REST. Every inventory mutation/import outbox event keeps
+`actorId` equal to the connecting user and adds `actorType: agent`. The inventory
+UI asks for confirmation only on deletion; deletion is not exposed, so none of
+these four writes has a `confirm` argument. No token minting, attestation,
+signature, compliance sign-off, terms acceptance, or credit certification tools
+are exposed. Those actions remain human-only.
+
+Both app clients have `AWS::Cognito::ManagedLoginBranding` resources with navy
+`#0B1F2C`, orange `#FF6A00`, rounded inputs/buttons and an embedded base64 copy of
+`packages/web/src/assets/logo.svg`. SVG is supported, so no raster conversion or
+external image hosting is necessary. Settings follow the
+[AWS branding schema example](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cognito-managedloginbranding.html).
+The schema does not expose arbitrary font loading; Inter is not forced. Layout
+remains Cognito's, not a custom page. **Activation prerequisite:** the current
+LITE pool/classic domain must be moved to a managed-login-capable tier and domain
+version before applying these branding resources. Those prerequisite changes
+are outside this issue's explicit template-diff allowlist and have not been made.
+Operator review, registration, migration, branding activation and live deployment
+remain separate steps; no cloud changes were performed for this issue.

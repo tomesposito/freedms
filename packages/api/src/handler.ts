@@ -1,3 +1,5 @@
+import { createMcpHandler, isMcpPath } from './mcp/server.js';
+import { mcpConfig, type McpConfig } from './mcp/auth.js';
 import { compressResponse } from './compression.js';
 import { signatures } from './signatures.js';
 import { reportsP3 } from './reports-p3.js';
@@ -31,7 +33,7 @@ import { ApiError, conflict, missing, requireId } from './errors.js';
 import type { RepositoryFactory } from './repository.js';
 import type { VinDecoder } from './vin.js';
 import { pageNumber, invalid, object, onlyKeys, text, vehicleInput, version, view, vin } from './validation.js';
-export interface ApiRequest { method: string; path: string; query?: Record<string, string | undefined>; body?: string; claims?: AuthClaims; intakeToken?: string; acceptEncoding?: string }
+export interface ApiRequest { authorization?: string; agent?: boolean; method: string; path: string; query?: Record<string, string | undefined>; body?: string; claims?: AuthClaims; intakeToken?: string; acceptEncoding?: string }
 export interface ApiResponse { statusCode: number; headers: Record<string, string>; body: string; isBase64Encoded?: boolean }
 export function response(statusCode: number, body: unknown): ApiResponse {
   return {statusCode, headers: {'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff'}, body: JSON.stringify(body)};
@@ -49,8 +51,9 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
   if (!body || Buffer.byteLength(body) > limit) throw invalid(`A JSON body of at most ${limit} bytes is required.`);
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
-export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender = fetchWebhookSender, options: {hosted?: boolean} = {}) {
-  return async (request: ApiRequest): Promise<ApiResponse> => {
+export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender = fetchWebhookSender, options: {hosted?: boolean; mcp?: McpConfig} = {}) {
+  const handle = async (request: ApiRequest): Promise<ApiResponse> => {
+    if (isMcpPath(request.path)) return mcp(request);
     try {
       if (request.method.toUpperCase() === 'POST' && request.path.replace(/\/$/, '') === '/intake/adf') {
         const result = await intake(request, repositories, now());
@@ -131,7 +134,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (!((method === 'POST' && !id) || (['PUT', 'DELETE'].includes(method) && id))) throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
         requireWrite(principal, method);
         const body = parseBody(request.body); const date = now();
-        const event = (type: OutboxEvent['type'], aggregateId: string, aggregateVersion: number): OutboxEvent => ({id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, type, aggregateId, aggregateVersion, occurredAt: date.toISOString(), deliveryStatus: 'pending'});
+        const event = (type: OutboxEvent['type'], aggregateId: string, aggregateVersion: number): OutboxEvent => ({id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, ...(request.agent ? {actorType: 'agent' as const} : {}), type, aggregateId, aggregateVersion, occurredAt: date.toISOString(), deliveryStatus: 'pending'});
         if (method === 'POST') {
           const input = vehicleInput(body, date);
           const vehicle: Vehicle = {...input, id: randomUUID(), tenantId: principal.tenantId, version: 1, createdAt: date.toISOString(), updatedAt: date.toISOString()};
@@ -158,4 +161,6 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       return compressResponse(result, request.acceptEncoding);
     } catch (error) { return errorResponse(error); }
   };
+  const mcp = createMcpHandler(repositories, handle, options.mcp ?? mcpConfig());
+  return handle;
 }

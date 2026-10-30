@@ -8,7 +8,7 @@
 > - **License today:** MIT, as recorded in LICENSE; alternatives remain draft D-1.
 > - **Decision process:** IDDs D-1 onward record context, options, and a recommendation.
 >   D-1, D-3, and D-4 were **DECIDED by the owner on 2026-10-19** (recorded in each
->   IDD below). D-2 and D-5–D-8 remain **DRAFT — awaiting the owner's pick**.
+>   IDD below). D-2 and D-5–D-7 remain **DRAFT — awaiting the owner's pick**; D-8 has an accepted MCP-specific decision.
 
 ## 1. Vision & positioning
 
@@ -501,7 +501,15 @@ only after measuring representative workflows and margins; no invented price her
 
 ### D-8 — Initial agent authority
 
-**Status: DRAFT — awaiting the owner's pick.**
+**Status: MCP connector decision accepted by Tom, 2026-10-30 (#71); other agent workflows remain draft.**
+
+The Cognito OAuth MCP connector acts with the connecting user's full tenant,
+role and permissions, never more. Its eventual scope is all operations except
+human-only attestations: compliance sign-offs, signatures, terms acceptance and
+credit certifications. Phase 1 supplies all specified reads and inventory writes
+through the existing operation layer. There are no PATs/agent API tokens.
+Write events identify the agent and the user; UI confirmation requirements apply.
+This settles only the MCP portion of D-8 and does not reopen D-2/D-5/D-6/D-7.
 
 **Context:** first-class agents need useful tools, but a suggested reply and an
 executed financing submission have very different consequences.

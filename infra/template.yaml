@@ -2,6 +2,12 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: freeDMS invite-only pilot - deploy in us-east-1
 Parameters:
+  McpCallbackURLs:
+    Type: CommaDelimitedList
+    Description: Registered MCP consumer redirect URIs (authorization code with PKCE S256)
+  McpLogoutURLs:
+    Type: CommaDelimitedList
+    Description: Registered MCP consumer logout URIs
   RootDomain:
     Type: String
     Default: freedms.co
@@ -149,6 +155,60 @@ Resources:
       TokenValidityUnits:
         IdToken: hours
         AccessToken: hours
+  McpResourceServer:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Properties:
+      UserPoolId: !Ref UserPool
+      Identifier: freedms
+      Name: freeDMS MCP
+      Scopes:
+        - ScopeName: mcp.read
+          ScopeDescription: Read dealership resources as the connecting user
+        - ScopeName: mcp.write
+          ScopeDescription: Read and write dealership resources as the connecting user
+  McpClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: McpResourceServer
+    Properties:
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [freedms/mcp.read, freedms/mcp.write]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs: !Ref McpCallbackURLs
+      LogoutURLs: !Ref McpLogoutURLs
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 1
+      TokenValidityUnits: {AccessToken: hours}
+  WebLoginBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientId: !Ref UserPoolClient
+      UseCognitoProvidedValues: false
+      Settings: {"categories": {"global": {"colorSchemeMode": "LIGHT"}}, "componentClasses": {"buttons": {"borderRadius": 8}, "input": {"borderRadius": 8, "lightMode": {"defaults": {"borderColor": "0b1f2cff", "backgroundColor": "ffffffff"}}}, "focusState": {"lightMode": {"borderColor": "ff6a00ff"}}}, "components": {"pageBackground": {"image": {"enabled": false}, "lightMode": {"color": "0b1f2cff"}}, "form": {"borderRadius": 8, "logo": {"enabled": true, "formInclusion": "IN", "location": "CENTER", "position": "TOP"}}, "primaryButton": {"lightMode": {"defaults": {"backgroundColor": "ff6a00ff", "textColor": "0b1f2cff"}, "hover": {"backgroundColor": "ff6a00ff", "textColor": "0b1f2cff"}, "active": {"backgroundColor": "ff6a00ff", "textColor": "0b1f2cff"}}}}}
+      Assets:
+        # Exact bytes from packages/web/src/assets/logo.svg; SVG is supported.
+        - Category: FORM_LOGO
+          ColorMode: LIGHT
+          Extension: SVG
+          Bytes: PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMzkyLjYgMzAwIiByb2xlPSJpbWciIGFyaWEtbGFiZWw9ImZyZWVETVMgbG9nbyI+PHRpdGxlPmZyZWVETVM8L3RpdGxlPjxwYXRoIGQ9Ik0xMjIgMjAgUTEwOCAyMCA5NiAzMSBMMjAgMTAwIFExMiAxMDggMTIgMTIzIFYyNjAgUTEyIDI3OCAzMSAyNzggSDIxMyBRMjMyIDI3OCAyMzIgMjYwIFYxMjMgUTIzMiAxMDggMjIzIDEwMCBMMTQ3IDMxIFExMzUgMjAgMTIyIDIwWiIgZmlsbD0iI0ZGNkEwMCIvPgo8Y2lyY2xlIGN4PSIxMjIiIGN5PSI2NiIgcj0iMTciIGZpbGw9IndoaXRlIi8+CjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iOSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNNTUgMTgzIEw3NyAxMzcgUTgyIDEyOCA5NCAxMjggSDE1MCBRMTYyIDEyOCAxNjcgMTM3IEwxODkgMTgzIi8+PHBhdGggZD0iTTQ4IDE4NCBRNDQgMTkwIDQ0IDIwNCBWMjI4IFE0NCAyMzggNTUgMjM4IEgxODkgUTIwMCAyMzggMjAwIDIyOCBWMjA0IFEyMDAgMTkwIDE5NiAxODQiLz48cGF0aCBkPSJNNTUgMTc4IEwzOSAxNzUgTTE4OSAxNzggTDIwNSAxNzUiLz48L2c+CjxwYXRoIGQ9Ik02NCAyMDEgTDgyIDIwNyBRODggMjA5IDg4IDIxNiBRODggMjIxIDgyIDIyMSBINjUgUTU5IDIyMSA1OSAyMTUgVjIwOCBRNTkgMjAxIDY0IDIwMVogTTE4MCAyMDEgTDE2MiAyMDcgUTE1NiAyMDkgMTU2IDIxNiBRMTU2IDIyMSAxNjIgMjIxIEgxNzkgUTE4NSAyMjEgMTg1IDIxNSBWMjA4IFExODUgMjAxIDE4MCAyMDFaIiBmaWxsPSJ3aGl0ZSIvPgo8cGF0aCBkPSJNNTggMjMxIEg4NiBWMjQ1IFE4NiAyNTEgNzkgMjUxIEg2NSBRNTggMjUxIDU4IDI0NVogTTE1OCAyMzEgSDE4NiBWMjQ1IFExODYgMjUxIDE3OSAyNTEgSDE2NSBRMTU4IDI1MSAxNTggMjQ1WiIgZmlsbD0id2hpdGUiLz48ZyBmaWxsPSIjMEIxRjJDIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwIDI1MCkgc2NhbGUoMC4xMDc0MjIgLTAuMTA3NDIyKSI+PHBhdGggZD0iTTkwOSAxNTU2VjEzMjFINzExUTYzNSAxMzIxIDYwNS4wIDEyOTMuNVE1NzUgMTI2NiA1NzUgMTE5OFYxMTIwSDg4MVY4NjRINTc1VjBIMjE3Vjg2NEgzOVYxMTIwSDIxN1YxMTk4UTIxNyAxMzgxIDMxOS4wIDE0NjguNVE0MjEgMTU1NiA2MzUgMTU1NloiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDI4ODUuODE4IDApIi8+PHBhdGggZD0iTTEwMDQgODE1UTk1NyA4MzcgOTEwLjUgODQ3LjVRODY0IDg1OCA4MTcgODU4UTY3OSA4NTggNjA0LjUgNzY5LjVRNTMwIDY4MSA1MzAgNTE2VjBIMTcyVjExMjBINTMwVjkzNlE1OTkgMTA0NiA2ODguNSAxMDk2LjVRNzc4IDExNDcgOTAzIDExNDdROTIxIDExNDcgOTQyLjAgMTE0NS41UTk2MyAxMTQ0IDEwMDMgMTEzOVoiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDM3NzYuODE4IDApIi8+PHBhdGggZD0iTTEyOTAgNTYzVjQ2MUg0NTNRNDY2IDMzNSA1NDQuMCAyNzIuMFE2MjIgMjA5IDc2MiAyMDlRODc1IDIwOSA5OTMuNSAyNDIuNVExMTEyIDI3NiAxMjM3IDM0NFY2OFExMTEwIDIwIDk4My4wIC00LjVRODU2IC0yOSA3MjkgLTI5UTQyNSAtMjkgMjU2LjUgMTI1LjVRODggMjgwIDg4IDU1OVE4OCA4MzMgMjUzLjUgOTkwLjBRNDE5IDExNDcgNzA5IDExNDdROTczIDExNDcgMTEzMS41IDk4OC4wUTEyOTAgODI5IDEyOTAgNTYzWk05MjIgNjgyUTkyMiA3ODQgODYyLjUgODQ2LjVRODAzIDkwOSA3MDcgOTA5UTYwMyA5MDkgNTM4LjAgODUwLjVRNDczIDc5MiA0NTcgNjgyWiIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDc4Ni44MTggMCkiLz48cGF0aCBkPSJNMTI5MCA1NjNWNDYxSDQ1M1E0NjYgMzM1IDU0NC4wIDI3Mi4wUTYyMiAyMDkgNzYyIDIwOVE4NzUgMjA5IDk5My41IDI0Mi41UTExMTIgMjc2IDEyMzcgMzQ0VjY4UTExMTAgMjAgOTgzLjAgLTQuNVE4NTYgLTI5IDcyOSAtMjlRNDI1IC0yOSAyNTYuNSAxMjUuNVE4OCAyODAgODggNTU5UTg4IDgzMyAyNTMuNSA5OTAuMFE0MTkgMTE0NyA3MDkgMTE0N1E5NzMgMTE0NyAxMTMxLjUgOTg4LjBRMTI5MCA4MjkgMTI5MCA1NjNaTTkyMiA2ODJROTIyIDc4NCA4NjIuNSA4NDYuNVE4MDMgOTA5IDcwNyA5MDlRNjAzIDkwOSA1MzguMCA4NTAuNVE0NzMgNzkyIDQ1NyA2ODJaIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2MTc1LjgxOCAwKSIvPjwvZz48ZyBmaWxsPSIjRkY2QTAwIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwIDI1MCkgc2NhbGUoMC4xMDc0MjIgLTAuMTA3NDIyKSI+PHBhdGggZD0iTTU3MyAxMjAyVjI5MUg3MTFROTQ3IDI5MSAxMDcxLjUgNDA4LjBRMTE5NiA1MjUgMTE5NiA3NDhRMTE5NiA5NzAgMTA3Mi4wIDEwODYuMFE5NDggMTIwMiA3MTEgMTIwMlpNMTg4IDE0OTNINTk0UTkzNCAxNDkzIDExMDAuNSAxNDQ0LjVRMTI2NyAxMzk2IDEzODYgMTI4MFExNDkxIDExNzkgMTU0Mi4wIDEwNDcuMFExNTkzIDkxNSAxNTkzIDc0OFExNTkzIDU3OSAxNTQyLjAgNDQ2LjVRMTQ5MSAzMTQgMTM4NiAyMTNRMTI2NiA5NyAxMDk4LjAgNDguNVE5MzAgMCA1OTQgMEgxODhaIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSg3NDI1LjE4MiAwKSIvPjxwYXRoIGQ9Ik0xODggMTQ5M0g2NzhMMTAxOCA2OTRMMTM2MCAxNDkzSDE4NDlWMEgxNDg1VjEwOTJMMTE0MSAyODdIODk3TDU1MyAxMDkyVjBIMTg4WiIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoOTEyNS4xODIgMCkiLz48cGF0aCBkPSJNMTIyNyAxNDQ2VjExMzBRMTEwNCAxMTg1IDk4Ny4wIDEyMTMuMFE4NzAgMTI0MSA3NjYgMTI0MVE2MjggMTI0MSA1NjIuMCAxMjAzLjBRNDk2IDExNjUgNDk2IDEwODVRNDk2IDEwMjUgNTQwLjUgOTkxLjVRNTg1IDk1OCA3MDIgOTM0TDg2NiA5MDFRMTExNSA4NTEgMTIyMC4wIDc0OS4wUTEzMjUgNjQ3IDEzMjUgNDU5UTEzMjUgMjEyIDExNzguNSA5MS41UTEwMzIgLTI5IDczMSAtMjlRNTg5IC0yOSA0NDYuMCAtMi4wUTMwMyAyNSAxNjAgNzhWNDAzUTMwMyAzMjcgNDM2LjUgMjg4LjVRNTcwIDI1MCA2OTQgMjUwUTgyMCAyNTAgODg3LjAgMjkyLjBROTU0IDMzNCA5NTQgNDEyUTk1NCA0ODIgOTA4LjUgNTIwLjBRODYzIDU1OCA3MjcgNTg4TDU3OCA2MjFRMzU0IDY2OSAyNTAuNSA3NzQuMFExNDcgODc5IDE0NyAxMDU3UTE0NyAxMjgwIDI5MS4wIDE0MDAuMFE0MzUgMTUyMCA3MDUgMTUyMFE4MjggMTUyMCA5NTguMCAxNTAxLjVRMTA4OCAxNDgzIDEyMjcgMTQ0NloiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDExMTYzLjE4MiAwKSIvPjwvZz48L3N2Zz4=
+  McpLoginBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientId: !Ref McpClient
+      UseCognitoProvidedValues: false
+      Settings: {"categories": {"global": {"colorSchemeMode": "LIGHT"}}, "componentClasses": {"buttons": {"borderRadius": 8}, "input": {"borderRadius": 8, "lightMode": {"defaults": {"borderColor": "0b1f2cff", "backgroundColor": "ffffffff"}}}, "focusState": {"lightMode": {"borderColor": "ff6a00ff"}}}, "components": {"pageBackground": {"image": {"enabled": false}, "lightMode": {"color": "0b1f2cff"}}, "form": {"borderRadius": 8, "logo": {"enabled": true, "formInclusion": "IN", "location": "CENTER", "position": "TOP"}}, "primaryButton": {"lightMode": {"defaults": {"backgroundColor": "ff6a00ff", "textColor": "0b1f2cff"}, "hover": {"backgroundColor": "ff6a00ff", "textColor": "0b1f2cff"}, "active": {"backgroundColor": "ff6a00ff", "textColor": "0b1f2cff"}}}}}
+      Assets:
+        # Exact bytes from packages/web/src/assets/logo.svg; SVG is supported.
+        - Category: FORM_LOGO
+          ColorMode: LIGHT
+          Extension: SVG
+          Bytes: PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMzkyLjYgMzAwIiByb2xlPSJpbWciIGFyaWEtbGFiZWw9ImZyZWVETVMgbG9nbyI+PHRpdGxlPmZyZWVETVM8L3RpdGxlPjxwYXRoIGQ9Ik0xMjIgMjAgUTEwOCAyMCA5NiAzMSBMMjAgMTAwIFExMiAxMDggMTIgMTIzIFYyNjAgUTEyIDI3OCAzMSAyNzggSDIxMyBRMjMyIDI3OCAyMzIgMjYwIFYxMjMgUTIzMiAxMDggMjIzIDEwMCBMMTQ3IDMxIFExMzUgMjAgMTIyIDIwWiIgZmlsbD0iI0ZGNkEwMCIvPgo8Y2lyY2xlIGN4PSIxMjIiIGN5PSI2NiIgcj0iMTciIGZpbGw9IndoaXRlIi8+CjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iOSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNNTUgMTgzIEw3NyAxMzcgUTgyIDEyOCA5NCAxMjggSDE1MCBRMTYyIDEyOCAxNjcgMTM3IEwxODkgMTgzIi8+PHBhdGggZD0iTTQ4IDE4NCBRNDQgMTkwIDQ0IDIwNCBWMjI4IFE0NCAyMzggNTUgMjM4IEgxODkgUTIwMCAyMzggMjAwIDIyOCBWMjA0IFEyMDAgMTkwIDE5NiAxODQiLz48cGF0aCBkPSJNNTUgMTc4IEwzOSAxNzUgTTE4OSAxNzggTDIwNSAxNzUiLz48L2c+CjxwYXRoIGQ9Ik02NCAyMDEgTDgyIDIwNyBRODggMjA5IDg4IDIxNiBRODggMjIxIDgyIDIyMSBINjUgUTU5IDIyMSA1OSAyMTUgVjIwOCBRNTkgMjAxIDY0IDIwMVogTTE4MCAyMDEgTDE2MiAyMDcgUTE1NiAyMDkgMTU2IDIxNiBRMTU2IDIyMSAxNjIgMjIxIEgxNzkgUTE4NSAyMjEgMTg1IDIxNSBWMjA4IFExODUgMjAxIDE4MCAyMDFaIiBmaWxsPSJ3aGl0ZSIvPgo8cGF0aCBkPSJNNTggMjMxIEg4NiBWMjQ1IFE4NiAyNTEgNzkgMjUxIEg2NSBRNTggMjUxIDU4IDI0NVogTTE1OCAyMzEgSDE4NiBWMjQ1IFExODYgMjUxIDE3OSAyNTEgSDE2NSBRMTU4IDI1MSAxNTggMjQ1WiIgZmlsbD0id2hpdGUiLz48ZyBmaWxsPSIjMEIxRjJDIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwIDI1MCkgc2NhbGUoMC4xMDc0MjIgLTAuMTA3NDIyKSI+PHBhdGggZD0iTTkwOSAxNTU2VjEzMjFINzExUTYzNSAxMzIxIDYwNS4wIDEyOTMuNVE1NzUgMTI2NiA1NzUgMTE5OFYxMTIwSDg4MVY4NjRINTc1VjBIMjE3Vjg2NEgzOVYxMTIwSDIxN1YxMTk4UTIxNyAxMzgxIDMxOS4wIDE0NjguNVE0MjEgMTU1NiA2MzUgMTU1NloiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDI4ODUuODE4IDApIi8+PHBhdGggZD0iTTEwMDQgODE1UTk1NyA4MzcgOTEwLjUgODQ3LjVRODY0IDg1OCA4MTcgODU4UTY3OSA4NTggNjA0LjUgNzY5LjVRNTMwIDY4MSA1MzAgNTE2VjBIMTcyVjExMjBINTMwVjkzNlE1OTkgMTA0NiA2ODguNSAxMDk2LjVRNzc4IDExNDcgOTAzIDExNDdROTIxIDExNDcgOTQyLjAgMTE0NS41UTk2MyAxMTQ0IDEwMDMgMTEzOVoiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDM3NzYuODE4IDApIi8+PHBhdGggZD0iTTEyOTAgNTYzVjQ2MUg0NTNRNDY2IDMzNSA1NDQuMCAyNzIuMFE2MjIgMjA5IDc2MiAyMDlRODc1IDIwOSA5OTMuNSAyNDIuNVExMTEyIDI3NiAxMjM3IDM0NFY2OFExMTEwIDIwIDk4My4wIC00LjVRODU2IC0yOSA3MjkgLTI5UTQyNSAtMjkgMjU2LjUgMTI1LjVRODggMjgwIDg4IDU1OVE4OCA4MzMgMjUzLjUgOTkwLjBRNDE5IDExNDcgNzA5IDExNDdROTczIDExNDcgMTEzMS41IDk4OC4wUTEyOTAgODI5IDEyOTAgNTYzWk05MjIgNjgyUTkyMiA3ODQgODYyLjUgODQ2LjVRODAzIDkwOSA3MDcgOTA5UTYwMyA5MDkgNTM4LjAgODUwLjVRNDczIDc5MiA0NTcgNjgyWiIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDc4Ni44MTggMCkiLz48cGF0aCBkPSJNMTI5MCA1NjNWNDYxSDQ1M1E0NjYgMzM1IDU0NC4wIDI3Mi4wUTYyMiAyMDkgNzYyIDIwOVE4NzUgMjA5IDk5My41IDI0Mi41UTExMTIgMjc2IDEyMzcgMzQ0VjY4UTExMTAgMjAgOTgzLjAgLTQuNVE4NTYgLTI5IDcyOSAtMjlRNDI1IC0yOSAyNTYuNSAxMjUuNVE4OCAyODAgODggNTU5UTg4IDgzMyAyNTMuNSA5OTAuMFE0MTkgMTE0NyA3MDkgMTE0N1E5NzMgMTE0NyAxMTMxLjUgOTg4LjBRMTI5MCA4MjkgMTI5MCA1NjNaTTkyMiA2ODJROTIyIDc4NCA4NjIuNSA4NDYuNVE4MDMgOTA5IDcwNyA5MDlRNjAzIDkwOSA1MzguMCA4NTAuNVE0NzMgNzkyIDQ1NyA2ODJaIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2MTc1LjgxOCAwKSIvPjwvZz48ZyBmaWxsPSIjRkY2QTAwIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwIDI1MCkgc2NhbGUoMC4xMDc0MjIgLTAuMTA3NDIyKSI+PHBhdGggZD0iTTU3MyAxMjAyVjI5MUg3MTFROTQ3IDI5MSAxMDcxLjUgNDA4LjBRMTE5NiA1MjUgMTE5NiA3NDhRMTE5NiA5NzAgMTA3Mi4wIDEwODYuMFE5NDggMTIwMiA3MTEgMTIwMlpNMTg4IDE0OTNINTk0UTkzNCAxNDkzIDExMDAuNSAxNDQ0LjVRMTI2NyAxMzk2IDEzODYgMTI4MFExNDkxIDExNzkgMTU0Mi4wIDEwNDcuMFExNTkzIDkxNSAxNTkzIDc0OFExNTkzIDU3OSAxNTQyLjAgNDQ2LjVRMTQ5MSAzMTQgMTM4NiAyMTNRMTI2NiA5NyAxMDk4LjAgNDguNVE5MzAgMCA1OTQgMEgxODhaIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSg3NDI1LjE4MiAwKSIvPjxwYXRoIGQ9Ik0xODggMTQ5M0g2NzhMMTAxOCA2OTRMMTM2MCAxNDkzSDE4NDlWMEgxNDg1VjEwOTJMMTE0MSAyODdIODk3TDU1MyAxMDkyVjBIMTg4WiIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoOTEyNS4xODIgMCkiLz48cGF0aCBkPSJNMTIyNyAxNDQ2VjExMzBRMTEwNCAxMTg1IDk4Ny4wIDEyMTMuMFE4NzAgMTI0MSA3NjYgMTI0MVE2MjggMTI0MSA1NjIuMCAxMjAzLjBRNDk2IDExNjUgNDk2IDEwODVRNDk2IDEwMjUgNTQwLjUgOTkxLjVRNTg1IDk1OCA3MDIgOTM0TDg2NiA5MDFRMTExNSA4NTEgMTIyMC4wIDc0OS4wUTEzMjUgNjQ3IDEzMjUgNDU5UTEzMjUgMjEyIDExNzguNSA5MS41UTEwMzIgLTI5IDczMSAtMjlRNTg5IC0yOSA0NDYuMCAtMi4wUTMwMyAyNSAxNjAgNzhWNDAzUTMwMyAzMjcgNDM2LjUgMjg4LjVRNTcwIDI1MCA2OTQgMjUwUTgyMCAyNTAgODg3LjAgMjkyLjBROTU0IDMzNCA5NTQgNDEyUTk1NCA0ODIgOTA4LjUgNTIwLjBRODYzIDU1OCA3MjcgNTg4TDU3OCA2MjFRMzU0IDY2OSAyNTAuNSA3NzQuMFExNDcgODc5IDE0NyAxMDU3UTE0NyAxMjgwIDI5MS4wIDE0MDAuMFE0MzUgMTUyMCA3MDUgMTUyMFE4MjggMTUyMCA5NTguMCAxNTAxLjVRMTA4OCAxNDgzIDEyMjcgMTQ0NloiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDExMTYzLjE4MiAwKSIvPjwvZz48L3N2Zz4=
   UserPoolDomain:
     Type: AWS::Cognito::UserPoolDomain
     Properties:
@@ -190,6 +250,8 @@ Resources:
           ORIGIN_SECRET: !Ref OriginSecret
           TOKEN_ISSUER: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
           TOKEN_AUDIENCE: !Ref UserPoolClient
+          MCP_CLIENT_ID: !Ref McpClient
+          MCP_RESOURCE_URI: !Sub 'https://app.${RootDomain}/api/mcp'
       Policies:
         - Statement:
             - Effect: Allow
@@ -199,6 +261,20 @@ Resources:
               Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
               Resource: !Sub '${Documents.Arn}/tenants/*'
       Events:
+        Mcp:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /mcp
+            Method: POST
+            Auth: {Authorizer: NONE}
+        McpMetadata:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /.well-known/oauth-protected-resource
+            Method: GET
+            Auth: {Authorizer: NONE}
         AdfIntake:
           Type: HttpApi
           Properties:

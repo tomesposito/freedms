@@ -13,7 +13,25 @@ export class DynamoRepositories implements RepositoryFactory {
   // In-process, warm-instance only; the consistent epoch Get validates across instances.
   // A cold/missing page still reads every LEAD#/CUSTOMER# query page.
   private leadPageCache = new Map<string, LeadPage>();
-  constructor(private table: string, private client = DynamoDBDocumentClient.from(new DynamoDBClient({}))) {}
+  // Opt in at hosted entrypoints; legacy repository consumers retain their row layout.
+  constructor(private table: string, private client = DynamoDBDocumentClient.from(new DynamoDBClient({})), private subjectBindings = false) {}
+  /** Operator-only migration for pre-MCP memberships; no scan and no role changes. */
+  async bindSubject(tenantId: string, subject: string): Promise<void> {
+    requireId(tenantId); requireId(subject);
+    await this.client.send(new TransactWriteCommand({TransactItems: [
+      {ConditionCheck: {TableName: this.table, Key: {PK: `TENANT#${tenantId}`, SK: `MEMBER#${subject}`},
+        ConditionExpression: '#d.#u = :subject AND #d.#t = :tenant',
+        ExpressionAttributeNames: {'#d': 'data', '#u': 'userId', '#t': 'tenantId'}, ExpressionAttributeValues: {':subject': subject, ':tenant': tenantId}}},
+      {Put: {TableName: this.table, Item: {PK: `SUBJECT#${subject}`, SK: 'TENANT', data: {tenantId}},
+        ConditionExpression: 'attribute_not_exists(PK) OR #d.#t = :tenant',
+        ExpressionAttributeNames: {'#d': 'data', '#t': 'tenantId'}, ExpressionAttributeValues: {':tenant': tenantId}}}
+    ]}));
+  }
+  async tenantForSubject(subject: string): Promise<string | undefined> {
+    const result = await this.client.send(new GetCommand({TableName: this.table,
+      Key: {PK: `SUBJECT#${requireId(subject)}`, SK: 'TENANT'}, ConsistentRead: true}));
+    return result.Item?.data?.tenantId;
+  }
   forTenant(tenantId: string): TenantRepository {
     requireId(tenantId);
     const PK = `TENANT#${tenantId}`;
@@ -38,6 +56,11 @@ export class DynamoRepositories implements RepositoryFactory {
       TableName: this.table, Item: {...key(SK), data}, ConditionExpression: condition,
       ...(version === undefined ? {} : {ExpressionAttributeNames: {'#d': 'data', '#v': 'version'}, ExpressionAttributeValues: {':v': version}})
     }});
+    // A subject has the same immutable dealership binding as its Cognito identity.
+    const subjectPut = (subject: string) => ({Put: {TableName: this.table,
+      Item: {PK: `SUBJECT#${requireId(subject)}`, SK: 'TENANT', data: {tenantId}},
+      ConditionExpression: 'attribute_not_exists(PK) OR #d.#t = :tenant',
+      ExpressionAttributeNames: {'#d': 'data', '#t': 'tenantId'}, ExpressionAttributeValues: {':tenant': tenantId}}});
     const eventPut = (event: OutboxEvent) => { assertScope(tenantId, event); return put(`EVENT#${event.id}`, event); };
     const transact = async (items: TransactWriteCommandInput['TransactItems']) => {
       try { await this.client.send(new TransactWriteCommand({TransactItems: items})); }
@@ -71,7 +94,7 @@ export class DynamoRepositories implements RepositoryFactory {
         await transact([
           put('MEMBERSHIP_GUARD', {version: (guard?.version ?? 0) + 1}, guard ? '#d.#v = :v' : 'attribute_not_exists(PK)', guard?.version),
           put(`INVITE#${invite.id}`, record, '#d.#v = :v', invite.version),
-          put(`USER#${requireId(user.id)}`, user), put(`MEMBER#${user.id}`, member), eventPut(event), eventPut(memberEvent)
+          ...(this.subjectBindings ? [subjectPut(user.id)] : []), put(`USER#${requireId(user.id)}`, user), put(`MEMBER#${user.id}`, member), eventPut(event), eventPut(memberEvent)
         ]);
         return 'accepted';
       },
@@ -84,7 +107,7 @@ export class DynamoRepositories implements RepositoryFactory {
         validateMemberWrite(user, member, expected, event, await workspaceUsers());
         await transact([
           put('MEMBERSHIP_GUARD', {version: (guard?.version ?? 0) + 1}, guard ? '#d.#v = :v' : 'attribute_not_exists(PK)', guard?.version),
-          {Put: {TableName: this.table, Item: {...key(`USER#${requireId(user.id)}`), data: user}}},
+          ...(this.subjectBindings ? [subjectPut(user.id)] : []), {Put: {TableName: this.table, Item: {...key(`USER#${requireId(user.id)}`), data: user}}},
           {Put: {TableName: this.table, Item: {...key(`MEMBER#${requireId(member.userId)}`), data: member}}}, eventPut(event)
         ]);
       },
@@ -294,7 +317,7 @@ export class DynamoRepositories implements RepositoryFactory {
         if (acceptance) assertCrmWrites(tenantId, [acceptance]);
         assertScope(tenantId, membership); assertEvent(tenantId, 1, event, 'tenant.created');
         if (tenant.id !== tenantId || membership.userId !== user.id) throw new Error('Invalid provisioning scope');
-        await transact([put('PROFILE', tenant), put(`USER#${requireId(user.id)}`, user), put(`MEMBER#${user.id}`, membership), eventPut(event), ...(acceptance ? [put(`${acceptance.record.kind.toUpperCase()}#${acceptance.record.id}`, acceptance.record), eventPut(acceptance.event)] : [])]);
+        await transact([...(this.subjectBindings ? [subjectPut(user.id)] : []), put('PROFILE', tenant), put(`USER#${requireId(user.id)}`, user), put(`MEMBER#${user.id}`, membership), eventPut(event), ...(acceptance ? [put(`${acceptance.record.kind.toUpperCase()}#${acceptance.record.id}`, acceptance.record), eventPut(acceptance.event)] : [])]);
       }
     };
   }

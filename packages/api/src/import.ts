@@ -83,7 +83,7 @@ export async function inventoryImport(request: ApiRequest, principal: Principal,
   if (typeof body.csv !== 'string' || (body.enrich !== undefined && typeof body.enrich !== 'boolean')) throw invalid('CSV text and an optional boolean enrich flag are required.');
   const p = await preview(body.csv, body.enrich === true, repo, now, decoder);
   if (path.endsWith('/preview')) return response(200, {data: p});
-  const event = (type: OutboxEvent['type'], aggregateId: string): OutboxEvent => ({id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, type, aggregateId, aggregateVersion: 1, occurredAt: now.toISOString(), deliveryStatus: 'pending'});
+  const event = (type: OutboxEvent['type'], aggregateId: string): OutboxEvent => ({id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, ...(request.agent ? {actorType: 'agent' as const} : {}), type, aggregateId, aggregateVersion: 1, occurredAt: now.toISOString(), deliveryStatus: 'pending'});
   const result: ImportResult = {importId: randomUUID(), totalRows: p.totalRows, importedCount: 0, errorCount: p.errorCount, duplicateCount: p.duplicateCount, importedVehicleIds: [], skipped: []};
   for (const row of p.rows) {
     if (row.status !== 'valid') { result.skipped.push({rowNumber: row.rowNumber, status: row.status, errors: row.errors, ...(row.duplicate ? {duplicate: row.duplicate} : {})}); continue; }

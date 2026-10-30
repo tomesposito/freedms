@@ -1,3 +1,4 @@
+import { isMcpPath } from './mcp/server.js';
 import { timingSafeEqual } from 'node:crypto';
 import { ApiError } from './errors.js';
 import type { AuthClaims } from '@freedms/shared';
@@ -21,10 +22,10 @@ export function gatewayHandler(handle: (request: ApiRequest) => Promise<ApiRespo
       const publicLink = (method === 'GET' && /^\/(share|invite)\/[^/]+$/.test(path)) ||
         (method === 'POST' && /^\/share\/[^/]+\/(respond|documents)$/.test(path));
       // Only API Gateway's verified claims are trusted. Invite acceptance requires Cognito.
-      if (!intake && !publicLink) validateClaims(claims, issuer, audience);
+      if (!intake && !publicLink && !isMcpPath(path)) validateClaims(claims, issuer, audience);
       const authorization = Object.entries(event.headers ?? {}).find(([key]) => key.toLowerCase() === 'authorization')?.[1] ?? '';
       const acceptEncoding = Object.entries(event.headers ?? {}).find(([key]) => key.toLowerCase() === 'accept-encoding')?.[1];
-      return await handle({method, path, acceptEncoding, query: event.queryStringParameters,
+      return await handle({method, path, authorization, acceptEncoding, query: event.queryStringParameters,
         body: event.isBase64Encoded && event.body ? Buffer.from(event.body, 'base64').toString('utf8') : event.body,
         ...(intake ? {intakeToken: authorization.replace(/^Bearer /, '')} : publicLink ? {} : {claims: claims as unknown as AuthClaims})});
     } catch (error) { return errorResponse(error); }

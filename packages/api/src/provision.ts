@@ -9,7 +9,7 @@ if (!process.env.TABLE_NAME || !tenantArg || !subArg || !dealershipArg || !nameA
   process.exitCode = 1;
 } else {
   const tenantId = requireId(tenantArg); const userId = requireId(subArg); const createdAt = new Date().toISOString();
-  await new DynamoRepositories(process.env.TABLE_NAME).forTenant(tenantId).provision(
+  await new DynamoRepositories(process.env.TABLE_NAME, undefined, true).forTenant(tenantId).provision(
     {id: tenantId, name: text(dealershipArg, 'Dealership'), createdAt},
     {id: userId, name: text(nameArg, 'Name')},
     {tenantId, userId, role: 'admin', active: true},
