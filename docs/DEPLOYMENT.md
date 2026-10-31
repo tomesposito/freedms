@@ -221,7 +221,7 @@ Every release also packages `site/` with content-addressed screenshots under
 `marketing/` in `web.tar.gz`. The version-2 manifest binds both frontends. The
 marketing page describes the invite-only pilot and links sign-in to the app;
 legacy apex `/signup` links point to the pilot information section and `/login`
-redirects to the app. Unknown apex paths (including `/api/*`) return 404.
+redirects to the app. Only `POST /api/access-requests` reaches the API on the apex; other unknown apex paths (including other `/api/*` paths) return 404.
 
 Application branding lives in `packages/web/src/assets/` and is referenced through
 `src/brand.ts` or the HTML favicon link. Vite emits versioned SVG files under
@@ -331,7 +331,7 @@ GitHub-hosted public builds and the account's included private Actions allowance
 avoid an always-on runner. Private minutes, artifact/release retention, S3 release
 snapshots, and normal AWS requests remain subject to account quotas and charges.
 
-## MCP connector (issue #71; local implementation, not deployed)
+## MCP connector
 
 The stateless Streamable HTTP endpoint is `https://app.<RootDomain>/api/mcp`.
 Protected Resource Metadata is served at
@@ -342,6 +342,8 @@ the API routes are `POST /mcp` and `GET /.well-known/oauth-protected-resource`.
 pool issuer. Local defaults use `http://127.0.0.1:3001/mcp` and a mock issuer.
 The local adapter mounts the same handler; offline tests inject RSA JWKS and a
 clock rather than contacting Cognito. Local web ID tokens are not MCP credentials.
+
+The template creates an MCP client with OAuth disabled until `McpCallbackURLs` is set. This lets the operator obtain its client ID before registering the exact consumer callback; no MCP access tokens can be issued in the interim. `McpLogoutURLs` is optional.
 
 Register each consumer with a dedicated public Cognito app client, following
 `McpClient`: authorization code, no secret, refresh tokens, exact callback/logout
@@ -362,7 +364,7 @@ request. Unknown, inactive, ambiguous (local), or unsupported-role users receive
 no tools. Existing hosted records need the scoped operator migration before use:
 `TABLE_NAME=<table> node --import tsx packages/api/src/mcp-backfill.ts <tenant-id>`.
 Run once for each known dealership; it verifies membership and refuses to move
-an already-bound subject. This migration was not run against cloud resources.
+an already-bound subject. Run the migration only for verified existing dealership memberships before enabling an MCP consumer.
 
 Available reads are `search_vehicles`, `get_vehicle`, `list_leads`, `get_lead`,
 `list_customers`, `get_customer`, `list_deals`, `get_deal`, `get_service_board`,
@@ -381,7 +383,7 @@ these four writes has a `confirm` argument. No token minting, attestation,
 signature, compliance sign-off, terms acceptance, or credit certification tools
 are exposed. Those actions remain human-only.
 
-Both app clients have `AWS::Cognito::ManagedLoginBranding` resources with navy
+When `EnableManagedLoginBranding=true`, both app clients have `AWS::Cognito::ManagedLoginBranding` resources with navy
 `#0B1F2C`, orange `#FF6A00`, rounded inputs/buttons and an embedded base64 copy of
 `packages/web/src/assets/logo.svg`. SVG is supported, so no raster conversion or
 external image hosting is necessary. Settings follow the
@@ -389,7 +391,6 @@ external image hosting is necessary. Settings follow the
 The schema does not expose arbitrary font loading; Inter is not forced. Layout
 remains Cognito's, not a custom page. **Activation prerequisite:** the current
 LITE pool/classic domain must be moved to a managed-login-capable tier and domain
-version before applying these branding resources. Those prerequisite changes
-are outside this issue's explicit template-diff allowlist and have not been made.
-Operator review, registration, migration, branding activation and live deployment
-remain separate steps; no cloud changes were performed for this issue.
+version before applying these branding resources. The flag defaults to false so the Lite pool and custom in-app login can be deployed without those prerequisites. MCP OAuth works with the classic hosted UI and does not require enabling managed-login branding.
+
+For ChatGPT, create a custom MCP server at `https://app.<RootDomain>/api/mcp` using OAuth and the dedicated client ID. Copy the exact production redirect URI from its management screen into `McpCallbackURLs`; do not guess a callback ID or use a wildcard. New connections can use callback-specific URLs when the issuer does not advertise RFC 9207 support. See [OpenAI authentication documentation](https://developers.openai.com/plugins/build/auth). Register the callback with a reviewed stack parameter update, then sign in and approve the requested scopes in ChatGPT. Public endpoint checks alone do not verify the final OAuth connection.

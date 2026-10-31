@@ -20,7 +20,8 @@ export function gatewayHandler(handle: (request: ApiRequest) => Promise<ApiRespo
       const claims = event.requestContext.authorizer?.jwt?.claims ?? {};
       const intake = path === '/intake/adf' && method === 'POST';
       const publicLink = (method === 'GET' && /^\/(share|invite)\/[^/]+$/.test(path)) ||
-        (method === 'POST' && /^\/share\/[^/]+\/(respond|documents)$/.test(path));
+        (method === 'POST' && /^\/share\/[^/]+\/(respond|documents)$/.test(path)) ||
+        (method === 'POST' && path === '/access-requests');
       // Only API Gateway's verified claims are trusted. Invite acceptance requires Cognito.
       if (!intake && !publicLink && !isMcpPath(path)) validateClaims(claims, issuer, audience);
       const authorization = Object.entries(event.headers ?? {}).find(([key]) => key.toLowerCase() === 'authorization')?.[1] ?? '';

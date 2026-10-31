@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { MemoryRepositories } from '../src/memory.js';
 import { DynamoRepositories } from '../src/dynamo.js';
+import { gatewayHandler } from '../src/gateway.js';
 import { createHandler } from '../src/handler.js';
 import { listAccessRequests, markAccessRequestHandled } from '../src/access-requests.js';
 import { OPERATOR_TENANT_ID } from '../src/repository.js';
@@ -213,4 +214,20 @@ test('mail factory defaults to no-op and SES shapes text commands with optional 
   assert.ok(commands[0] instanceof SendEmailCommand);
   assert.deepEqual(commands[0].input, {...expected, ReplyToAddresses: [fields.email]});
   assert.deepEqual(commands[1].input, expected);
+});
+
+// Exercise the deployed adapter as well as the in-process handler.
+test('hosted access capture is public only for POST and still requires the private origin', async () => {
+  const repositories = new MemoryRepositories();
+  const handler = createHandler(repositories, {decode: async () => { throw Error('Unexpected VIN lookup'); }});
+  const gateway = gatewayHandler(handler, 'issuer', 'audience', 'test-origin');
+  const event = (path = '/access-requests', method = 'POST', origin = 'test-origin') => ({
+    rawPath: path, headers: {'x-freedms-origin': origin}, body: JSON.stringify(fields), requestContext: {http: {method}}
+  });
+  assert.equal((await gateway(event('/access-requests', 'POST', ''))).statusCode, 403);
+  assert.equal((await gateway(event())).statusCode, 201);
+  assert.equal((await repositories.forTenant(OPERATOR_TENANT_ID).accessRequests()).length, 1);
+  for (const [path, method] of [['/access-requests', 'GET'], ['/access-requests', 'DELETE'], ['/access-requests/anything', 'POST'], ['/session', 'GET']]) {
+    assert.equal((await gateway(event(path, method))).statusCode, 401);
+  }
 });
