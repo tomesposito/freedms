@@ -43,7 +43,8 @@ export async function reconcileStock(repo: TenantRepository, principal: Principa
   record.stockWarning = finalized && old?.stockApplied ? old.stockWarning ?? null : null;
   record.reservedStockWarning = finalized && old?.stockApplied ? old.reservedStockWarning ?? null : null;
   const reservedParts: NonNullable<RepairOrder['reservedStockWarning']>['parts'] = [];
-  const orders = changes.some(([,amount])=>amount<0) ? await repo.crmList('parts-po') : [];
+  const orders = changes.length ? (await repo.crmList('parts-po')).map(po=>({...po,lines:po.lines.map(line=>({...line}))})).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id)) : [];
+  const changedOrders = new Set<string>();
   const reservations = changes.length ? (await repo.crmList('parts-reservation')).filter(r=>r.repairOrderId===record.id).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id)) : [];
   const writes: CrmWrite[] = [];
   for (const [id,amount] of changes) {
@@ -66,9 +67,31 @@ export async function reconcileStock(repo: TenantRepository, principal: Principa
       writes.push({record:changed,expectedVersion:reservation.version,event:{id:randomUUID(),tenantId:principal.tenantId,actorId:principal.userId,aggregateId:changed.id,aggregateVersion:changed.version,type:'parts-reservation.updated',occurredAt:time,deliveryStatus:'pending',causeId:record.id}});
       remaining-=quantity;if(!remaining) break;
     }
+    // Holds retain priority; only the remaining delta consumes/restores PO stock.
+    for(const po of orders) {
+      for(const line of po.lines) {
+        if(line.partId!==id || line.specialOrder?.repairOrderId!==record.id) continue;
+        const quantity=Math.min(remaining,amount<0 ? line.quantityReserved : line.quantityConsumed ?? 0);
+        if(!quantity) continue;
+        const consumed=amount<0 ? quantity : -quantity;
+        line.quantityConsumed=(line.quantityConsumed ?? 0)+consumed;
+        line.quantityReserved-=consumed;
+        line.quantityFulfilled+=consumed;
+        line.fulfilled=line.quantityReserved===0;
+        updated.quantityReserved=integer((updated.quantityReserved ?? 0)-consumed,'Reserved');
+        changedOrders.add(po.id);
+        remaining-=quantity;
+      }
+      if(!remaining) break;
+    }
     writes.push({record:updated,expectedVersion:part.version,event:stockEvent(principal,time,updated,record.id)});
   }
-  if(writes.length>38) throw invalid('Stock save exceeds transaction limit: too many on-hand reservations affected.');
+  for(const po of orders.filter(po=>changedOrders.has(po.id))) {
+    const changed={...po,version:po.version+1,updatedAt:time};
+    writes.push({record:changed,expectedVersion:po.version,event:{id:randomUUID(),tenantId:principal.tenantId,actorId:principal.userId,aggregateId:po.id,aggregateVersion:changed.version,type:'parts-po.updated',occurredAt:time,deliveryStatus:'pending',causeId:record.id}});
+  }
+  // Leave one write for the RO, within both repository limits; never split stock writes.
+  if(writes.length>38 || writes.filter(w=>w.record.kind!=='parts-reservation').length>9) throw invalid('Stock save exceeds transaction limit: too many reservations affected.');
   if (reservedParts.length) {
     if (!acknowledgeReservedStock) throw invalid(`Stock is reserved for other special orders: ${reservedParts.map(p=>`${p.partNumber} (${p.quantityReserved} reserved)`).join(', ')}. Explicit reserved-stock acknowledgement required.`);
     record.reservedStockWarning = {parts:reservedParts,acknowledgedBy:principal.userId,acknowledgedAt:time};

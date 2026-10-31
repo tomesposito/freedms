@@ -300,6 +300,7 @@ async function reserve(ctx: Awaited<ReturnType<typeof setup>>, partId:string, qu
   assert.equal(po.status,201,JSON.stringify(po));
   const received=await ctx.call('POST',`/parts/purchase-orders/${po.data.id}/receive`,{version:1,lines:[{lineId:po.data.lines[0].id,quantity}]},tenant);
   assert.equal(received.status,200,JSON.stringify(received));
+  return received.data;
 }
 test('RO completion protects other reservations atomically, records acknowledgements once, preserves and replaces warnings, and reverses exactly',async()=>{
   const ctx=await setup(),{part,ro,call,stock,repositories,setTime}=ctx,p=(await part({quantityOnHand:2})).data,q=(await part({partNumber:'SECOND',quantityOnHand:1})).data,owner=(await ro([])).data;
@@ -333,7 +334,7 @@ test('RO completion uses unreserved stock and sums its own reservations across P
   const done=await call('PUT',`/service/repair-orders/${other.id}`,{version:1,status:'completed'});
   assert.equal(done.status,200);assert.equal(done.data.reservedStockWarning,null);assert.equal(await stock(p.id),5);
   const own=await call('PUT',`/service/repair-orders/${owner.id}`,{version:1,status:'completed'});
-  assert.equal(own.status,200);assert.equal(own.data.reservedStockWarning,null);assert.equal(await stock(p.id),2);assert.equal((await call('GET',`/parts/${p.id}`)).data.quantityReserved,5);
+  assert.equal(own.status,200);assert.equal(own.data.reservedStockWarning,null);assert.equal(await stock(p.id),2);assert.equal((await call('GET',`/parts/${p.id}`)).data.quantityReserved,2);
   const foreign=(await part({quantityOnHand:0},'B')).data;await reserve(ctx,foreign.id,4,null,'B');
   const foreignRo=(await ro([line(foreign.id,1)],'B')).data;
   assert.equal((await call('PUT',`/service/repair-orders/${foreignRo.id}`,{version:1,status:'completed'},'B')).status,400);
@@ -464,4 +465,75 @@ test('Concurrent holds cannot overreserve and PO plus on-hand reserved totals re
   assert.equal((await call('POST',`/parts/reservations/${h.id}/release`,{version:h.version,quantity:2})).status,200);await invariant();
   done=await call('PUT',`/service/repair-orders/${r.id}`,{version:done.data.version,status:'open'});assert.equal(done.status,200);await invariant();
   assert.equal((await call('GET','/parts/purchase-orders')).data[0].lines[0].quantityReserved,3);
+});
+
+async function reservationInvariant(ctx:Awaited<ReturnType<typeof setup>>,partId:string) {
+  const repo=ctx.repositories.forTenant('A'),part=await repo.crmGet('part',partId);
+  const orders=await repo.crmList('parts-po'),holds=await repo.crmList('parts-reservation');
+  const reserved=orders.flatMap(po=>po.lines).filter(l=>l.partId===partId).reduce((sum,l)=>sum+l.quantityReserved,0)+holds.filter(h=>h.partId===partId).reduce((sum,h)=>sum+h.quantity-h.quantityConsumed-h.quantityReleased,0);
+  assert.equal(part!.quantityReserved,reserved);
+}
+for(const quantity of [2,5]) test(`RO consumes special-order stock once and restores it exactly (${quantity} reserved)`,async()=>{
+  const ctx=await setup(),{call,part,ro,repositories}=ctx,p=(await part({quantityOnHand:10})).data;
+  let r=(await ro([line(p.id,2)])).data;
+  let po=await reserve(ctx,p.id,quantity,r.id);
+  // Existing stored lines have no consumption field.
+  assert.equal(po.lines[0].quantityConsumed,undefined);
+  const save=async(patch:object)=>{const result=await call('PUT',`/service/repair-orders/${r.id}`,{version:r.version,...patch});assert.equal(result.status,200,JSON.stringify(result));r=result.data;};
+  const check=async(onHand:number,reserved:number,consumed:number,fulfilled:number)=>{
+    const row=(await call('GET',`/parts/${p.id}`)).data;assert.deepEqual([row.quantityOnHand,row.quantityReserved],[onHand,reserved]);
+    po=(await call('GET',`/parts/purchase-orders/${po.id}`)).data;
+    assert.deepEqual([po.lines[0].quantityReserved,po.lines[0].quantityConsumed ?? 0,po.lines[0].quantityFulfilled,po.lines[0].fulfilled],[reserved,consumed,fulfilled,reserved===0]);
+    await reservationInvariant(ctx,p.id);
+  };
+  await reservationInvariant(ctx,p.id);
+  await save({status:'completed'});await check(8+quantity,quantity-2,2,2);
+  let result=await call('POST',`/parts/purchase-orders/${po.id}/special-fulfill`,{version:po.version,lineId:po.lines[0].id});
+  assert.equal(result.status,quantity===2?400:200);await check(10,0,2,quantity);
+  await save({status:'open'});await check(12,2,0,quantity-2);
+  await save({status:'completed'});await check(10,0,2,quantity);
+  await save({status:'open'});await check(12,2,0,quantity-2);
+  result=await call('POST',`/parts/purchase-orders/${po.id}/special-fulfill`,{version:po.version,lineId:po.lines[0].id});assert.equal(result.status,200);await check(10,0,0,quantity);
+  const events=repositories.eventsForTest('A').filter(e=>e.type==='parts-po.updated'&&e.causeId===r.id);
+  assert.equal(events.length,4);assert.ok(events.every(e=>e.actorId==='userA'&&e.tenantId==='A'));
+});
+
+test('RO edits reconcile oldest POs, share consumption with holds, and leave unrelated orders unchanged',async()=>{
+  const ctx=await setup(),{call,part,ro,setTime,repositories}=ctx,p=(await part()).data;
+  let r=(await ro([line(p.id,4)])).data;
+  const a=await reserve(ctx,p.id,2,r.id),b=await reserve(ctx,p.id,3,r.id);
+  const ordered=[a,b].sort((a,b)=>a.id.localeCompare(b.id));
+  setTime('2026-10-25T12:00:00Z');const c=await reserve(ctx,p.id,2,r.id);
+  const other=(await ro([])).data,unrelated=await reserve(ctx,p.id,1,other.id),customer=await reserve(ctx,p.id,1);
+  const foreign=(await part({},'B')).data,foreignRo=(await ro([],'B')).data,foreignPo=await reserve(ctx,foreign.id,2,foreignRo.id,'B');
+  const save=async(patch:object)=>{const result=await call('PUT',`/service/repair-orders/${r.id}`,{version:r.version,...patch});assert.equal(result.status,200,JSON.stringify(result));r=result.data;await reservationInvariant(ctx,p.id);};
+  const consumed=async()=>Promise.all([...ordered,c].map(async po=>(await call('GET',`/parts/purchase-orders/${po.id}`)).data.lines[0].quantityConsumed ?? 0));
+  const first=ordered[0].lines[0].quantityReserved;
+  await save({status:'completed'});assert.deepEqual(await consumed(),[first,4-first,0]);assert.equal(await ctx.stock(p.id),25);
+  await save({lineItems:[line(p.id,2)]});assert.deepEqual(await consumed(),[first-2,4-first,0]);assert.equal(await ctx.stock(p.id),27);
+  await save({lineItems:[line(p.id,4)]});assert.deepEqual(await consumed(),[first,4-first,0]);assert.equal(await ctx.stock(p.id),25);
+  await save({status:'open'});assert.deepEqual(await consumed(),[0,0,0]);
+  const hold=(await call('POST','/parts/reservations',{partId:p.id,repairOrderId:r.id,quantity:1})).data;
+  await save({status:'completed',lineItems:[line(p.id,8)]});assert.deepEqual(await consumed(),[first,5-first,2]);
+  assert.equal((await repositories.forTenant('A').crmGet('parts-reservation',hold.id))!.quantityConsumed,1);
+  await save({status:'open'});assert.deepEqual(await consumed(),[0,0,0]);
+  await save({status:'completed'});assert.deepEqual(await consumed(),[first,5-first,2]);
+  for(const po of [unrelated,customer]) assert.deepEqual((await call('GET',`/parts/purchase-orders/${po.id}`)).data,po);
+  assert.deepEqual((await call('GET',`/parts/purchase-orders/${foreignPo.id}`,undefined,'B')).data,foreignPo);
+});
+
+test('PO reconciliation respects transaction limits atomically and combines multiple lines into one PO write',async()=>{
+  const ctx=await setup(),{call,part,ro,repositories}=ctx,ps=[];
+  for(let i=0;i<8;i++) ps.push((await part({partNumber:`PO-${i}`})).data);
+  let r=(await ro(ps.map((p,i)=>line(p.id,1,String(i))))).data;
+  let po=(await call('POST','/parts/purchase-orders',{vendorName:'Vendor',lines:ps.map(p=>({partId:p.id,quantityOrdered:1,costCents:501,specialOrder:{repairOrderId:r.id}}))})).data;
+  po=(await call('POST',`/parts/purchase-orders/${po.id}/receive`,{version:1,lines:po.lines.map((l:{id:string})=>({lineId:l.id,quantity:1}))})).data;
+  const done=await call('PUT',`/service/repair-orders/${r.id}`,{version:r.version,status:'completed'});assert.equal(done.status,200,JSON.stringify(done));r=done.data;
+  assert.equal(repositories.eventsForTest('A').filter(e=>e.type==='parts-po.updated'&&e.causeId===r.id).length,1);
+  for(const p of ps) await reservationInvariant(ctx,p.id);
+  const many=(await ro([line(ps[0].id,9)])).data;
+  for(let i=0;i<9;i++) await reserve(ctx,ps[0].id,1,many.id);
+  const before=await repositories.forTenant('A').crmList('parts-po'),stock=await repositories.forTenant('A').crmGet('part',ps[0].id),events=repositories.eventsForTest('A').length;
+  const denied=await call('PUT',`/service/repair-orders/${many.id}`,{version:1,status:'completed'});assert.equal(denied.status,400);assert.match(denied.error.message,/transaction limit/);
+  assert.deepEqual(await repositories.forTenant('A').crmList('parts-po'),before);assert.deepEqual(await repositories.forTenant('A').crmGet('part',ps[0].id),stock);assert.equal(repositories.eventsForTest('A').length,events);assert.deepEqual((await call('GET',`/service/repair-orders/${many.id}`)).data,many);
 });

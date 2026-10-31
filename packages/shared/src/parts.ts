@@ -13,6 +13,8 @@ export interface PurchaseOrderLine {
   id: string; partId: string; quantityOrdered: number; quantityReceived: number; costCents: number;
   specialOrder: null | {customerId: string | null; repairOrderId: string | null; customerName: string | null};
   quantityReserved: number; quantityFulfilled: number; fulfilled: boolean;
+  // Included in quantityFulfilled; reversible stock consumption by the owning RO.
+  quantityConsumed?: number;
 }
 export interface PartsPurchaseOrder extends CrmRecord {
   kind: 'parts-po'; vendorName: string; status: 'open' | 'partially-received' | 'received'; lines: PurchaseOrderLine[];
