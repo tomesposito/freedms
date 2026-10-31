@@ -17,7 +17,7 @@ import { accounting } from './accounting.js';
 import { fiProducts } from './fi.js';
 import { documentControls } from './documents.js';
 import { mfa } from './mfa.js';
-import { dispatchWebhooks, fetchWebhookSender, webhooks, type WebhookSender } from './webhooks.js';
+import { scheduleWebhookDispatch, fetchWebhookSender, webhooks, type WebhookSender } from './webhooks.js';
 import { feeds } from './feed.js';
 import { inventoryImport } from './import.js';
 import { analytics, analyticsFromEnv, track, type AnalyticsVendor } from './analytics.js';
@@ -61,14 +61,14 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         const result = await intake(request, repositories, now());
         // Intake has authenticated its tenant token before returning a successful mutation.
         if (result.statusCode >= 200 && result.statusCode < 300) {
-          try { await dispatchWebhooks(repositories.forTenant(request.intakeToken!.split('.')[0]), webhookSender, now()); } catch { /* Preserve the committed intake. */ }
+          try { scheduleWebhookDispatch(repositories.forTenant(request.intakeToken!.split('.')[0]), webhookSender, now()); } catch { /* Preserve the committed intake. */ }
         }
         return compressResponse(result, request.acceptEncoding);
       }
       if (request.path.replace(/\/$/, '').startsWith('/share/')) {
         const {result, tenantId} = await publicShare(request, repositories, now(), documents);
         if (request.method.toUpperCase() === 'POST' && result.statusCode >= 200 && result.statusCode < 300) {
-          try { await dispatchWebhooks(repositories.forTenant(tenantId), webhookSender, now()); } catch { /* Preserve the committed buyer mutation. */ }
+          try { scheduleWebhookDispatch(repositories.forTenant(tenantId), webhookSender, now()); } catch { /* Preserve the committed buyer mutation. */ }
         }
         return compressResponse(result, request.acceptEncoding);
       }
@@ -175,7 +175,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       };
       const result = await execute();
       if (result.statusCode >= 200 && result.statusCode < 300 && ['POST', 'PUT', 'DELETE'].includes(method) && !/^\/webhooks(\/|$)/.test(path) && !/^\/(account|admin)\/mfa(\/|$)/.test(path)) {
-        try { await dispatchWebhooks(repository, webhookSender, now()); } catch { /* Delivery failures must never fail a committed mutation. */ }
+        try { scheduleWebhookDispatch(repository, webhookSender, now()); } catch { /* Delivery failures must never fail a committed mutation. */ }
       }
       return compressResponse(result, request.acceptEncoding);
     } catch (error) { return errorResponse(error); }

@@ -86,6 +86,7 @@ export class DynamoRepositories implements RepositoryFactory {
       return members.map(membership => ({membership, user: users.find(u => u.id === membership.userId)!}));
     };
     return {
+      webhookDispatchScope: {owner: this, tenantId},
       acceptInvite: async (invite, user, now) => {
         const guard = await get<{version: number}>('MEMBERSHIP_GUARD');
         const current = await get<import('@freedms/shared').Invite>(`INVITE#${requireId(invite.id)}`);

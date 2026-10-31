@@ -10,11 +10,23 @@ import { MemoryRepositories } from '../src/memory.js';
 import { DynamoRepositories } from '../src/dynamo.js';
 import { createHandler } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
-import { dispatchWebhooks, fetchWebhookSender, type WebhookSender } from '../src/webhooks.js';
+import { dispatchWebhooks, fetchWebhookSender, MAX_DELIVERIES_PER_PASS, scheduleWebhookDispatch, type WebhookSender } from '../src/webhooks.js';
 const now = new Date('2026-10-22T12:00:00Z');
 const date = now.toISOString();
 const input = {mileage: null, stockNumber: 'S2', vin: '1HGCM82633A004352', year: 2003, make: 'Honda', model: 'Accord', trim: 'EX', status: 'available', listPrice: 1234567, cost: 990000, reconCosts: [], notes: 'Private note', dateStocked: '2026-10-01', location: 'Lot'};
 const event = (tenantId: string, id: string, type: OutboxEvent['type'], aggregateId = id, aggregateVersion = 1): OutboxEvent => ({id, tenantId, actorId: 'user', aggregateId, aggregateVersion, type, occurredAt: date, deliveryStatus: 'pending'});
+async function waitFor(check: () => Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (!await check()) {
+    assert.ok(Date.now() < deadline, 'background delivery deadline exceeded');
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return {promise, resolve};
+}
 async function setup(sender: WebhookSender = async () => ({status: 204})) {
   const repositories = new MemoryRepositories();
   for (const tenantId of ['A', 'B', 'staff']) await repositories.forTenant(tenantId).provision({id: tenantId, name: tenantId, createdAt: date}, {id: 'user', name: 'Test'}, {tenantId, userId: 'user', role: tenantId === 'staff' ? 'staff' : 'admin', active: true}, event(tenantId, 'provision', 'tenant.created', tenantId));
@@ -57,7 +69,7 @@ test('real loopback HTTP delivery verifies raw signature, metadata, tenant isola
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const {call, endpoint, add} = await setup(fetchWebhookSender);
   const a = (await endpoint('A', `${base}/A`)).data; await endpoint('B', `${base}/B`);
-  assert.equal((await add()).status, 201); assert.equal(requests.length, 1); assert.equal(requests[0].url, '/A');
+  assert.equal((await add()).status, 201); await waitFor(async () => (await call('/webhooks/deliveries')).data.length === 1); assert.equal(requests.length, 1); assert.equal(requests[0].url, '/A');
   const received = requests[0];
   assert.equal(received.headers['x-freedms-signature'], `sha256=${createHmac('sha256', a.secret).update(received.body).digest('hex')}`);
   assert.equal(received.headers['content-type'], 'application/json'); assert.equal(received.headers['x-freedms-event'], 'vehicle.created');
@@ -74,7 +86,7 @@ test('failed deliveries retry only three times, sanitize exceptions and remain t
   for (const throws of [false, true]) {
     let calls = 0;
     const {call, endpoint, add, repositories} = await setup(async () => { calls++; if (throws) throw Error('secret response payload'); return {status: 500}; });
-    await endpoint(); assert.equal((await add()).status, 201); assert.equal(calls, 3);
+    await endpoint(); assert.equal((await add()).status, 201); await waitFor(async () => (await call('/webhooks/deliveries')).data.length === 1); assert.equal(calls, 3);
     const log = (await call('/webhooks/deliveries')).data;
     assert.equal(log.length, 1); assert.equal(log[0].attempts, 3); assert.equal(log[0].status, 'failed');
     assert.equal(log[0].lastStatusCode, throws ? null : 500); assert.equal(log[0].lastError, throws ? 'Network or timeout failure' : 'HTTP failure');
@@ -89,7 +101,7 @@ test('disable and re-enable delivery, rotate secret and use the new signature', 
   await call(`/webhooks/endpoints/${record.id}`, 'PUT', {version: 1, enabled: false}); await add(); assert.equal(requests.length, 0);
   await call(`/webhooks/endpoints/${record.id}`, 'PUT', {version: 2, enabled: true}); assert.equal(requests.length, 0);
   const rotated = (await call(`/webhooks/endpoints/${record.id}/rotate-secret`, 'POST', {version: 3})).data;
-  await add(); assert.equal(requests.length, 2); // Both previously pending and subsequent subscribed events.
+  await add(); await waitFor(async () => (await call('/webhooks/deliveries')).data.length === 2); assert.equal(requests.length, 2); // Both previously pending and subsequent subscribed events.
   for (const req of requests) {
     assert.equal(req.headers['x-freedms-signature'], `sha256=${createHmac('sha256', rotated.secret).update(req.body).digest('hex')}`);
     assert.notEqual(req.headers['x-freedms-signature'], `sha256=${createHmac('sha256', record.secret).update(req.body).digest('hex')}`);
@@ -134,7 +146,7 @@ test('memory webhook repositories reject tenant and event misuse, conflict and c
   await assert.rejects(a.saveWebhookEndpoint(updated, 1, {...change, type: 'webhook.created'}), /outbox/);
   await a.saveWebhookEndpoint(updated, 1, change);
   await assert.rejects(a.saveWebhookEndpoint(updated, 1, {...change, id: 'again'}), /changed/);
-  await add(); const delivery = (await a.webhookDeliveries())[0];
+  await add(); await waitFor(async () => (await a.webhookDeliveries()).length === 1); const delivery = (await a.webhookDeliveries())[0];
   await assert.rejects(b.saveWebhookDelivery(delivery), /scope/);
   assert.deepEqual(await b.webhookEndpoints(), []); assert.deepEqual(await b.webhookDeliveries(), []); assert.equal(await b.webhookEndpoint(record.id), undefined);
   const copy = (await a.webhookEndpoints())[0]; copy.secret = 'altered'; assert.notEqual((await a.webhookEndpoint(record.id))!.secret, 'altered');
@@ -177,6 +189,7 @@ test('authenticated ADF intake dispatches only its tenant events; invalid intake
   assert.equal((await handler({method: 'POST', path: '/intake/adf', intakeToken: 'invalid', body})).statusCode, 401);
   assert.equal(requests.length, 0);
   assert.equal((await handler({method: 'POST', path: '/intake/adf', intakeToken: token, body})).statusCode, 201);
+  await waitFor(async () => (await call('/webhooks/deliveries')).data.length === 1);
   assert.equal(requests.length, 1); assert.equal(JSON.parse(requests[0].body).tenantId, 'A');
   assert.deepEqual((await call('/webhooks/deliveries', 'GET', {}, 'B')).data, []);
 });
@@ -188,4 +201,82 @@ test('manual dispatch reports exhausted failures and later passes do not retry t
   assert.equal(attempts, 3);
   assert.deepEqual((await call('/webhooks/dispatch', 'POST')).data, {created: 0, delivered: 0, failed: 0});
   assert.equal(attempts, 3);
+});
+
+
+test('mutations return before a blocked sender and active drains pick up later commits', async () => {
+  const release = deferred(); const started = deferred();
+  let sends = 0;
+  const {add, endpoint, call} = await setup(async () => { sends++; started.resolve(); await release.promise; return {status: 204}; });
+  await endpoint();
+  try {
+    let response: Awaited<ReturnType<typeof add>> | undefined;
+    void add().then(result => { response = result; });
+    await waitFor(async () => response !== undefined);
+    assert.equal(response!.status, 201);
+    await started.promise;
+    assert.equal((await call('/webhooks/deliveries')).data.length, 0);
+    assert.equal((await add()).status, 201);
+    assert.equal(sends, 1, 'same tenant must have only one active drain');
+  } finally { release.resolve(); }
+  await waitFor(async () => (await call('/webhooks/deliveries')).data.length === 2);
+  assert.equal(sends, 2);
+  assert.ok((await call('/webhooks/deliveries')).data.every((d: WebhookDelivery) => d.status === 'delivered'));
+});
+
+test('bounded passes order pending pairs and manual dispatch drains all remaining work', async () => {
+  const sent: string[] = [];
+  const sender: WebhookSender = async (_url, init) => { sent.push(JSON.parse(init.body).id); return {status: 204}; };
+  const {repositories, add, endpoint, call} = await setup(sender);
+  for (let i = 0; i < MAX_DELIVERIES_PER_PASS + 3; i++) await add();
+  await endpoint();
+  const repo = repositories.forTenant('A');
+  const expected = (await repo.events()).filter(e => e.type === 'vehicle.created').sort((a, b) => a.occurredAt.localeCompare(b.occurredAt) || a.id.localeCompare(b.id)).map(e => e.id);
+  assert.deepEqual(await dispatchWebhooks(repo, sender, now), {created: MAX_DELIVERIES_PER_PASS, delivered: MAX_DELIVERIES_PER_PASS, failed: 0, remaining: 3});
+  assert.deepEqual(sent, expected.slice(0, MAX_DELIVERIES_PER_PASS));
+  // Add enough pairs that the manual call itself must loop over multiple passes.
+  await endpoint();
+  assert.deepEqual((await call('/webhooks/dispatch', 'POST')).data, {created: MAX_DELIVERIES_PER_PASS + 6, delivered: MAX_DELIVERIES_PER_PASS + 6, failed: 0});
+  assert.equal((await repo.webhookDeliveries()).length, 2 * expected.length);
+});
+
+test('overlapping passes and duplicate scheduling converge on a stable delivery identity', async () => {
+  const release = deferred(); const ids: string[] = [];
+  const sender: WebhookSender = async (_url, init) => { ids.push(init.headers['x-freedms-delivery']); await release.promise; return {status: 204}; };
+  const {repositories, add, endpoint} = await setup(sender);
+  await add(); await endpoint();
+  const repo = repositories.forTenant('A');
+  const passes = [dispatchWebhooks(repo, sender, now), dispatchWebhooks(repo, sender, now)];
+  scheduleWebhookDispatch(repo, sender, now);
+  scheduleWebhookDispatch(repositories.forTenant('A'), sender, now);
+  try { await waitFor(async () => ids.length === 3); }
+  finally { release.resolve(); }
+  await Promise.all(passes);
+  await waitFor(async () => (await repo.webhookDeliveries()).length === 1);
+  await dispatchWebhooks(repo, sender, now);
+  assert.equal(new Set(ids).size, 1);
+  assert.equal((await repo.webhookDeliveries())[0].id, ids[0]);
+});
+
+test('scheduling during an empty final pass requests another pass; drain errors are contained', async () => {
+  const {repositories, add, endpoint} = await setup();
+  await add(); await endpoint();
+  const repo = repositories.forTenant('A'); const read = deferred(); const release = deferred();
+  let first = true;
+  const wrapper = {...repo, events: async () => {
+    if (first) { first = false; read.resolve(); await release.promise; return []; }
+    return repo.events();
+  }};
+  scheduleWebhookDispatch(wrapper, async () => ({status: 204}), now);
+  await read.promise;
+  scheduleWebhookDispatch(wrapper, async () => ({status: 204}), now);
+  release.resolve();
+  await waitFor(async () => (await repo.webhookDeliveries()).length === 1);
+  const logs: unknown[][] = []; const original = console.error;
+  console.error = (...args) => { logs.push(args); };
+  try {
+    scheduleWebhookDispatch({...repo, webhookDispatchScope: undefined, webhookEndpoints: async () => { throw Error('secret URL and payload'); }}, async () => ({status: 204}), now);
+    await waitFor(async () => logs.length === 1);
+    assert.deepEqual(logs, [['Webhook dispatch failed', 'Error']]);
+  } finally { console.error = original; }
 });

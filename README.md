@@ -458,7 +458,7 @@ sort keys. Every business mutation and its minimal,
 attributable event commit together via `TransactWriteItems`; conditional writes
 prevent stale edits. Events contain IDs, action, version, actor, and timestamp,
 not VINs or notes. Outbox events retain their pending marker; webhook delivery
-results are recorded separately per endpoint/event pair. No background worker runs. Inventory queries read all tenant vehicle pages, then filter; this
+results are recorded separately per endpoint/event pair. An in-process background drain consumes pending webhook work. Inventory queries read all tenant vehicle pages, then filter; this
 first slice is intended for small independent lots, with API pagination/indexing
 left for scale. Stock numbers and VINs are not uniqueness-constrained in this build.
 
@@ -927,7 +927,7 @@ list responses and delivery logs omit it. Local memory is cleared on API restart
 | PUT | `/webhooks/endpoints/{id}` | Current `version`, plus optional `url`, `eventTypes`, `enabled`; returns public endpoint |
 | POST | `/webhooks/endpoints/{id}/rotate-secret` | `{version}`; returns updated endpoint and one-time new `secret` |
 | GET | `/webhooks/deliveries` | Tenant delivery records, newest first |
-| POST | `/webhooks/dispatch` | `{}`; returns `{created, delivered, failed}` counts for this pass |
+| POST | `/webhooks/dispatch` | `{}`; returns `{created, delivered, failed}` counts after draining all pending deliveries |
 
 Bodies are limited to 4096 bytes. URLs require HTTPS, except HTTP loopback
 receivers (`localhost`, `127.0.0.1`, `[::1]`); credentials in URLs are rejected.
@@ -935,9 +935,9 @@ Subscriptions must be nonempty, distinct values from the returned event list.
 Endpoint writes emit metadata-only `webhook.created` / `webhook.updated` events;
 these configuration events are never subscribable or dispatched.
 
-Successful POST/PUT/DELETE requests outside `/webhooks` attempt pending deliveries
-for that tenant, including authenticated ADF intake. **Send pending** does so
-manually. This scans existing subscribed outbox events, including events before
+Successful POST/PUT/DELETE requests outside `/webhooks` schedule background deliveries
+for that tenant, including authenticated ADF intake. **Send pending** drains all pending deliveries
+synchronously. This scans existing subscribed outbox events, including events before
 endpoint creation or while it was disabled. GETs and endpoint changes do not send.
 Each endpoint/event pair gets at most three immediate attempts per dispatch pass,
 with a three-second fetch timeout and no redirects. HTTP 2xx means delivered;
@@ -945,7 +945,8 @@ otherwise the log shows failed. Both outcomes are terminal: later passes skip
 recorded pairs. Errors are sanitized categories, never response bodies or secrets.
 Webhook failures never fail the original mutation. No scheduler runs while the
 app is closed. This local dispatcher does not provide distributed worker locking
-or crash-safe exactly-once delivery; background workers remain deferred.
+or crash-safe exactly-once delivery; a separate hosted worker remains deferred. Pending outbox work survives process
+stops and can be drained manually or by later activity.
 
 Receivers get an HTTP POST with the exact JSON metadata fields `id`, `type`,
 `tenantId`, `aggregateId`, `aggregateVersion`, `occurredAt`, `actorId`.

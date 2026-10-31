@@ -12,7 +12,7 @@ export async function webhooksRoute(ui: UI, secret?: string): Promise<void> {
   try {
     const [settings, deliveries] = await Promise.all([ui.api<{endpoints: PublicWebhookEndpoint[]; eventTypes: WebhookEventType[]}>('/webhooks/endpoints'), ui.api<WebhookDelivery[]>('/webhooks/deliveries')]);
     if (!ui.current()) return;
-    ui.shell(`<h1>Webhooks</h1><p>Webhooks send event metadata to URLs you configure.</p><p>Deliveries are attempted from this local app when events happen or when you click Send pending. No background scheduler runs here; deliveries do not run while the app is closed. Signing secrets are stored on local tenant records because signing requires the raw value.</p>
+    ui.shell(`<h1>Webhooks</h1><p>Webhooks send event metadata to URLs you configure.</p><p>Deliveries run in the background after events happen. Send pending drains anything still waiting. Deliveries do not run while the app is closed. Signing secrets are stored on local tenant records because signing requires the raw value.</p>
       ${secret ? `<section class="card" role="status"><h2>Signing secret</h2><p>Copy it now — it will not be shown again.</p><code>${e(secret)}</code></section>` : ''}
       ${ui.admin ? '' : '<p>Only administrators can change webhook settings.</p>'}
       <section><h2>Endpoints</h2>${settings.endpoints.length ? settings.endpoints.map(endpoint => webhookEndpointHtml(endpoint, ui.admin)).join('') : '<p class="empty">No webhook endpoints yet.</p>'}</section>

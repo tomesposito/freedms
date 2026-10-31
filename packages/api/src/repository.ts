@@ -13,6 +13,8 @@ export interface LeadPage { leads: Lead[]; customers: Customer[]; total: number 
 export const OPERATOR_TENANT_ID = 'operator';
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
+  /** Stable factory/tenant identity across short-lived repository wrappers. */
+  readonly webhookDispatchScope?: {owner: object; tenantId: string};
   accessRequest(email: string): Promise<AccessRequest | undefined>;
   accessRequests(): Promise<AccessRequest[]>;
   saveAccessRequest(record: AccessRequest, expectedVersion: number): Promise<void>;
