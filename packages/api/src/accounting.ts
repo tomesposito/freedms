@@ -43,6 +43,7 @@ export function dealPosting(deal: DealView, accounts: GlAccount[], now: Date): J
   const lines: JournalLine[] = [];
   const line = (code: string, side: 'debit' | 'credit', amount: number, explanation: string) => {
     if (amount === 0) return;
+    if (amount < 0) { side = side === 'debit' ? 'credit' : 'debit'; amount = Math.abs(amount); }
     const account = accounts.find(a => a.code === code); if (!account) throw missing();
     lines.push({accountId: account.id, accountCode: account.code, accountName: account.name, debit: side === 'debit' ? amount : 0, credit: side === 'credit' ? amount : 0, explanation});
   };

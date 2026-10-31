@@ -15,8 +15,8 @@ async function setup() {
   const handler = createHandler(repositories, {decode: async () => { throw new Error('No network'); }}, () => clock);
   const raw = (tenant: string, method = 'GET', path = '/accounting/accounts', body?: unknown, query?: ApiRequest['query']) => handler({method, path, body: body === undefined ? undefined : JSON.stringify(body), query, claims: tokens.verify(tokens.issue(`user${tenant}`, tenant))});
   const call = async (...args: Parameters<typeof raw>) => { const r = await raw(...args); return {status: r.statusCode, ...JSON.parse(r.body)}; };
-  const createDeal = async (tenant = 'A'): Promise<DealView> => {
-    const v = (await call(tenant, 'POST', '/vehicles', {mileage: null, stockNumber: 'test', vin: '1HGCM82633A004352', year: 2003, make: 'Test', model: 'Test', trim: '', status: 'available', listPrice: 1000000, cost: 700000, reconCosts: [{description: 'Repair', amount: 50000}], dateStocked: '2026-10-19', location: '', notes: ''})).data;
+  const createDeal = async (tenant = 'A', costs = {cost: 700000, reconCosts: [{description: 'Repair', amount: 50000}]}): Promise<DealView> => {
+    const v = (await call(tenant, 'POST', '/vehicles', {mileage: null, stockNumber: 'test', vin: '1HGCM82633A004352', year: 2003, make: 'Test', model: 'Test', trim: '', status: 'available', listPrice: 1000000, ...costs, dateStocked: '2026-10-19', location: '', notes: ''})).data;
     const lead = (await call(tenant, 'POST', '/leads', {customer: {name: 'Buyer', phone: '', email: '', address: '', notes: '', consent: {status: 'unknown', timestamp: null, source: ''}}, source: 'walk-in', vehicleId: v.id})).data.lead;
     return (await call(tenant, 'POST', '/deals', {vehicleId: v.id, customerId: lead.customerId, type: 'finance'})).data;
   };
@@ -139,6 +139,7 @@ test('Accounting cash, overpayment, dead deals, commission rounding and legacy s
   }
   assert.equal(commissionFor(2, 2500), 1); assert.equal(commissionFor(-1, 2500), 0);
   assert.deepEqual((await call('A', 'GET', '/accounting/commissions', undefined, {from: '2026-11-01'})).data.rows, []);
+  assert.throws(() => assertBalanced([{accountId: 'x', accountCode: '5000', accountName: 'COGS', debit: -100000, credit: 0, explanation: 'Negative debit'}]), /Invalid journal amounts/);
   assert.throws(() => assertBalanced([])); assert.throws(() => assertBalanced([{accountId: 'x', accountCode: '1000', accountName: 'Cash', debit: 1, credit: 0, explanation: 'Unbalanced'}]));
 });
 test('Concurrent lazy initialization, account uniqueness, selling and reversals remain exactly once', async () => {
@@ -152,23 +153,54 @@ test('Concurrent lazy initialization, account uniqueness, selling and reversals 
   const reversed = await Promise.all([call('A', 'POST', `/accounting/journal/${entries[0].id}/reverse`, {}), call('A', 'POST', `/accounting/journal/${entries[0].id}/reverse`, {})]); assert.deepEqual(reversed.map(c => c.status).sort(), [201, 409]);
   assert.ok((await call('A', 'GET', '/accounting/balances')).data.every((r: {balance: number}) => r.balance === 0));
 });
-test('Sale seeds defaults without visiting accounting; invalid posting fails closed without changing deal or vehicle', async () => {
+test('Sale seeds defaults without visiting accounting; extreme trade underallowance sells with a COGS credit', async () => {
   const {call, createDeal, repositories} = await setup();
   const d = await createDeal();
   assert.equal((await repositories.forTenant('A').crmList('gl-account')).length, 0);
   await sell(call, d);
   assert.equal((await repositories.forTenant('A').crmList('gl-account')).length, 20);
   assert.equal((await repositories.forTenant('A').crmList('journal-entry')).length, 1);
-  // An extreme trade underallowance would make the specified COGS debit negative.
-  // Reject before committing any deal/vehicle/lead or journal changes.
-  let bad = await createDeal();
-  bad = (await call('A', 'PUT', `/deals/${bad.id}`, {version: 1, status: 'approved', trade: {year: '2020', make: 'Trade', model: 'Trade', vin: '', allowance: 0, payoff: 0, actualCashValue: 1000000}})).data;
-  const count = repositories.eventsForTest('A').length;
-  assert.equal((await call('A', 'PUT', `/deals/${bad.id}`, {version: bad.version, status: 'sold'})).status, 400);
-  assert.equal((await call('A', 'GET', `/deals/${bad.id}`)).data.status, 'approved');
-  assert.equal((await call('A', 'GET', `/vehicles/${bad.vehicleId}`)).data.status, 'available');
-  assert.equal((await repositories.forTenant('A').crmList('journal-entry')).length, 1);
-  assert.equal(repositories.eventsForTest('A').length, count);
+  const underallowed = await createDeal();
+  const sold = await sell(call, underallowed, {trade: {year: '2020', make: 'Trade', model: 'Trade', vin: '', allowance: 0, payoff: 0, actualCashValue: 1000000}});
+  assert.equal(sold.status, 'sold');
+  assert.equal((await call('A', 'GET', `/deals/${sold.id}`)).data.status, 'sold');
+  assert.equal((await call('A', 'GET', `/vehicles/${sold.vehicleId}`)).data.status, 'sold');
+  assert.equal((await repositories.forTenant('A').crmList('journal-entry')).length, 2);
+  const entries = (await call('A', 'GET', '/accounting/journal', undefined, {dealId: sold.id})).data as JournalEntry[];
+  assert.equal(entries.length, 1);
+  const entry = entries[0];
+  assertBalanced(entry.lines);
+  assert.equal(sum(entry, 'debit'), sum(entry, 'credit'));
+  assert.ok(entry.lines.every(l => Number.isSafeInteger(l.debit) && Number.isSafeInteger(l.credit) && ((l.debit > 0 && l.credit === 0) || (l.credit > 0 && l.debit === 0))));
+  const cogs = entry.lines.find(l => l.accountCode === '5000')!;
+  assert.equal(cogs.debit, 0); assert.equal(cogs.credit, 250000);
+  assert.equal(cogs.explanation, 'Vehicle cost incl. recon and trade overallowance');
+  assert.equal((await call('B', 'GET', `/accounting/deals/${sold.id}`)).status, 404);
+  assert.deepEqual((await call('B', 'GET', '/accounting/journal')).data, []);
+  assert.equal(await repositories.forTenant('B').crmGet('journal-entry', entry.id), undefined);
+  const events = repositories.eventsForTest('A').filter(e => e.aggregateId === entry.id);
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0], {id: events[0].id, tenantId: 'A', actorId: 'userA', aggregateId: entry.id, aggregateVersion: 1, type: 'journal-entry.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'});
+  assert.equal(repositories.eventsForTest('B').some(e => e.aggregateId === entry.id), false);
+  await assert.rejects(repositories.forTenant('B').crmWrite([{record: entry, event: events[0], expectedVersion: 0}]), /scope/);
+});
+test('Issue #86: $5,000 vehicle cost, $1,000 allowance and $7,000 ACV sell with a $1,000 COGS credit', async () => {
+  const {call, createDeal} = await setup();
+  const d = await createDeal('A', {cost: 500000, reconCosts: []});
+  const sold = await sell(call, d, {trade: {year: '2020', make: 'Trade', model: 'Trade', vin: '', allowance: 100000, payoff: 0, actualCashValue: 700000}});
+  assert.equal(sold.status, 'sold');
+  assert.equal(sold.vehicle.cost + sold.vehicle.reconCosts.reduce((s, r) => s + r.amount, 0), 500000);
+  const entries = (await call('A', 'GET', '/accounting/journal', undefined, {dealId: sold.id})).data as JournalEntry[];
+  assert.equal(entries.length, 1);
+  const entry = entries[0];
+  assertBalanced(entry.lines);
+  assert.equal(sum(entry, 'debit'), sum(entry, 'credit'));
+  assert.ok(entry.lines.every(l => Number.isSafeInteger(l.debit) && Number.isSafeInteger(l.credit) && ((l.debit > 0 && l.credit === 0) || (l.credit > 0 && l.debit === 0))));
+  const cogs = entry.lines.find(l => l.accountCode === '5000')!;
+  assert.equal(cogs.debit, 0); assert.equal(cogs.credit, 100000);
+  assert.equal(cogs.explanation, 'Vehicle cost incl. recon and trade overallowance');
+  const balance = (await call('A', 'GET', '/accounting/balances')).data.find((a: GlAccount) => a.code === '5000');
+  assert.equal(balance.debit, 0); assert.equal(balance.credit, 100000); assert.equal(balance.balance, -100000);
 });
 test('Legacy stored settings missing commission remain readable and editable', async () => {
   const {repositories, call} = await setup(); const date = now.toISOString();
