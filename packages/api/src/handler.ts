@@ -17,7 +17,7 @@ import { accounting } from './accounting.js';
 import { fiProducts } from './fi.js';
 import { documentControls } from './documents.js';
 import { mfa } from './mfa.js';
-import { scheduleWebhookDispatch, fetchWebhookSender, webhooks, type WebhookSender } from './webhooks.js';
+import { scheduleWebhookDispatch, fetchWebhookSender, hostedWebhookSender, guardHostedWebhookSender, webhooks, type WebhookSender } from './webhooks.js';
 import { feeds } from './feed.js';
 import { inventoryImport } from './import.js';
 import { analytics, analyticsFromEnv, track, type AnalyticsVendor } from './analytics.js';
@@ -53,7 +53,8 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
   if (!body || Buffer.byteLength(body) > limit) throw invalid(`A JSON body of at most ${limit} bytes is required.`);
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
-export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender = fetchWebhookSender, options: {hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
+export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
+  const sender = options.hosted ? guardHostedWebhookSender(webhookSender ?? hostedWebhookSender()) : webhookSender ?? fetchWebhookSender;
   const handle = async (request: ApiRequest): Promise<ApiResponse> => {
     if (isMcpPath(request.path)) return mcp(request);
     try {
@@ -61,14 +62,14 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         const result = await intake(request, repositories, now());
         // Intake has authenticated its tenant token before returning a successful mutation.
         if (result.statusCode >= 200 && result.statusCode < 300) {
-          try { scheduleWebhookDispatch(repositories.forTenant(request.intakeToken!.split('.')[0]), webhookSender, now()); } catch { /* Preserve the committed intake. */ }
+          try { scheduleWebhookDispatch(repositories.forTenant(request.intakeToken!.split('.')[0]), sender, now()); } catch { /* Preserve the committed intake. */ }
         }
         return compressResponse(result, request.acceptEncoding);
       }
       if (request.path.replace(/\/$/, '').startsWith('/share/')) {
         const {result, tenantId} = await publicShare(request, repositories, now(), documents);
         if (request.method.toUpperCase() === 'POST' && result.statusCode >= 200 && result.statusCode < 300) {
-          try { scheduleWebhookDispatch(repositories.forTenant(tenantId), webhookSender, now()); } catch { /* Preserve the committed buyer mutation. */ }
+          try { scheduleWebhookDispatch(repositories.forTenant(tenantId), sender, now()); } catch { /* Preserve the committed buyer mutation. */ }
         }
         return compressResponse(result, request.acceptEncoding);
       }
@@ -111,7 +112,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         }
         if (/^\/admin\/users(\/|$)/.test(path)) return await manageUsers(request, principal, repo, now());
         if (/^\/(account|admin)\/mfa(\/|$)/.test(path)) return await mfa(request, principal, repository, now());
-        if (/^\/webhooks(\/|$)/.test(path)) return await webhooks(request, principal, repo, now(), webhookSender);
+        if (/^\/webhooks(\/|$)/.test(path)) return await webhooks(request, principal, repo, now(), sender, options.hosted);
         const record = (data: import('@freedms/shared').BehavioralEvent) => track(repository, principal, now(), data, vendor);
         if (/^\/analytics(\/|$)/.test(path)) return await analytics(request, principal, repository, record);
         if (/^\/quick-entry(\/|$)/.test(path)) return await quickEntry(request, principal, repository, now(), provider);
@@ -175,7 +176,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       };
       const result = await execute();
       if (result.statusCode >= 200 && result.statusCode < 300 && ['POST', 'PUT', 'DELETE'].includes(method) && !/^\/webhooks(\/|$)/.test(path) && !/^\/(account|admin)\/mfa(\/|$)/.test(path)) {
-        try { scheduleWebhookDispatch(repository, webhookSender, now()); } catch { /* Delivery failures must never fail a committed mutation. */ }
+        try { scheduleWebhookDispatch(repository, sender, now()); } catch { /* Delivery failures must never fail a committed mutation. */ }
       }
       return compressResponse(result, request.acceptEncoding);
     } catch (error) { return errorResponse(error); }

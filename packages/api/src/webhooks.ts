@@ -1,3 +1,6 @@
+import { lookup } from 'node:dns/promises';
+import { request as httpsRequest } from 'node:https';
+import { BlockList, isIP } from 'node:net';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { webhookEventTypes, type OutboxEvent, type Principal, type PublicWebhookEndpoint, type WebhookDelivery, type WebhookEndpoint, type WebhookEventType } from '@freedms/shared';
 import { ApiError, conflict, missing, requireId } from './errors.js';
@@ -10,6 +13,78 @@ export const fetchWebhookSender: WebhookSender = async (url, init) => {
   await result.body?.cancel();
   return {status: result.status};
 };
+// Deny special-use IPv4 ranges, including their IPv4-mapped IPv6 forms.
+const nonPublic = new BlockList();
+for (const [address, prefix] of [
+  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+  ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24],
+  ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24],
+  ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]
+] as const) nonPublic.addSubnet(address, prefix, 'ipv4');
+const globalV6 = new BlockList();
+globalV6.addSubnet('2000::', 3, 'ipv6');
+// Exclude special-purpose/transition assignments as well as documentation space.
+for (const [address, prefix] of [['2001::', 23], ['2001:db8::', 32], ['2002::', 16], ['3fff::', 20]] as const) nonPublic.addSubnet(address, prefix, 'ipv6');
+function publicAddress(address: string): boolean {
+  const family = isIP(address);
+  if (family === 4) return !nonPublic.check(address, 'ipv4');
+  if (family !== 6) return false;
+  const normalized = new URL(`https://[${address}]/`).hostname;
+  const mapped = /^\[::ffff:([a-f0-9]+):([a-f0-9]+)\]$/.exec(normalized);
+  if (mapped) {
+    const value = parseInt(mapped[1], 16) * 65536 + parseInt(mapped[2], 16);
+    return publicAddress([24, 16, 8, 0].map(shift => (value >>> shift) & 255).join('.'));
+  }
+  return globalV6.check(address, 'ipv6') && !nonPublic.check(address, 'ipv6');
+}
+
+/** Injectable DNS and HTTPS seams keep policy and connection pinning testable offline. */
+export function hostedWebhookSender(dependencies: {
+  resolve?: (hostname: string) => Promise<{address: string; family: number}[]>;
+  request?: typeof httpsRequest;
+} = {}): WebhookSender {
+  const resolve = dependencies.resolve ?? (hostname => lookup(hostname, {all: true}));
+  const request = dependencies.request ?? httpsRequest;
+  return async (value, init) => {
+    const url = new URL(endpointUrl(value, true));
+    const hostname = url.hostname.replace(/^\[|\]$/g, '');
+    const controller = new AbortController();
+    return new Promise<{status: number}>((done, reject) => {
+      const timer = setTimeout(() => { controller.abort(); reject(Error('Webhook timeout')); }, 3000);
+      const finish = (error: unknown, status?: number) => {
+        clearTimeout(timer);
+        if (error) reject(error); else done({status: status!});
+      };
+      void (async () => {
+        const addresses = isIP(hostname) ? [{address: hostname, family: isIP(hostname)}] : await resolve(hostname);
+        if (controller.signal.aborted) return;
+        if (!addresses.length || addresses.some(a => !publicAddress(a.address) || isIP(a.address) !== a.family)) throw Error('Invalid webhook destination');
+        const pinned = addresses[0];
+        // No second DNS lookup: this fresh connection can use only the checked address.
+        // URL hostname remains intact for Host, TLS SNI and certificate verification.
+        const req = request(url, {
+          method: 'POST', headers: init.headers, agent: false, signal: controller.signal,
+          lookup: (_hostname, options, callback) => {
+            if (options.all) callback(null, [pinned]);
+            else callback(null, pinned.address, pinned.family);
+          }
+        }, res => {
+          res.destroy();
+          const status = res.statusCode ?? 0;
+          if (status >= 300 && status < 400) finish(Error('Webhook redirect'));
+          else finish(null, status);
+        });
+        req.on('error', error => finish(error));
+        req.end(init.body);
+      })().catch(error => finish(error));
+    });
+  };
+}
+
+/** Apply URL policy even to stored endpoints and caller-supplied senders. */
+export function guardHostedWebhookSender(sender: WebhookSender): WebhookSender {
+  return async (url, init) => sender(endpointUrl(url, true), init);
+}
 export const MAX_ATTEMPTS = 3;
 export const MAX_DELIVERIES_PER_PASS = 25;
 const drains = new WeakMap<object, Map<string, {rerun: boolean}>>();
@@ -77,18 +152,22 @@ export async function dispatchWebhooks(repo: TenantRepository, sender: WebhookSe
   return summary;
 }
 function publicEndpoint({secret: _secret, ...record}: WebhookEndpoint): PublicWebhookEndpoint { return record; }
-function endpointUrl(value: unknown): string {
+function endpointUrl(value: unknown, hosted = false): string {
   if (typeof value !== 'string' || !value.trim()) throw invalid('A webhook URL is required.');
   let url: URL;
   try { url = new URL(value); } catch { throw invalid('Invalid webhook URL.'); }
   if (url.username || url.password || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))) throw invalid('Use HTTPS, or HTTP with a local receiver, without URL credentials.');
+  if (hosted) {
+    const hostname = url.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
+    if (url.protocol !== 'https:' || hostname === 'localhost' || hostname.endsWith('.localhost') || (isIP(hostname) && !publicAddress(hostname))) throw invalid('Use a public HTTPS webhook URL without URL credentials.');
+  }
   return url.href;
 }
 function subscriptions(value: unknown): WebhookEventType[] {
   if (!Array.isArray(value) || !value.length || new Set(value).size !== value.length || value.some(v => !webhookEventTypes.includes(v))) throw invalid('Select distinct supported webhook event types.');
   return value;
 }
-export async function webhooks(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date, sender: WebhookSender) {
+export async function webhooks(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date, sender: WebhookSender, hosted = false) {
   const path = request.path.replace(/\/$/, ''), method = request.method.toUpperCase();
   const endpoint = /^\/webhooks\/endpoints\/([^/]+)(\/rotate-secret)?$/.exec(path);
   const allowed = path === '/webhooks/endpoints' ? ['GET', 'POST'] : path === '/webhooks/deliveries' ? ['GET'] : path === '/webhooks/dispatch' || endpoint?.[2] ? ['POST'] : endpoint ? ['PUT'] : [];
@@ -116,7 +195,7 @@ export async function webhooks(request: ApiRequest, principal: Principal, repo: 
   const reveal = !endpoint || Boolean(endpoint[2]);
   if (!endpoint) {
     onlyKeys(body, ['url', 'eventTypes']);
-    saved = {id: randomUUID(), tenantId: principal.tenantId, version: 1, createdAt: date, updatedAt: date, url: endpointUrl(body.url), eventTypes: subscriptions(body.eventTypes), enabled: true, secret: randomBytes(32).toString('hex')};
+    saved = {id: randomUUID(), tenantId: principal.tenantId, version: 1, createdAt: date, updatedAt: date, url: endpointUrl(body.url, hosted), eventTypes: subscriptions(body.eventTypes), enabled: true, secret: randomBytes(32).toString('hex')};
   } else {
     const record = await repo.webhookEndpoint(requireId(endpoint[1])); if (!record) throw missing();
     onlyKeys(body, endpoint[2] ? ['version'] : ['version', 'url', 'eventTypes', 'enabled']);
@@ -124,7 +203,7 @@ export async function webhooks(request: ApiRequest, principal: Principal, repo: 
     saved = {...record, version: expected + 1, updatedAt: date};
     if (endpoint[2]) saved.secret = randomBytes(32).toString('hex');
     else {
-      if ('url' in body) saved.url = endpointUrl(body.url);
+      if ('url' in body) saved.url = endpointUrl(body.url, hosted);
       if ('eventTypes' in body) saved.eventTypes = subscriptions(body.eventTypes);
       if ('enabled' in body) { if (typeof body.enabled !== 'boolean') throw invalid('Enabled must be a boolean.'); saved.enabled = body.enabled; }
     }

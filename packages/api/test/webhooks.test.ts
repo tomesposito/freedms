@@ -1,3 +1,5 @@
+import { EventEmitter } from 'node:events';
+import type { request as httpsRequest } from 'node:https';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
@@ -10,7 +12,7 @@ import { MemoryRepositories } from '../src/memory.js';
 import { DynamoRepositories } from '../src/dynamo.js';
 import { createHandler } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
-import { dispatchWebhooks, fetchWebhookSender, MAX_DELIVERIES_PER_PASS, scheduleWebhookDispatch, type WebhookSender } from '../src/webhooks.js';
+import { dispatchWebhooks, fetchWebhookSender, hostedWebhookSender, MAX_DELIVERIES_PER_PASS, scheduleWebhookDispatch, type WebhookSender } from '../src/webhooks.js';
 const now = new Date('2026-10-22T12:00:00Z');
 const date = now.toISOString();
 const input = {mileage: null, stockNumber: 'S2', vin: '1HGCM82633A004352', year: 2003, make: 'Honda', model: 'Accord', trim: 'EX', status: 'available', listPrice: 1234567, cost: 990000, reconCosts: [], notes: 'Private note', dateStocked: '2026-10-01', location: 'Lot'};
@@ -27,10 +29,10 @@ function deferred() {
   const promise = new Promise<void>(done => { resolve = done; });
   return {promise, resolve};
 }
-async function setup(sender: WebhookSender = async () => ({status: 204})) {
+async function setup(sender: WebhookSender | undefined = async () => ({status: 204}), hosted = false) {
   const repositories = new MemoryRepositories();
   for (const tenantId of ['A', 'B', 'staff']) await repositories.forTenant(tenantId).provision({id: tenantId, name: tenantId, createdAt: date}, {id: 'user', name: 'Test'}, {tenantId, userId: 'user', role: tenantId === 'staff' ? 'staff' : 'admin', active: true}, event(tenantId, 'provision', 'tenant.created', tenantId));
-  const handler = createHandler(repositories, {decode: async () => { throw Error('No network'); }}, () => now, undefined, undefined, undefined, sender);
+  const handler = createHandler(repositories, {decode: async () => { throw Error('No network'); }}, () => now, undefined, undefined, undefined, sender, {hosted});
   const tokens = new LocalTokens('test-secret-must-be-at-least-32-characters', () => now.getTime());
   const call = async (path: string, method = 'GET', body: unknown = {}, tenant = 'A') => {
     const result = await handler({path, method, body: JSON.stringify(body), claims: tokens.verify(tokens.issue('user', tenant))});
@@ -279,4 +281,105 @@ test('scheduling during an empty final pass requests another pass; drain errors 
     await waitFor(async () => logs.length === 1);
     assert.deepEqual(logs, [['Webhook dispatch failed', 'Error']]);
   } finally { console.error = original; }
+});
+
+const blockedHostedUrls = [
+  'http://127.0.0.1/hook', 'https://127.0.0.1/hook', 'https://localhost/hook',
+  'https://foo.localhost/hook', 'https://LOCALHOST./hook', 'https://foo.localhost./hook',
+  'https://10.0.0.5/hook', 'https://172.16.0.9/hook', 'https://192.168.1.1/hook',
+  'https://169.254.169.254/latest', 'https://[::1]/hook', 'https://[fe80::1]/hook',
+  'https://[fc00::1]/hook', 'https://0.0.0.0/hook', 'https://100.64.0.1/hook',
+  'https://192.0.0.1/hook', 'https://192.0.2.1/hook', 'https://198.51.100.1/hook',
+  'https://203.0.113.1/hook', 'https://198.18.0.1/hook', 'https://198.19.255.255/hook',
+  'https://240.0.0.1/hook', 'https://224.0.0.1/hook', 'https://192.88.99.1/hook',
+  'https://[::]/hook', 'https://[ff02::1]/hook', 'https://[2001:db8::1]/hook',
+  'https://[::ffff:127.0.0.1]/hook', 'https://[::ffff:192.168.1.1]/hook',
+  'https://0x7f.0.0.1/hook', 'https://2130706433/hook', 'https://0177.0.0.1/hook',
+  'http://example.invalid/hook', 'https://user:pass@example.invalid/hook', 'ftp://example.invalid/hook', 'bad URL'
+];
+test('hosted create and update reject non-public destinations after URL normalization', async () => {
+  const {call, endpoint} = await setup(undefined, true);
+  const record = (await endpoint('A', 'https://example.invalid/hook')).data;
+  assert.ok(record.id);
+  for (const url of blockedHostedUrls) {
+    assert.equal((await endpoint('A', url)).status, 400, url);
+    assert.equal((await call(`/webhooks/endpoints/${record.id}`, 'PUT', {version: 1, url})).status, 400, url);
+  }
+  for (const url of ['https://8.8.8.8/hook', 'https://[2606:4700:4700::1111]/hook', 'https://[::ffff:8.8.8.8]/hook']) assert.equal((await endpoint('A', url)).status, 201, url);
+  for (const host of ['0x7f.0.0.1', '2130706433', '0177.0.0.1']) assert.equal(new URL(`https://${host}`).hostname, '127.0.0.1');
+});
+
+function fakeHttps(status: number, inspect: (url: URL, options: import('node:https').RequestOptions, body: string) => void): typeof httpsRequest {
+  return ((url: URL, options: import('node:https').RequestOptions, callback: (res: unknown) => void) => {
+    const req = new EventEmitter();
+    return Object.assign(req, {end: (body: string) => {
+      inspect(url, options, body);
+      queueMicrotask(() => callback({statusCode: status, destroy() {}}));
+    }});
+  }) as typeof httpsRequest;
+}
+
+test('hosted resolution rejects any non-public answer and sanitizes recorded failures offline', async () => {
+  for (const answers of [
+    [{address: '10.0.0.5', family: 4}], [{address: '::1', family: 6}],
+    [{address: '8.8.8.8', family: 4}, {address: '169.254.169.254', family: 4}],
+    [{address: '::ffff:192.168.1.1', family: 6}], [], [{address: 'invalid', family: 4}]
+  ]) {
+    let connections = 0;
+    const sender = hostedWebhookSender({resolve: async () => answers, request: fakeHttps(204, () => { connections++; })});
+    const {endpoint, add, call} = await setup(sender, true);
+    await endpoint('A', 'https://example.invalid/hook'); await add();
+    await waitFor(async () => (await call('/webhooks/deliveries')).data.length === 1);
+    const delivery = (await call('/webhooks/deliveries')).data[0];
+    assert.equal(connections, 0); assert.equal(delivery.status, 'failed');
+    assert.equal(delivery.lastError, 'Network or timeout failure'); assert.equal(delivery.lastStatusCode, null);
+  }
+});
+
+test('hosted HTTPS pins the checked address with original TLS hostname and no second resolution', async () => {
+  let resolutions = 0, connections = 0;
+  const sender = hostedWebhookSender({
+    resolve: async hostname => { assert.equal(hostname, 'example.invalid'); resolutions++; return [{address: resolutions === 1 ? '8.8.8.8' : '127.0.0.1', family: 4}]; },
+    request: fakeHttps(204, (url, options, body) => {
+      connections++;
+      assert.equal(url.hostname, 'example.invalid'); assert.equal(options.agent, false);
+      assert.equal(options.rejectUnauthorized, undefined); assert.equal(options.servername, undefined);
+      assert.equal(options.method, 'POST'); assert.ok(options.signal); assert.ok(JSON.parse(body).id);
+      // Exercise both Node lookup callback shapes; neither can re-resolve the name.
+      const lookup = options.lookup!;
+      lookup('example.invalid', {all: true}, (error, addresses) => { assert.equal(error, null); assert.deepEqual(addresses, [{address: '8.8.8.8', family: 4}]); });
+      lookup('example.invalid', {}, (error, address, family) => { assert.equal(error, null); assert.equal(address, '8.8.8.8'); assert.equal(family, 4); });
+    })
+  });
+  const {endpoint, add, call} = await setup(sender, true);
+  await add(); await endpoint('A', 'https://example.invalid/hook');
+  assert.deepEqual((await call('/webhooks/dispatch', 'POST')).data, {created: 1, delivered: 1, failed: 0});
+  assert.equal(resolutions, 1); assert.equal(connections, 1);
+});
+
+test('hosted stored private endpoints never reach even an injected sender on automatic or manual dispatch', async () => {
+  for (const manual of [false, true]) {
+    let calls = 0;
+    const {repositories, endpoint, add, call} = await setup(async () => { calls++; return {status: 204}; }, true);
+    if (manual) await add();
+    const record = (await endpoint('A', 'https://example.invalid/hook')).data;
+    const repo = repositories.forTenant('A');
+    await repo.saveWebhookEndpoint({...record, url: 'https://10.0.0.5/hook', version: 2}, 1, event('A', 'unsafe-update', 'webhook.updated', record.id, 2));
+    if (manual) await call('/webhooks/dispatch', 'POST'); else await add();
+    await waitFor(async () => (await repo.webhookDeliveries()).length === 1);
+    assert.equal(calls, 0); assert.equal((await repo.webhookDeliveries())[0].lastError, 'Network or timeout failure');
+  }
+});
+
+test('hosted rejects redirects, DNS failures and times out unresolved DNS without connecting', async () => {
+  const init = {headers: {}, body: '{}'};
+  const redirect = hostedWebhookSender({resolve: async () => [{address: '8.8.8.8', family: 4}], request: fakeHttps(302, () => {})});
+  await assert.rejects(redirect('https://example.invalid', init));
+  const dnsFailure = hostedWebhookSender({resolve: async () => { throw Error('private DNS detail'); }, request: fakeHttps(204, () => assert.fail('No connection'))});
+  await assert.rejects(dnsFailure('https://example.invalid', init));
+  let release!: (addresses: {address: string; family: number}[]) => void;
+  const timeout = hostedWebhookSender({resolve: () => new Promise(resolve => { release = resolve; }), request: fakeHttps(204, () => assert.fail('No late connection'))});
+  await assert.rejects(timeout('https://example.invalid', init), /timeout/);
+  release([{address: '8.8.8.8', family: 4}]);
+  await new Promise(resolve => setImmediate(resolve));
 });
