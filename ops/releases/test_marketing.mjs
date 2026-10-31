@@ -48,7 +48,7 @@ const template = readFileSync('infra/template.yaml', 'utf8');
 const code = template.split('      FunctionCode: !Sub |\n')[1].split('\n  WebAcl:')[0]
   .replaceAll('${RootDomain}', 'freedms.co');
 const handler = runInNewContext(code + '\nhandler;');
-const route = (host, uri) => handler({request: {headers: {host: {value: host}}, uri}});
+const route = (host, uri, method = 'GET') => handler({request: {headers: {host: {value: host}}, uri, method}});
 
 test('apex routes to marketing objects without sharing the app asset cache keys', () => {
   for (const path of ['/', '/index.html']) assert.equal(route('freedms.co', path).uri, '/marketing/index.html');
@@ -71,4 +71,14 @@ test('pilot redirects work and unsupported apex paths do not reach the API', () 
   }
   assert.equal(route('app.freedms.co', '/marketing/index.html').statusCode, 404);
   assert.equal(route('other.example', '/').statusCode, 404);
+});
+
+test('only the pilot request POST reaches the API from the marketing host', () => {
+  assert.equal(route('freedms.co', '/api/access-requests', 'POST').uri, '/access-requests');
+  for (const method of ['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE']) {
+    assert.equal(route('freedms.co', '/api/access-requests', method).statusCode, 404);
+  }
+  for (const path of ['/api/session', '/api/mcp', '/api/access-requests/anything', '/api/access-requests/']) {
+    assert.equal(route('freedms.co', path, 'POST').statusCode, 404);
+  }
 });
