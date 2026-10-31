@@ -18,7 +18,7 @@ test('Sidebar renders all destinations in order with distinct inline icons and a
     assert.match(link[4], /stroke-width="1.8"/);
   });
   assert.doesNotMatch(sidebarNavigation(false), /#\/users/);
-  assert.match(main, /sidebarNavigation\(session\?\.principal.role === 'admin'\)/);
+  assert.match(main, /sidebarNavigation\(session\?\.principal.role === 'admin', session\?\.canManagePilotRequests\)/);
   assert.match(main, /anchor.setAttribute\('aria-current', 'page'\)/);
 });
 test('Sidebar preference defaults expanded, persists both choices and tolerates blocked storage', () => {

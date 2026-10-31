@@ -1,5 +1,5 @@
 import type { TurnstileVerifier } from './turnstile.js';
-import { submitAccessRequest, type AccessRequestMail } from './access-requests.js';
+import { submitAccessRequest, manageAccessRequests, canManageAccessRequests, type PilotOperator, type AccessRequestMail } from './access-requests.js';
 import { createMcpHandler, isMcpPath } from './mcp/server.js';
 import { mcpConfig, type McpConfig } from './mcp/auth.js';
 import { compressResponse } from './compression.js';
@@ -53,7 +53,7 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
   if (!body || Buffer.byteLength(body) > limit) throw invalid(`A JSON body of at most ${limit} bytes is required.`);
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
-export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
+export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
   const sender = options.hosted ? guardHostedWebhookSender(webhookSender ?? hostedWebhookSender()) : webhookSender ?? fetchWebhookSender;
   const handle = async (request: ApiRequest): Promise<ApiResponse> => {
     if (isMcpPath(request.path)) return mcp(request);
@@ -94,6 +94,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       }}) : repository;
 
       const execute = async (): Promise<ApiResponse> => {
+        if (/^\/admin\/access-requests(\/|$)/.test(path)) return await manageAccessRequests(request, principal, repositories, now(), options.pilotOperator);
         if (options.hosted && ((path === '/admin/users' && method === 'POST') || /^\/(account|admin)\/mfa(\/|$)/.test(path)))
           throw new ApiError(403, 'HOSTED_ACCOUNT_MANAGEMENT', 'Pilot accounts and authenticator recovery are managed by the pilot operator.');
         if (/^\/deals\/[^/]+\/(buyers-order\/signatures|documents\/[^/]+\/(signatures|replace))$/.test(path) || /^\/service\/repair-orders\/[^/]+\/signatures$/.test(path)) return await signatures(request, principal, repository, now(), documents);
@@ -133,6 +134,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (method === 'GET' && path === '/session') {
           const user = (await repository.users()).find(user => user.id === principal.userId);
           const data: Session = {
+            canManagePilotRequests: canManageAccessRequests(principal, options.pilotOperator),
             principal, tenant: await repository.tenant(), mfaEnabled: (await repository.mfa(principal.userId))?.enabled ?? false,
             user: user ? {id: user.id, name: user.name, email: user.email ?? null} : null,
           };

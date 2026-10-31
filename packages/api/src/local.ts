@@ -15,7 +15,7 @@ import { NhtsaVinDecoder } from './vin.js';
 if (process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NODE_ENV === 'production') throw new Error('Local auth must never run in production');
 const repositories = new MemoryRepositories();
 const tokens = new LocalTokens(randomBytes(48).toString('hex'));
-const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv(), undefined, {turnstile: turnstileVerifierFromEnv()});
+const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv(), undefined, {pilotOperator: {userId: process.env.PILOT_OPERATOR_SUBJECT ?? '', tenantId: process.env.PILOT_OPERATOR_TENANT_ID ?? ''}, turnstile: turnstileVerifierFromEnv()});
 const server = createServer(async (req, res) => {
   let result;
   try {

@@ -14,7 +14,7 @@ export function sidebarToggleIcon(slim: boolean): string {
 }
 type Destination = { label: string; href: string; icon: string };
 const destination = (label: string, href: string, paths: string): Destination => ({ label, href, icon: icon(paths) });
-export function sidebarNavigation(admin: boolean): string {
+export function sidebarNavigation(admin: boolean, pilotOperator = false): string {
   const groups: [string, Destination[]][] = [
     ['Sales', [
       destination('Inventory', '#/', '<path d="m5 10 2-5h10l2 5M4 10h16v8H4zM7 18v2m10-2v2M7 14h1m8 0h1"/>'),
@@ -36,6 +36,7 @@ export function sidebarNavigation(admin: boolean): string {
       destination('Feeds', '#/feeds', '<circle cx="5" cy="19" r="1"/><path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16"/>'),
       destination('Webhooks', '#/webhooks', '<path d="m10 7 3-3a5 5 0 0 1 7 7l-3 3m-3 3-3 3a5 5 0 0 1-7-7l3-3m1 6 8-8"/>'),
     ]],
+    ...(admin && pilotOperator ? [['Pilot', [destination('Pilot requests', '#/pilot-requests', '<path d="M4 4h16v16H4zM4 13h5l2 3h2l2-3h5M8 8h8"/>')]] as [string, Destination[]]] : []),
     ['Workspace', [
       destination('Account', '#/account', '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="9" r="3"/><path d="M6 20v-2a6 6 0 0 1 12 0v2"/>'),
       ...(admin ? [destination('Users', '#/users', '<circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6m2 4a5 5 0 0 1 3 4v3"/>')] : []),

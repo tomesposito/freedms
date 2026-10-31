@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadErrorHtml } from '../src/load-error.js';
+import { pilotRequestsRoute } from '../src/pilot-requests.js';
 import { usersRoute } from '../src/users.js';
 import { documentsRoute } from '../src/documents.js';
 import { accountingRoute } from '../src/accounting.js';
@@ -27,6 +28,7 @@ test('load error cards escape messages and headings', () => {
   assert.match(html, /&lt;script&gt;/); assert.match(html, /&lt;title&gt;/); assert.doesNotMatch(html, /<script>|<title>/);
 });
 for (const [name, route] of [
+  ['pilot requests', (ui: UI) => pilotRequestsRoute(ui, true)],
   ['users', (ui: UI) => usersRoute(ui, 'A')], ['documents', documentsRoute],
   ['accounting', (ui: UI) => accountingRoute([], ui)], ['parts', (ui: UI) => partsRoute([], ui)],
   ['service detail', (ui: UI) => serviceRoute(['service', 'repair-orders', 'ro'], {...ui, apiEnvelope: ui.api})]

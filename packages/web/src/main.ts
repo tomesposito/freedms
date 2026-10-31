@@ -12,6 +12,7 @@ import { serviceRoute, serviceHistoryHtml } from './service';
 import type { RepairOrderView } from '@freedms/shared';
 import { complianceRoute, dealComplianceRoute } from './compliance';
 import { buyerRoute } from './retail';
+import { pilotRequestsRoute } from './pilot-requests';
 import { usersRoute } from './users';
 import { creditRoute } from './credit';
 import { accountingRoute } from './accounting';
@@ -75,7 +76,7 @@ function shell(content: string): void {
     <div id="nav-panel" class="nav-panel">
       <div class="workspace">${e(session?.tenant?.name || 'Your dealership')}</div>
       <nav aria-label="Main navigation">
-        ${sidebarNavigation(session?.principal.role === 'admin')}
+        ${sidebarNavigation(session?.principal.role === 'admin', session?.canManagePilotRequests)}
       </nav>
       <div class="sidebar-footer">${sidebarUserHtml(session?.user)}${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button type="button" id="sidebar-toggle" class="quiet" aria-expanded="${!slim}" aria-label="${slim ? 'Expand sidebar' : 'Collapse sidebar'}" title="${slim ? 'Expand sidebar' : 'Collapse sidebar'}">${sidebarToggleIcon(slim)}</button><button id="signout" class="quiet" title="Sign out" aria-label="Sign out">${icon('<path d="M9 3H3v18h6m6-14 5 5-5 5m-7-5h12"/>')}<span class="nav-text">Sign out</span></button></div>
     </div>
@@ -268,6 +269,7 @@ async function route(): Promise<void> {
     else if (parts[0] === 'service') await serviceRoute(parts, {api, apiEnvelope, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'compliance') await complianceRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, parts[1]);
     else if (parts[0] === 'documents') await documentsRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
+    else if (parts[0] === 'pilot-requests') await pilotRequestsRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, session.canManagePilotRequests === true, parts[1]);
     else if (parts[0] === 'users') await usersRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void start(); }, admin: session.principal.role === 'admin'}, session.principal.tenantId, !localMode);
     else if (parts[0] === 'webhooks') await webhooksRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'account') await accountRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, {}, !localMode, cognito);

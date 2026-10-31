@@ -71,3 +71,5 @@ import '../packages/web/test/account.test.js';
 import '../packages/api/test/mcp.test.js';
 
 import '../packages/api/test/access-requests.test.js';
+import '../packages/api/test/pilot-inbox.test.js';
+import '../packages/web/test/pilot-requests.test.js';
