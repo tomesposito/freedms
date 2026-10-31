@@ -47,6 +47,21 @@ you want to send to unverified recipients; filing that request is an operator st
 Only new requests trigger email; repeat submissions update the stored record.
 Mail failures leave the saved request intact for the operator readout.
 
+## Pilot request inbox
+
+Set `PilotOperatorSubject` to the operator's immutable Cognito subject and
+`PilotOperatorTenantId` to their workspace ID. Both default to empty, which
+disables the inbox. An active administrator membership in that exact workspace
+is required on every request; dealership administrators do not receive access
+to the global queue. Do not use an email address or a client-supplied role as
+the operator identity.
+
+The configured operator sees **Pilot requests** in the sidebar. The inbox lists
+pending and handled requests with contact details and messages. **Mark handled**
+uses the displayed record version so a newer submission cannot be silently
+overwritten. It does not send email, create an account, or issue an invitation.
+The existing operator CLI remains available for reviewing and handling requests.
+
 ## Access-request CAPTCHA
 
 Create a Cloudflare Turnstile widget in Tom's Cloudflare account for `freedms.co`.

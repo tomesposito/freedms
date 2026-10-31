@@ -1,12 +1,36 @@
 import type { TurnstileVerifier } from './turnstile.js';
 import { randomUUID } from 'node:crypto';
-import { inventorySizes, type AccessRequest } from '@freedms/shared';
+import { inventorySizes, type AccessRequest, type Principal } from '@freedms/shared';
 import type { MailSender } from './mail.js';
-import { ApiError } from './errors.js';
+import { ApiError, conflict, missing } from './errors.js';
 import { parseBody, response, type ApiRequest, type ApiResponse } from './handler.js';
 import { OPERATOR_TENANT_ID, type RepositoryFactory } from './repository.js';
 import { emailAddress } from './users.js';
-import { invalid, onlyKeys, text } from './validation.js';
+import { invalid, onlyKeys, text, version } from './validation.js';
+
+export type PilotOperator = Pick<Principal, 'tenantId' | 'userId'>;
+export function canManageAccessRequests(principal: Principal, operator?: PilotOperator): boolean {
+  return !!operator?.userId && !!operator.tenantId && principal.role === 'admin'
+    && principal.userId === operator.userId && principal.tenantId === operator.tenantId;
+}
+
+export async function manageAccessRequests(request: ApiRequest, principal: Principal, repositories: RepositoryFactory, now: Date, operator?: PilotOperator): Promise<ApiResponse> {
+  if (!canManageAccessRequests(principal, operator)) throw new ApiError(403, 'FORBIDDEN', 'Only the pilot operator can review access requests.');
+  const path = request.path.replace(/\/$/, '');
+  if (path === '/admin/access-requests') {
+    if (request.method.toUpperCase() !== 'GET') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+    onlyKeys(request.query ?? {}, ['status']);
+    const status = request.query?.status ?? 'pending';
+    if (status !== 'pending' && status !== 'handled') throw invalid('Choose pending or handled requests.');
+    return response(200, {data: await listAccessRequests(repositories, status)});
+  }
+  if (path !== '/admin/access-requests/handled') throw missing();
+  if (request.method.toUpperCase() !== 'POST') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+  onlyKeys(request.query ?? {}, []);
+  const body = parseBody(request.body, 1024);
+  onlyKeys(body, ['email', 'version']);
+  return response(200, {data: await markAccessRequestHandled(repositories, emailAddress(body.email), now, version(body.version))});
+}
 
 export interface AccessRequestMail {
   sender: MailSender;
@@ -62,16 +86,17 @@ export async function submitAccessRequest(request: ApiRequest, repositories: Rep
   return response(201, {data: {received: true}});
 }
 
-export async function listAccessRequests(repositories: RepositoryFactory): Promise<AccessRequest[]> {
+export async function listAccessRequests(repositories: RepositoryFactory, status: AccessRequest['status'] = 'pending'): Promise<AccessRequest[]> {
   return (await repositories.forTenant(OPERATOR_TENANT_ID).accessRequests())
-    .filter(record => record.status === 'pending')
+    .filter(record => record.status === status)
     .sort((a, b) => a.createdAt > b.createdAt ? -1 : a.createdAt < b.createdAt ? 1 : a.email < b.email ? -1 : a.email > b.email ? 1 : 0);
 }
 
-export async function markAccessRequestHandled(repositories: RepositoryFactory, email: string, now: Date): Promise<AccessRequest> {
+export async function markAccessRequestHandled(repositories: RepositoryFactory, email: string, now: Date, expectedVersion?: number): Promise<AccessRequest> {
   const repository = repositories.forTenant(OPERATOR_TENANT_ID);
   const existing = await repository.accessRequest(emailAddress(email));
-  if (!existing || existing.status !== 'pending') throw new Error('No pending access request for that email.');
+  if (!existing || existing.status !== 'pending') throw new ApiError(409, 'CONFLICT', 'No pending access request for that email.');
+  if (expectedVersion !== undefined && existing.version !== expectedVersion) throw conflict();
   const record: AccessRequest = {...existing, status: 'handled', handledAt: now.toISOString(), updatedAt: now.toISOString(), version: existing.version + 1};
   await repository.saveAccessRequest(record, existing.version);
   return record;

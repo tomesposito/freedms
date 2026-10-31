@@ -54,6 +54,7 @@ td small{display:block;color:#64748B;margin-top:3px}
 .metrics span:first-child{display:block;color:#64748B;font-size:.8rem;margin-bottom:12px}
 .metrics strong{font-size:1.6rem}
 .detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
+#refresh-requests{flex-shrink:0;white-space:nowrap}.pilot-request{overflow-wrap:anywhere}.pilot-request-message{white-space:pre-wrap}.pilot-request dd{margin:6px 0 0}
 .card{background:#fff;border:1px solid #E2E8F0;border-radius:10px;padding:28px;margin-bottom:24px}
 .form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px}
 .vin-row{display:flex;align-items:end;gap:12px;max-width:650px;margin-bottom:12px}

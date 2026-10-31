@@ -7,6 +7,14 @@ Parameters:
     Default: 'false'
     AllowedValues: ['true', 'false']
     Description: Enable only after separately upgrading the pool tier and domain to managed login
+  PilotOperatorSubject:
+    Type: String
+    Default: ''
+    Description: Cognito subject of the administrator allowed to review global pilot requests
+  PilotOperatorTenantId:
+    Type: String
+    Default: ''
+    Description: Workspace of the pilot operator (both operator parameters are required)
   TurnstileSecret:
     Type: String
     Default: ''
@@ -271,6 +279,8 @@ Resources:
       Timeout: 15
       Environment:
         Variables:
+          PILOT_OPERATOR_SUBJECT: !Ref PilotOperatorSubject
+          PILOT_OPERATOR_TENANT_ID: !Ref PilotOperatorTenantId
           TURNSTILE_SECRET: !Ref TurnstileSecret
           MAIL_FROM: !Ref MailFrom
           ACCESS_REQUEST_NOTIFY_TO: !Ref AccessRequestNotifyTo
