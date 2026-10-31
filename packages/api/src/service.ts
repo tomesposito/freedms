@@ -199,11 +199,29 @@ export async function service(request: ApiRequest, principal: Principal, repo: T
   const reservedWarning = record.kind === 'repair-order' && record.reservedStockWarning && record.reservedStockWarning !== (old?.kind === 'repair-order' ? old.reservedStockWarning : undefined) ? record.reservedStockWarning : null;
   const journalWrites = record.kind === 'repair-order' ? await reconcilePosting(repo, principal, now, old?.kind === 'repair-order' ? old : undefined, record) : [];
   const appointmentWrites = record.kind === 'repair-order' && old?.kind === 'repair-order' ? await syncAppointment(repo, principal, time, old, record) : [];
-  const appointmentFits = stockWrites.filter(w=>w.record.kind!=='parts-reservation').length + 1 + appointmentWrites.length <= 10 && stockWrites.length + 1 + appointmentWrites.length <= 39;
-  await repo.crmWrite([...stockWrites, {record, expectedVersion: expected, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: `${record.kind}.${old ? 'updated' : 'created'}`, ...(reservedWarning ? {action:`repair-order.reserved-stock-acknowledged: ${reservedWarning.parts.map(p=>p.partNumber).join(', ')}`} : {}), occurredAt: time, deliveryStatus: 'pending'}}, ...(appointmentFits ? appointmentWrites : [])]);
-  // Keep appointment sync in this request even when stock fills the main batch.
+  const fits = (writes: CrmWrite[]) => writes.length <= 39 && writes.filter(w => w.record.kind !== 'parts-reservation').length <= 10;
+  const recordWrite: CrmWrite = {record, expectedVersion: expected, event: {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, aggregateId: record.id, aggregateVersion: record.version, type: `${record.kind}.${old ? 'updated' : 'created'}`, ...(reservedWarning ? {action:`repair-order.reserved-stock-acknowledged: ${reservedWarning.parts.map(p=>p.partNumber).join(', ')}`} : {}), occurredAt: time, deliveryStatus: 'pending'}};
+  const journalFits = fits([...stockWrites, recordWrite, ...journalWrites]);
+  const posted = record.kind === 'repair-order' ? record.glPosted : false;
+  if (!journalFits && record.kind === 'repair-order') {
+    record.glPosted = false;
+    record.glPostingPending = true;
+    record.glPendingEntries = journalWrites.map(w => {
+      if (w.record.kind !== 'journal-entry') throw new Error('Expected journal entry');
+      return w.record;
+    });
+  }
+  const mainWrites = [...stockWrites, recordWrite, ...(journalFits ? journalWrites : [])];
+  const appointmentFits = fits([...mainWrites, ...appointmentWrites]);
+  await repo.crmWrite([...mainWrites, ...(appointmentFits ? appointmentWrites : [])]);
+  if (!journalFits && record.kind === 'repair-order') {
+    // The version check fences concurrent saves; journal entries, posted state,
+    // and their outbox events either all commit or leave the durable intent.
+    const settled: RepairOrder = {...record, version: record.version + 1, glPosted: posted, glPostingPending: false, glPendingEntries: []};
+    await repo.crmWrite([...journalWrites, {record: settled, expectedVersion: record.version, event: {...recordWrite.event, id: randomUUID(), aggregateVersion: settled.version, type: 'repair-order.updated'}}]);
+    record = settled;
+  }
+  // Journal entries take priority over deferrable appointment synchronization.
   if (!appointmentFits) await repo.crmWrite(appointmentWrites);
-  // RO + stock can consume all ten writes; validated journal entries follow immediately.
-  if (journalWrites.length) await repo.crmWrite(journalWrites);
   return response(old ? 200 : 201, {data: record.kind === 'repair-order' ? await view(record) : record});
 }

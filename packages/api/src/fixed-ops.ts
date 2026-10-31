@@ -37,12 +37,22 @@ export function fixedPosting(record: RepairOrder | PartsSale, accounts: GlAccoun
 }
 export async function reconcilePosting(repo: TenantRepository, principal: Principal, now: Date, old: RepairOrder | undefined, record: RepairOrder): Promise<CrmWrite[]> {
   record.glPosted = old?.glPosted ?? false; record.glPostingEntryId = old?.glPostingEntryId ?? null;
+  record.glPostingPending = false; record.glPendingEntries = [];
   const finalized = ['completed','picked-up'].includes(record.status);
   const changed = old && JSON.stringify(old.lineItems) !== JSON.stringify(record.lineItems);
   const writes: CrmWrite[] = [];
+  // Preserve uncommitted reversals. An uncommitted posting can be replaced when
+  // lines/status change, since it has never affected the ledger.
+  for (const entry of old?.glPendingEntries ?? []) {
+    if (entry.source === 'reversal' && (await repo.crmList('journal-entry')).some(e => e.reversesEntryId === entry.reversesEntryId)) continue;
+    if ((entry.source === 'reversal' || (finalized && !changed)) && !await repo.crmGet('journal-entry', entry.id)) writes.push(write(entry, principal));
+  }
+  const original = record.glPostingEntryId ? await repo.crmGet('journal-entry', record.glPostingEntryId) : undefined;
+  const intended = writes.find(w => w.record.id === record.glPostingEntryId);
+  record.glPosted = !!(original || intended);
+  if (!record.glPosted) record.glPostingEntryId = null;
   if (record.glPosted && (!finalized || changed)) {
-    const original = await repo.crmGet('journal-entry', record.glPostingEntryId!); if (!original) throw missing();
-    if (!(await repo.crmList('journal-entry')).some(e => e.reversesEntryId === original.id)) {
+    if (original && !(await repo.crmList('journal-entry')).some(e => e.reversesEntryId === original.id)) {
       const reversal: JournalEntry = {...original, id:`service-reversal-${original.id}`, source:'reversal', version:1, date:now.toISOString(), createdAt:now.toISOString(), updatedAt:now.toISOString(), memo:`Reversal of ${original.memo}`, reversesEntryId:original.id, reversedByEntryId:null,
         lines:original.lines.map(l => ({...l, debit:l.credit, credit:l.debit, explanation:`Reversal: ${l.explanation}`}))};
       assertBalanced(reversal.lines); writes.push(write(reversal, principal));
