@@ -82,3 +82,102 @@ test('only the pilot request POST reaches the API from the marketing host', () =
     assert.equal(route('freedms.co', path, 'POST').statusCode, 404);
   }
 });
+
+const accessHtml = readFileSync('site/index.html', 'utf8');
+const accessScript = [...accessHtml.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+  .map(match => match[1]).find(script => script.includes("getElementById('access-form')"));
+
+function accessHarness(fetchRequest) {
+  let submit;
+  let timeout;
+  const timers = new Set();
+  const button = {disabled: false};
+  const panel = () => ({hidden: true, scrollIntoView() { this.scrolled = true; }, focus() { this.focused = true; }});
+  const error = panel(), success = panel();
+  const form = {hidden: false, querySelector: () => button, addEventListener: (name, handler) => { submit = handler; }};
+  const fields = Object.fromEntries(['contactName', 'dealershipName', 'email', 'phone', 'inventorySize', 'currentDms', 'message', 'website'].map(key => [key, `value-${key}`]));
+  runInNewContext(accessScript, {
+    document: {getElementById: id => ({'access-form': form, 'access-error': error, 'access-success': success})[id]},
+    FormData: class { get(key) { return fields[key]; } },
+    AbortController,
+    fetch: (url, options) => {
+      assert.equal(url, '/api/access-requests');
+      assert.equal(options.method, 'POST');
+      assert.equal(options.headers['content-type'], 'application/json');
+      assert.deepEqual(JSON.parse(options.body), fields);
+      return fetchRequest(options);
+    },
+    setTimeout: (callback, delay) => {
+      assert.equal(delay, 15000);
+      timeout = callback;
+      timers.add(callback);
+      return callback;
+    },
+    clearTimeout: timer => timers.delete(timer)
+  });
+  return {button, error, success, form, timers, submit: () => submit({preventDefault() {}}), expire: () => timeout()};
+}
+
+function assertOutcome(harness, succeeded) {
+  const visible = succeeded ? harness.success : harness.error;
+  assert.equal(visible.hidden, false);
+  assert.equal(visible.scrolled, true);
+  assert.equal(visible.focused, true);
+  assert.equal(harness.form.hidden, succeeded);
+  assert.equal((succeeded ? harness.error : harness.success).hidden, true);
+  assert.equal(harness.button.disabled, false);
+  assert.equal(harness.timers.size, 0);
+}
+
+test('access outcomes are focusable panels with headings and next steps', () => {
+  for (const [id, role] of [['error', 'alert'], ['success', 'status']]) {
+    assert.match(accessHtml, new RegExp(`<div id="access-${id}"[^>]*class="access-status[^>]*role="${role}" tabindex="-1" hidden>\\s*<h4>`));
+  }
+  assert.ok(accessHtml.includes("That didn't go through. Nothing was sent. Please try again."));
+  assert.ok(accessHtml.includes('Thanks — your request is in. We review requests by hand and invite dealers a few at a time.'));
+  assert.ok(accessHtml.includes("email an invitation if there's a fit."));
+});
+
+test('access success replaces the form and brings confirmation into view', async () => {
+  const harness = accessHarness(async () => ({ok: true}));
+  const pending = harness.submit();
+  assert.equal(harness.button.disabled, true);
+  await pending;
+  assertOutcome(harness, true);
+});
+
+test('access HTTP and network failures show an error and allow a successful retry', async () => {
+  for (const failure of [() => ({ok: false}), () => { throw new Error('Offline'); }]) {
+    let attempts = 0;
+    const harness = accessHarness(async () => ++attempts === 1 ? failure() : {ok: true});
+    await harness.submit();
+    assertOutcome(harness, false);
+    const retry = harness.submit();
+    assert.equal(harness.error.hidden, true);
+    assert.equal(harness.button.disabled, true);
+    await retry;
+    assertOutcome(harness, true);
+  }
+});
+
+test('access timeout aborts a hung request, allows retry, and ignores late success', async () => {
+  let signal, complete;
+  let attempts = 0;
+  const harness = accessHarness(options => {
+    if (++attempts > 1) return Promise.resolve({ok: true});
+    signal = options.signal;
+    return new Promise(resolve => { complete = resolve; });
+  });
+  const pending = harness.submit();
+  assert.equal(harness.button.disabled, true);
+  assert.equal(signal.aborted, false);
+  harness.expire();
+  await pending;
+  assert.equal(signal.aborted, true);
+  assertOutcome(harness, false);
+  complete({ok: true});
+  await Promise.resolve();
+  assertOutcome(harness, false);
+  await harness.submit();
+  assertOutcome(harness, true);
+});

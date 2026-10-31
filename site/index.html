@@ -259,6 +259,12 @@ footer a:hover{color:#fff}
 .access-honeypot{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
 .access-request button{font:inherit;cursor:pointer}
 .access-request button:disabled{opacity:.6;cursor:wait}
+.access-status{margin:20px 0;padding:24px;border:2px solid var(--line);border-radius:var(--radius);background:var(--wash);color:var(--ink);scroll-margin-top:100px}
+.access-status h4{margin:0 0 10px;font-size:1.3rem}
+.access-status p{margin:10px 0 0}
+.access-status:focus{outline:3px solid var(--ink);outline-offset:4px}
+.access-status-error{border-color:var(--accent-dark);border-left-width:6px;background:var(--paper)}
+.access-status-error h4{color:var(--accent-dark)}
 @media(max-width:600px){.access-fields{grid-template-columns:1fr}}
 </style>
 </head>
@@ -445,8 +451,15 @@ footer a:hover{color:#fff}
     </div>
     <div class="access-request card">
       <h3>Request pilot access</h3>
-      <p id="access-error" role="alert" hidden>That didn't go through. Check the form and try again.</p>
-      <p id="access-success" role="status" tabindex="-1" hidden>Thanks — your request is in. We review requests by hand and invite dealers a few at a time.</p>
+      <div id="access-error" class="access-status access-status-error" role="alert" tabindex="-1" hidden>
+        <h4>Request not sent</h4>
+        <p>That didn't go through. Nothing was sent. Please try again.</p>
+      </div>
+      <div id="access-success" class="access-status" role="status" tabindex="-1" hidden>
+        <h4>Request received</h4>
+        <p>Thanks — your request is in. We review requests by hand and invite dealers a few at a time.</p>
+        <p>What happens next: we review your request by hand and email an invitation if there's a fit.</p>
+      </div>
       <form id="access-form">
         <div class="access-fields">
           <label>Contact name<input name="contactName" required maxlength="120" autocomplete="name"></label>
@@ -577,15 +590,32 @@ accessForm.addEventListener('submit', async (event) => {
   const fields = new FormData(accessForm);
   const body = {};
   for (const key of ['contactName', 'dealershipName', 'email', 'phone', 'inventorySize', 'currentDms', 'message', 'website']) body[key] = fields.get(key);
+  const controller = new AbortController();
+  let timer;
   try {
-    const result = await fetch('/api/access-requests', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
+    // Bound the wait even if the request does not settle after being aborted.
+    const timeout = new Promise((resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error('Request timed out'));
+      }, 15000);
+    });
+    const result = await Promise.race([
+      fetch('/api/access-requests', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body), signal: controller.signal}),
+      timeout
+    ]);
     if (!result.ok) throw new Error('Request failed');
     accessForm.hidden = true;
     const success = document.getElementById('access-success');
     success.hidden = false;
-    success.focus();
+    success.scrollIntoView({block: 'center'});
+    success.focus({preventScroll: true});
   } catch {
     error.hidden = false;
+    error.scrollIntoView({block: 'center'});
+    error.focus({preventScroll: true});
+  } finally {
+    clearTimeout(timer);
     button.disabled = false;
   }
 });
