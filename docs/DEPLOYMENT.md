@@ -47,6 +47,22 @@ you want to send to unverified recipients; filing that request is an operator st
 Only new requests trigger email; repeat submissions update the stored record.
 Mail failures leave the saved request intact for the operator readout.
 
+## Access-request CAPTCHA
+
+Create a Cloudflare Turnstile widget in Tom's Cloudflare account for `freedms.co`.
+Set its public site key as `TURNSTILE_SITE_KEY` in the environment of the marketing
+release build (for example, `TURNSTILE_SITE_KEY=your-public-site-key node ops/releases/package.mjs`
+with the usual release environment). Set the matching secret in the stack parameter
+`TurnstileSecret`, which supplies `TURNSTILE_SECRET` to the API. The secret is
+`NoEcho` and must never go in the site build.
+
+Both settings are optional. With neither set, the form retains honeypot-only
+protection; without a site key the packager removes the widget and script.
+Without the secret the API does not require a challenge. If the site key is unset
+while the secret is configured, requests fail closed with a retryable error;
+clear the secret as well to return to honeypot-only mode. Configure both halves
+together to enable CAPTCHA protection.
+
 ## Local verification
 
 Use Node 24 (`.nvmrc`), then:

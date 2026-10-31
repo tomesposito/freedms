@@ -9,7 +9,7 @@ import {buildMarketing} from './marketing.mjs';
 test('marketing image references match immutable packaged assets and pilot links', () => {
   const destination = mkdtempSync(`${tmpdir()}/freedms-marketing-test-`);
   try {
-    buildMarketing('site', destination);
+    buildMarketing('site', destination, {});
     const html = readFileSync(`${destination}/index.html`, 'utf8');
     const references = [...html.matchAll(/(?:src|data-src)="(assets\/[^"]+)"/g)].map(match => match[1]);
     assert.ok(references.length >= 10);
@@ -87,24 +87,26 @@ const accessHtml = readFileSync('site/index.html', 'utf8');
 const accessScript = [...accessHtml.matchAll(/<script>([\s\S]*?)<\/script>/g)]
   .map(match => match[1]).find(script => script.includes("getElementById('access-form')"));
 
-function accessHarness(fetchRequest) {
+function accessHarness(fetchRequest, challenge = false) {
   let submit;
   let timeout;
   const timers = new Set();
   const button = {disabled: false};
   const panel = () => ({hidden: true, scrollIntoView() { this.scrolled = true; }, focus() { this.focused = true; }});
   const error = panel(), success = panel();
-  const form = {hidden: false, querySelector: () => button, addEventListener: (name, handler) => { submit = handler; }};
+  let resets = 0;
+  const form = {hidden: false, querySelector: selector => selector === '.cf-turnstile' ? (challenge ? {} : null) : button, addEventListener: (name, handler) => { submit = handler; }};
   const fields = Object.fromEntries(['contactName', 'dealershipName', 'email', 'phone', 'inventorySize', 'currentDms', 'message', 'website'].map(key => [key, `value-${key}`]));
   runInNewContext(accessScript, {
     document: {getElementById: id => ({'access-form': form, 'access-error': error, 'access-success': success})[id]},
-    FormData: class { get(key) { return fields[key]; } },
+    FormData: class { get(key) { return key === 'cf-turnstile-response' && challenge ? `token-${resets}` : fields[key]; } },
+    window: {turnstile: challenge ? {reset: () => { resets++; }} : undefined},
     AbortController,
     fetch: (url, options) => {
       assert.equal(url, '/api/access-requests');
       assert.equal(options.method, 'POST');
       assert.equal(options.headers['content-type'], 'application/json');
-      assert.deepEqual(JSON.parse(options.body), fields);
+      assert.deepEqual(JSON.parse(options.body), {...fields, ...(challenge ? {turnstileToken: `token-${resets}`} : {})});
       return fetchRequest(options);
     },
     setTimeout: (callback, delay) => {
@@ -115,7 +117,7 @@ function accessHarness(fetchRequest) {
     },
     clearTimeout: timer => timers.delete(timer)
   });
-  return {button, error, success, form, timers, submit: () => submit({preventDefault() {}}), expire: () => timeout()};
+  return {button, error, success, form, timers, get resets() { return resets; }, submit: () => submit({preventDefault() {}}), expire: () => timeout()};
 }
 
 function assertOutcome(harness, succeeded) {
@@ -180,4 +182,34 @@ test('access timeout aborts a hung request, allows retry, and ignores late succe
   assertOutcome(harness, false);
   await harness.submit();
   assertOutcome(harness, true);
+});
+
+
+test('marketing packages include Turnstile only when a public site key is configured', () => {
+  const destination = mkdtempSync(`${tmpdir()}/freedms-turnstile-test-`);
+  try {
+    for (const siteKey of ['test-site-key', '', undefined, '  ']) {
+      buildMarketing('site', destination, {TURNSTILE_SITE_KEY: siteKey});
+      const html = readFileSync(`${destination}/index.html`, 'utf8');
+      assert.ok(!html.includes('__TURNSTILE_SITE_KEY__'));
+      const configured = Boolean(siteKey?.trim());
+      assert.equal(html.includes('class="cf-turnstile"'), configured);
+      assert.equal(html.includes('https://challenges.cloudflare.com/turnstile/v0/api.js'), configured);
+      if (configured) {
+        assert.match(html, /<form id="access-form">[\s\S]*data-sitekey="test-site-key"[\s\S]*<button class="btn" type="submit">/);
+      }
+    }
+    assert.throws(() => buildMarketing('site', destination, {TURNSTILE_SITE_KEY: '\"><script>'}), /Invalid Turnstile site key/);
+  } finally { rmSync(destination, {recursive: true, force: true}); }
+});
+
+test('challenge failures keep the error panel and reset the widget for a fresh retry token', async () => {
+  let attempts = 0;
+  const harness = accessHarness(async () => ({ok: ++attempts > 1, status: attempts === 1 ? 400 : 201}), true);
+  await harness.submit();
+  assertOutcome(harness, false);
+  assert.equal(harness.resets, 1);
+  await harness.submit();
+  assertOutcome(harness, true);
+  assert.equal(harness.resets, 1);
 });

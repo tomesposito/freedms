@@ -1,3 +1,4 @@
+import { turnstileVerifierFromEnv } from './turnstile.js';
 import { localAuth } from './local-auth.js';
 import { localSession } from './local-session.js';
 import { analyticsFromEnv } from './analytics.js';
@@ -14,7 +15,7 @@ import { NhtsaVinDecoder } from './vin.js';
 if (process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NODE_ENV === 'production') throw new Error('Local auth must never run in production');
 const repositories = new MemoryRepositories();
 const tokens = new LocalTokens(randomBytes(48).toString('hex'));
-const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv());
+const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv(), undefined, {turnstile: turnstileVerifierFromEnv()});
 const server = createServer(async (req, res) => {
   let result;
   try {

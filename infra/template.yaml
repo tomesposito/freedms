@@ -7,6 +7,11 @@ Parameters:
     Default: 'false'
     AllowedValues: ['true', 'false']
     Description: Enable only after separately upgrading the pool tier and domain to managed login
+  TurnstileSecret:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: Cloudflare Turnstile secret key for the pilot access form
   MailFrom:
     Type: String
     Default: ''
@@ -266,6 +271,7 @@ Resources:
       Timeout: 15
       Environment:
         Variables:
+          TURNSTILE_SECRET: !Ref TurnstileSecret
           MAIL_FROM: !Ref MailFrom
           ACCESS_REQUEST_NOTIFY_TO: !Ref AccessRequestNotifyTo
           TABLE_NAME: !Ref Table

@@ -1,3 +1,4 @@
+import type { TurnstileVerifier } from './turnstile.js';
 import { randomUUID } from 'node:crypto';
 import { inventorySizes, type AccessRequest } from '@freedms/shared';
 import type { MailSender } from './mail.js';
@@ -12,11 +13,18 @@ export interface AccessRequestMail {
   notifyTo?: string;
 }
 
-export async function submitAccessRequest(request: ApiRequest, repositories: RepositoryFactory, now: Date, mail?: AccessRequestMail): Promise<ApiResponse> {
+export async function submitAccessRequest(request: ApiRequest, repositories: RepositoryFactory, now: Date, mail?: AccessRequestMail, turnstile?: TurnstileVerifier): Promise<ApiResponse> {
   if (request.method !== 'POST') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
   const body = parseBody(request.body, 16 * 1024);
-  onlyKeys(body, ['contactName', 'dealershipName', 'email', 'phone', 'inventorySize', 'currentDms', 'message', 'website']);
+  onlyKeys(body, ['contactName', 'dealershipName', 'email', 'phone', 'inventorySize', 'currentDms', 'message', 'website', 'turnstileToken']);
   if (typeof body.website === 'string' && body.website.trim()) return response(201, {data: {received: true}});
+  if (turnstile?.configured) {
+    let verified = false;
+    if (typeof body.turnstileToken === 'string' && body.turnstileToken.trim()) {
+      try { verified = await turnstile.verify(body.turnstileToken); } catch { /* Fail closed without logging credentials. */ }
+    }
+    if (!verified) throw invalid('Please complete the verification challenge and try again.');
+  }
   const contactName = text(body.contactName, 'Contact name', 120);
   const dealershipName = text(body.dealershipName, 'Dealership name', 160);
   const email = emailAddress(body.email);

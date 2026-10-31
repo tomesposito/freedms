@@ -1,3 +1,4 @@
+import { turnstileVerifierFromEnv, type TurnstileVerifier } from '../src/turnstile.js';
 import { SendEmailCommand } from '@aws-sdk/client-ses';
 import { mailSenderFromEnv, SesMailSender, type MailInput } from '../src/mail.js';
 import type { AccessRequestMail } from '../src/access-requests.js';
@@ -14,10 +15,10 @@ import { localAuth } from '../src/local-auth.js';
 
 const fields = {contactName: 'Test Dealer', dealershipName: 'Test Motors', email: 'dealer@example.com', phone: '555-0100', inventorySize: '26-50', currentDms: 'Manual', message: 'Pilot please'};
 const start = new Date('2026-10-30T12:00:00Z');
-function setup(mail?: AccessRequestMail) {
+function setup(mail?: AccessRequestMail, turnstile?: TurnstileVerifier) {
   const repositories = new MemoryRepositories();
   let now = start;
-  const handle = createHandler(repositories, {decode: async () => { throw new Error('Unexpected VIN lookup'); }}, () => now, undefined, undefined, undefined, undefined, {mail});
+  const handle = createHandler(repositories, {decode: async () => { throw new Error('Unexpected VIN lookup'); }}, () => now, undefined, undefined, undefined, undefined, {mail, turnstile});
   return {repositories, repo: repositories.forTenant(OPERATOR_TENANT_ID), setNow: (date: Date) => { now = date; },
     post: (body: unknown = fields, method = 'POST') => handle({method, path: '/access-requests', body: JSON.stringify(body)})};
 }
@@ -229,5 +230,92 @@ test('hosted access capture is public only for POST and still requires the priva
   assert.equal((await repositories.forTenant(OPERATOR_TENANT_ID).accessRequests()).length, 1);
   for (const [path, method] of [['/access-requests', 'GET'], ['/access-requests', 'DELETE'], ['/access-requests/anything', 'POST'], ['/session', 'GET']]) {
     assert.equal((await gateway(event(path, method))).statusCode, 401);
+  }
+});
+
+
+test('configured Turnstile verifies before storage and notification, without retaining the token', async () => {
+  const {sent, mail} = fakeMail();
+  const tokens: string[] = [];
+  const {post, repo} = setup(mail, {configured: true, verify: async token => {
+    assert.deepEqual(await repo.accessRequests(), []);
+    assert.deepEqual(sent, []);
+    tokens.push(token); return true;
+  }});
+  assert.equal((await post({...fields, turnstileToken: 'test-token'})).statusCode, 201);
+  assert.deepEqual(tokens, ['test-token']);
+  assert.equal((await repo.accessRequests()).length, 1);
+  assert.equal(sent.length, 1);
+  assert.ok(!JSON.stringify(await repo.accessRequests()).includes('test-token'));
+  assert.ok(!JSON.stringify(sent).includes('test-token'));
+  assert.ok(!('turnstileToken' in (await repo.accessRequests())[0]));
+});
+
+test('configured Turnstile rejects absent, invalid and failed verification without storage or email', async () => {
+  for (const verify of [async () => false, async () => { throw Error('Offline'); }]) {
+    const {sent, mail} = fakeMail();
+    let calls = 0;
+    const {post, repo} = setup(mail, {configured: true, verify: async () => { calls++; return verify(); }});
+    for (const turnstileToken of [undefined, '', '  ', null, 12, {}, 'invalid-token']) {
+      const result = await post({...fields, turnstileToken});
+      assert.equal(result.statusCode, 400);
+      assert.equal(JSON.parse(result.body).error.code, 'VALIDATION');
+    }
+    assert.equal(calls, 1);
+    assert.deepEqual(await repo.accessRequests(), []);
+    assert.deepEqual(sent, []);
+  }
+});
+
+test('honeypot, unknown keys and body limits precede Turnstile verification', async () => {
+  let calls = 0;
+  const {sent, mail} = fakeMail();
+  const {post, repo} = setup(mail, {configured: true, verify: async () => { calls++; return false; }});
+  assert.equal((await post({website: 'bot', turnstileToken: 'token'})).statusCode, 201);
+  assert.equal((await post({website: 'bot', extra: true, turnstileToken: 'token'})).statusCode, 400);
+  assert.equal((await post({website: 'bot', message: 'x'.repeat(16384), turnstileToken: 'token'})).statusCode, 400);
+  assert.equal(calls, 0);
+  assert.deepEqual(await repo.accessRequests(), []);
+  assert.deepEqual(sent, []);
+});
+
+test('unconfigured Turnstile is never invoked and preserves storage and notification', async () => {
+  for (const env of [{}, {TURNSTILE_SECRET: ''}, {TURNSTILE_SECRET: '  '}]) {
+    const verifier = turnstileVerifierFromEnv(env, async () => { throw Error('Unexpected fetch'); });
+    assert.equal(verifier.configured, false);
+    verifier.verify = async () => { assert.fail('Unconfigured verifier called'); };
+    const {sent, mail} = fakeMail();
+    const {post, repo} = setup(mail, verifier);
+    assert.equal((await post()).statusCode, 201);
+    assert.equal((await repo.accessRequests()).length, 1);
+    assert.equal(sent.length, 1);
+  }
+});
+
+test('Turnstile sends form-encoded credentials via injectable fetch and fails closed', async () => {
+  for (const [reply, expected] of [
+    [{success: true}, true], [{success: false}, false], [{success: 'true'}, false], [{}, false], [null, false]
+  ] as const) {
+    const verifier = turnstileVerifierFromEnv({TURNSTILE_SECRET: ' test-secret '}, async (url, options) => {
+      assert.equal(url, 'https://challenges.cloudflare.com/turnstile/v0/siteverify');
+      assert.equal(options?.method, 'POST');
+      assert.deepEqual(options?.headers, {'content-type': 'application/x-www-form-urlencoded'});
+      assert.equal(String(options?.body), 'secret=test-secret&response=token%2B%26');
+      return new Response(JSON.stringify(reply));
+    });
+    assert.equal(verifier.configured, true);
+    assert.equal(await verifier.verify('token+&'), expected);
+  }
+  for (const fetchRequest of [
+    async () => { throw Error('Network failure'); },
+    async () => new Response('{"success":true}', {status: 503}),
+    async () => new Response('invalid json')
+  ]) {
+    const verifier = turnstileVerifierFromEnv({TURNSTILE_SECRET: 'test-secret'}, fetchRequest);
+    const {sent, mail} = fakeMail();
+    const {post, repo} = setup(mail, verifier);
+    assert.equal((await post({...fields, turnstileToken: 'token'})).statusCode, 400);
+    assert.deepEqual(await repo.accessRequests(), []);
+    assert.deepEqual(sent, []);
   }
 });

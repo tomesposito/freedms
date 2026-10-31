@@ -478,6 +478,7 @@ footer a:hover{color:#fff}
           <label class="access-wide">Message (optional)<textarea name="message" maxlength="2000" rows="4"></textarea></label>
         </div>
         <div class="access-honeypot" aria-hidden="true"><label>Website<input name="website" type="text" tabindex="-1" autocomplete="off"></label></div>
+        <div class="cf-turnstile" data-sitekey="__TURNSTILE_SITE_KEY__"></div>
         <button class="btn" type="submit">Request pilot access</button>
       </form>
     </div>
@@ -579,6 +580,7 @@ document.getElementById('tourThumbs').addEventListener('click', function(e){
 });
 document.querySelector('#tourThumbs button').setAttribute('aria-pressed','true');
 </script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 <script>
 const accessForm = document.getElementById('access-form');
 accessForm.addEventListener('submit', async (event) => {
@@ -590,6 +592,7 @@ accessForm.addEventListener('submit', async (event) => {
   const fields = new FormData(accessForm);
   const body = {};
   for (const key of ['contactName', 'dealershipName', 'email', 'phone', 'inventorySize', 'currentDms', 'message', 'website']) body[key] = fields.get(key);
+  if (accessForm.querySelector('.cf-turnstile')) body.turnstileToken = fields.get('cf-turnstile-response') || '';
   const controller = new AbortController();
   let timer;
   try {
@@ -614,6 +617,7 @@ accessForm.addEventListener('submit', async (event) => {
     error.hidden = false;
     error.scrollIntoView({block: 'center'});
     error.focus({preventScroll: true});
+    if (window.turnstile) window.turnstile.reset();
   } finally {
     clearTimeout(timer);
     button.disabled = false;
