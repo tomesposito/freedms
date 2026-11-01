@@ -30,7 +30,7 @@ Parameters:
     Description: Operator inbox for new pilot access requests
   McpCallbackURLs:
     Type: CommaDelimitedList
-    Default: ''
+    Default: 'https://agent.meta.ai/api/hatch/oauth/callback'
     Description: Registered MCP consumer redirect URIs (authorization code with PKCE S256)
   McpLogoutURLs:
     Type: CommaDelimitedList

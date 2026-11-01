@@ -160,6 +160,18 @@ test('MCP template embeds repository logo bytes and keeps dedicated scope/client
   const images = [...template.matchAll(/Bytes: ([A-Za-z0-9+/=]+)/g)]; assert.equal(images.length, 2);
   for (const [, encoded] of images) assert.deepEqual(Buffer.from(encoded, 'base64'), logo);
   assert.equal((template.match(/Type: AWS::Cognito::ManagedLoginBranding/g) ?? []).length, 2);
+  const callbackParameter = template.match(/^  McpCallbackURLs:\n((?:^    .*\n)+)/m)?.[1];
+  assert.ok(callbackParameter, 'McpCallbackURLs parameter exists');
+  assert.match(callbackParameter, /^    Type: CommaDelimitedList$/m);
+  const callbackDefault = callbackParameter.match(/^    Default: '([^']*)'$/m)?.[1];
+  assert.equal(callbackDefault, 'https://agent.meta.ai/api/hatch/oauth/callback');
+  assert.deepEqual(callbackDefault.match(/https?:\/\/[^,\s]+/g), ['https://agent.meta.ai/api/hatch/oauth/callback']);
+  assert.ok(template.includes("  McpRegistered: !Not [!Equals [!Join ['', !Ref McpCallbackURLs], '']]\n"));
+  const mcpClient = template.match(/^  McpClient:\n((?:^    .*\n)+)/m)?.[1];
+  assert.ok(mcpClient, 'McpClient resource exists');
+  assert.ok(mcpClient.includes('      AllowedOAuthFlowsUserPoolClient: !If [McpRegistered, true, false]\n'));
+  assert.ok(mcpClient.includes("      AllowedOAuthFlows: !If [McpRegistered, [code], !Ref 'AWS::NoValue']\n"));
+  assert.ok(mcpClient.includes("      CallbackURLs: !If [McpRegistered, !Ref McpCallbackURLs, !Ref 'AWS::NoValue']\n"));
   assert.match(template, /AllowedOAuthScopes: !If \[McpRegistered, \[freedms\/mcp.read, freedms\/mcp.write\]/);
   assert.match(template, /Path: \/mcp\n\s+Method: POST\n\s+Auth: \{Authorizer: NONE\}/);
   assert.match(template, /Path: \/.well-known\/oauth-protected-resource\n\s+Method: GET\n\s+Auth: \{Authorizer: NONE\}/);
