@@ -1,3 +1,4 @@
+import type { McpRegistration } from './mcp/registration.js';
 import type { Idea } from '@freedms/shared';
 import type { AccessRequest } from '@freedms/shared';
 import { debitNormal, type AccountBalance } from '@freedms/shared';
@@ -14,6 +15,11 @@ export interface LeadPage { leads: Lead[]; customers: Customer[]; total: number 
 export const OPERATOR_TENANT_ID = 'operator';
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
+  mcpRegistration(clientId: string): Promise<McpRegistration | undefined>;
+  mcpRegistrations(): Promise<McpRegistration[]>;
+  saveMcpRegistration(record: McpRegistration): Promise<void>;
+  deleteMcpRegistration(clientId: string): Promise<void>;
+  consumeMcpRegistrationAttempt(source: string, bucket: number, limit: number): Promise<boolean>;
   ideas(): Promise<Idea[]>;
   idea(id: string): Promise<Idea | undefined>;
   saveIdea(record: Idea, expectedVersion: number, event: OutboxEvent): Promise<void>;

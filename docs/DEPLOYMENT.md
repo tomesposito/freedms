@@ -376,16 +376,59 @@ clock rather than contacting Cognito. Local web ID tokens are not MCP credential
 
 The template creates an MCP client with OAuth enabled by default because Muse's callback is pre-registered in `McpCallbackURLs`. Operators can override `McpCallbackURLs`; an empty value disables OAuth flows again. `McpLogoutURLs` is optional.
 
-Register each consumer with a dedicated public Cognito app client, following
-`McpClient`: authorization code, no secret, refresh tokens, exact callback/logout
-URIs supplied through `McpCallbackURLs` / `McpLogoutURLs`. The consumer must send
-PKCE `code_challenge_method=S256` and its verifier on exchange; Cognito's app-client
-CloudFormation schema has no setting that mandates PKCE. This server trusts only
-access tokens for the configured `MCP_CLIENT_ID`, never web-client ID tokens.
-For additional consumers, provision separate client-bound handler configuration;
-do not reuse the web client or relax client-id validation. There is no dynamic
-client registration (DCR) and no RFC 8707 resource-indicator enforcement in this
-Cognito profile. Scopes are `freedms/mcp.read` and `freedms/mcp.write`; write implies
+The registration bridge accepts `POST /mcp/register` (public application URL:
+`https://app.<RootDomain>/api/mcp/register`). Consumers that accept an explicit
+registration URL can send `client_name`, `redirect_uris`, `grant_types`
+(`authorization_code`, optionally `refresh_token`), `response_types` (`code`),
+`token_endpoint_auth_method` (`none`), and a space-delimited `scope`. Omitted
+OAuth metadata defaults to authorization code, code response, no client secret,
+and `freedms/mcp.read`. The response is HTTP 201 with the new client ID and
+accepted metadata, never a secret. The consumer handles the ID; dealers connect
+by signing in and consenting, without copying IDs or registering callbacks.
+Self-registration replaces the operator's console app-client creation and
+callback entry for these consumers. The ChatGPT manual callback procedure below
+remains the fallback for consumers that cannot use this registration address.
+Cognito discovery does not advertise `registration_endpoint`; a metadata facade
+is outside this change.
+
+The API role adds only `cognito-idp:CreateUserPoolClient` and
+`cognito-idp:DeleteUserPoolClient`, scoped to `UserPool.Arn`. The pool ID is derived
+from the existing `TOKEN_ISSUER`; no new pool, secret, or SDK dependency is needed.
+The bridge creates public authorization-code clients using the template's MCP
+settings, including one-hour access tokens and token revocation. Consumers must
+send PKCE `code_challenge_method=S256` and its verifier on exchange; Cognito's
+app-client configuration has no setting that mandates PKCE.
+
+Redirects must be HTTPS, or HTTP on literal `localhost` / `127.0.0.1` with any
+valid port. Wildcards, fragments and credentials are rejected. Unknown scopes
+and unsupported grants, response types or authentication methods return HTTP 400
+`invalid_client_metadata`. Registration attempts, including invalid requests,
+are limited to 10 per five-minute fixed window per API Gateway source IP, with
+HTTP 429 and `Retry-After`. Conditional DynamoDB writes share the limit across
+Lambda instances. Source addresses are hashed in one reusable operator counter
+row per source; caller-supplied forwarding headers are ignored. Behind a proxy,
+Gateway's source IP may group multiple consumers, making this limit conservative.
+The existing CloudFront WAF limit (600 requests per viewer IP per five minutes)
+also applies, as it does to ideas and access requests.
+
+Records live under `TENANT#operator` / `MCPCLIENT#<client_id>` and contain the
+client ID, name, redirect URIs, scopes and creation timestamp. Like access-request
+bookkeeping, they do not create dealership outbox events. The configured active
+pilot operator admin can list them with `GET /admin/mcp-clients` and clean up with
+`DELETE /admin/mcp-clients/<client_id>`. Cleanup deletes Cognito first, then the
+record; upstream failure retains the record for retry, and an already-missing
+Cognito client is safe to retry. Failed record creation triggers compensating
+Cognito deletion. If both storage and compensation fail, an operator must reconcile
+the orphaned app client in Cognito.
+
+Integration boundary: this bridge registers consumers but does not change #71's
+token validation. The MCP server still accepts only access tokens for the configured
+`MCP_CLIENT_ID`, never web-client ID tokens. A newly registered client therefore
+requires separate client-bound handler configuration before its tokens can call
+MCP; registration alone is not an end-to-end connection. Registered-client trust
+and grant enforcement need subsequent integration without relaxing token or tenant
+validation. There is no RFC 8707 resource-indicator enforcement in this profile.
+Scopes are `freedms/mcp.read` and `freedms/mcp.write`; write implies
 read. The latter does not grant rights beyond the user's active membership.
 
 Hosted membership writers atomically maintain an immutable

@@ -6,7 +6,7 @@ import type { RepositoryFactory } from '../repository.js';
 import { invalid, object, onlyKeys } from '../validation.js';
 import { accessVerifier, type McpConfig } from './auth.js';
 import { tools, vehicleFields } from './tools.js';
-export const isMcpPath = (path: string) => ['/mcp', '/.well-known/oauth-protected-resource'].includes(path.replace(/\/$/, ''));
+export const isMcpPath = (path: string) => ['/mcp', '/mcp/register', '/.well-known/oauth-protected-resource'].includes(path.replace(/\/$/, ''));
 export function createMcpHandler(repositories: RepositoryFactory, execute: (request: ApiRequest) => Promise<ApiResponse>, config: McpConfig) {
   const verify = accessVerifier(config);
   const metadata = new URL('./.well-known/oauth-protected-resource', config.resource).href;

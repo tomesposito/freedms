@@ -1,3 +1,4 @@
+import { registerMcpClient, deleteMcpRegistration, type RegistrationConfig } from './mcp/registration.js';
 import { ideas } from './ideas.js';
 import type { TurnstileVerifier } from './turnstile.js';
 import { submitAccessRequest, manageAccessRequests, canManageAccessRequests, type PilotOperator, type AccessRequestMail } from './access-requests.js';
@@ -33,10 +34,10 @@ import { randomUUID } from 'node:crypto';
 import { vehicleStatuses, type Session, type AuthClaims, type OutboxEvent, type Vehicle } from '@freedms/shared';
 import { authorize, requireWrite } from './auth.js';
 import { ApiError, conflict, missing, requireId } from './errors.js';
-import type { RepositoryFactory, TenantRepository } from './repository.js';
+import { OPERATOR_TENANT_ID, type RepositoryFactory, type TenantRepository } from './repository.js';
 import type { VinDecoder } from './vin.js';
 import { pageNumber, invalid, object, onlyKeys, text, vehicleInput, version, view, vin } from './validation.js';
-export interface ApiRequest { authorization?: string; agent?: boolean; method: string; path: string; query?: Record<string, string | undefined>; body?: string; claims?: AuthClaims; intakeToken?: string; acceptEncoding?: string }
+export interface ApiRequest { sourceIp?: string; authorization?: string; agent?: boolean; method: string; path: string; query?: Record<string, string | undefined>; body?: string; claims?: AuthClaims; intakeToken?: string; acceptEncoding?: string }
 export interface ApiResponse { statusCode: number; headers: Record<string, string>; body: string; isBase64Encoded?: boolean }
 export function response(statusCode: number, body: unknown): ApiResponse {
   return {statusCode, headers: {'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff'}, body: JSON.stringify(body)};
@@ -54,9 +55,10 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
   if (!body || Buffer.byteLength(body) > limit) throw invalid(`A JSON body of at most ${limit} bytes is required.`);
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
-export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
+export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
   const sender = options.hosted ? guardHostedWebhookSender(webhookSender ?? hostedWebhookSender()) : webhookSender ?? fetchWebhookSender;
   const handle = async (request: ApiRequest): Promise<ApiResponse> => {
+    if (request.path.replace(/\/$/, '') === '/mcp/register') return registerMcpClient(request, repositories, now(), options.registration);
     if (isMcpPath(request.path)) return mcp(request);
     try {
       if (request.method.toUpperCase() === 'POST' && request.path.replace(/\/$/, '') === '/intake/adf') {
@@ -96,6 +98,15 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
 
       const execute = async (): Promise<ApiResponse> => {
         if (/^\/(ideas|admin\/ideas)(\/|$)/.test(path)) return await ideas(request, principal, repositories, now(), options.pilotOperator);
+        if (path === '/admin/mcp-clients' || path.startsWith('/admin/mcp-clients/')) {
+          if (!canManageAccessRequests(principal, options.pilotOperator)) throw new ApiError(403, 'FORBIDDEN', 'Only the pilot operator can manage registered clients.');
+          if (path === '/admin/mcp-clients' && method === 'GET') return response(200, {data: await repositories.forTenant(OPERATOR_TENANT_ID).mcpRegistrations()});
+          const match = /^\/admin\/mcp-clients\/([^/]+)$/.exec(path);
+          if (!match || method !== 'DELETE') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+          if (!options.registration) throw new ApiError(503, 'UNAVAILABLE', 'Registration is not configured.');
+          await deleteMcpRegistration(repositories, options.registration, requireId(match[1]));
+          return response(200, {data: {deleted: true}});
+        }
         if (/^\/admin\/access-requests(\/|$)/.test(path)) return await manageAccessRequests(request, principal, repositories, now(), options.pilotOperator);
         if (options.hosted && ((path === '/admin/users' && method === 'POST') || /^\/(account|admin)\/mfa(\/|$)/.test(path)))
           throw new ApiError(403, 'HOSTED_ACCOUNT_MANAGEMENT', 'Pilot accounts and authenticator recovery are managed by the pilot operator.');

@@ -1,3 +1,4 @@
+import type { McpRegistration } from './mcp/registration.js';
 import type { Idea } from '@freedms/shared';
 import type { AccessRequest } from '@freedms/shared';
 import { acceptanceWrite } from './invites.js';
@@ -136,6 +137,30 @@ export class DynamoRepositories implements RepositoryFactory {
           eventPut(event),
           {Put: {TableName: this.table, Item: {PK: 'OPERATOR#IDEAS', SK: `IDEA#${tenantId}#${record.id}`, data: record}}}
         ]);
+      },
+      mcpRegistration: id => get<McpRegistration>(`MCPCLIENT#${requireId(id)}`),
+      mcpRegistrations: () => listRows<McpRegistration>('MCPCLIENT#'),
+      saveMcpRegistration: async record => {
+        assertScope(tenantId, record);
+        await transact([put(`MCPCLIENT#${requireId(record.client_id)}`, record)]);
+      },
+      deleteMcpRegistration: async id => { await transact([{Delete: {TableName: this.table, Key: key(`MCPCLIENT#${requireId(id)}`)}}]); },
+      consumeMcpRegistrationAttempt: async (source, bucket, limit) => {
+        const SK = `MCPRATE#${requireId(source)}`;
+        // One persistent row per source, replaced each window. Conditional writes
+        // enforce the limit across concurrent requests and Lambda instances.
+        for (let attempt = 0; attempt <= limit; attempt++) {
+          const old = await get<{bucket: number; count: number}>(SK);
+          const count = old?.bucket === bucket ? old.count : 0;
+          if (count >= limit) return false;
+          try {
+            await transact([{Put: {TableName: this.table, Item: {...key(SK), data: {bucket, count: count + 1}},
+              ConditionExpression: old ? '#d.#b = :b AND #d.#c = :c' : 'attribute_not_exists(PK)',
+              ...(old ? {ExpressionAttributeNames: {'#d': 'data', '#b': 'bucket', '#c': 'count'}, ExpressionAttributeValues: {':b': old.bucket, ':c': old.count}} : {})}}]);
+            return true;
+          } catch (error) { if (!(error instanceof Error) || !('code' in error) || error.code !== 'CONFLICT') throw error; }
+        }
+        return false;
       },
       accessRequest: email => get<AccessRequest>(`ACCESSREQUEST#${email.toLowerCase()}`),
       accessRequests: () => listRows<AccessRequest>('ACCESSREQUEST#'),
