@@ -45,7 +45,7 @@ const stage = (times: string[]): FunnelStage => ({reached: times.length > 0, fir
  * Documents currently have create-only commands. A future edit/delete command must retain document
  * type history before historical completeness can be reconstructed for those commands.
  */
-export function projectFunnel(tenantId: string, events: OutboxEvent[], deals: Deal[], documents: DealDocument[]): Funnel {
+export function projectFunnel(tenantId: string, events: OutboxEvent[], deals: Deal[], documents: DealDocument[], cohortStart: string | null = null): Funnel {
   assertScope(tenantId, ...events, ...deals, ...documents);
   const byType = (type: OutboxEvent['type']) => events.filter(e => e.type === type);
   const created = (type: OutboxEvent['type']) => stage([...new Map(byType(type).map(e => [e.aggregateId, e.occurredAt])).values()]);
@@ -71,11 +71,18 @@ export function projectFunnel(tenantId: string, events: OutboxEvent[], deals: De
       }
     }
   }
-  return {tenantProvisioned: created('tenant.created'), vehicleStocked: created('vehicle.created'), leadCreated: created('lead.created'), pencilCreated: created('deal.created'), sold: stage(sold), jacketComplete: stage(complete)};
+  const firstVehicleAt = stage(byType('vehicle.created').map(e => e.occurredAt)).firstAt;
+  const firstLeadOrDealAt = stage([...byType('lead.created'), ...byType('deal.created')].map(e => e.occurredAt)).firstAt;
+  const inside = (time: string | null) => {
+    if (!cohortStart || !time) return false;
+    const elapsed = Date.parse(time) - Date.parse(cohortStart);
+    return elapsed >= 0 && elapsed <= 7 * 86400000;
+  };
+  return {activation: {cohortStart, firstVehicleAt, firstLeadOrDealAt, activated: inside(firstVehicleAt) && inside(firstLeadOrDealAt)}, tenantProvisioned: created('tenant.created'), vehicleStocked: created('vehicle.created'), leadCreated: created('lead.created'), pencilCreated: created('deal.created'), sold: stage(sold), jacketComplete: stage(complete)};
 }
 export async function funnel(repo: TenantRepository, tenantId: string): Promise<Funnel> {
-  const [events, deals, documents] = await Promise.all([repo.events(), repo.crmList('deal'), repo.crmList('document')]);
-  return projectFunnel(tenantId, events, deals, documents);
+  const [events, deals, documents, tenant] = await Promise.all([repo.events(), repo.crmList('deal'), repo.crmList('document'), repo.tenant()]);
+  return projectFunnel(tenantId, events, deals, documents, tenant?.inviteAcceptedAt);
 }
 export async function analytics(request: ApiRequest, principal: Principal, repo: TenantRepository, record: Track) {
   onlyKeys(request.query ?? {}, []);

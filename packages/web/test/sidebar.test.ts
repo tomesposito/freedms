@@ -6,10 +6,10 @@ import { sidebarUserHtml, sidebarToggleIcon, sidebarNavigation, readSidebarPrefe
 const main = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
 test('Sidebar renders all destinations in order with distinct inline icons and accessible tooltips', () => {
-  const expected = [['Inventory',''],['Leads','leads'],['Deals','deals'],['Service','service'],['Parts','parts'],['Accounting','accounting'],['F&amp;I','fi-products'],['Documents','documents'],['Compliance','compliance'],['Reports','reports'],['Feeds','feeds'],['Webhooks','webhooks'],['Account','account'],['Users','users']];
+  const expected = [['Inventory',''],['Leads','leads'],['Deals','deals'],['Service','service'],['Parts','parts'],['Accounting','accounting'],['F&amp;I','fi-products'],['Documents','documents'],['Compliance','compliance'],['Reports','reports'],['Feeds','feeds'],['Webhooks','webhooks'],['Ideas','ideas'],['Account','account'],['Users','users']];
   const links = [...sidebarNavigation(true).matchAll(/<a href="([^"]+)" title="([^"]+)" aria-label="([^"]+)">(<svg.*?<\/svg>)<span class="nav-text">([^<]+)<\/span><\/a>/g)];
-  assert.equal(links.length, 14);
-  assert.equal(new Set(links.map(link => link[4])).size, 14);
+  assert.equal(links.length, 15);
+  assert.equal(new Set(links.map(link => link[4])).size, 15);
   links.forEach((link, i) => {
     assert.equal(link[1], `#/${expected[i][1]}`);
     for (const index of [2, 3, 5]) assert.equal(link[index], expected[i][0]);

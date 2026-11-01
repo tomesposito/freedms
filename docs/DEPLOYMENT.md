@@ -374,7 +374,7 @@ pool issuer. Local defaults use `http://127.0.0.1:3001/mcp` and a mock issuer.
 The local adapter mounts the same handler; offline tests inject RSA JWKS and a
 clock rather than contacting Cognito. Local web ID tokens are not MCP credentials.
 
-The template creates an MCP client with OAuth disabled until `McpCallbackURLs` is set. This lets the operator obtain its client ID before registering the exact consumer callback; no MCP access tokens can be issued in the interim. `McpLogoutURLs` is optional.
+The template creates an MCP client with OAuth enabled by default because Muse's callback is pre-registered in `McpCallbackURLs`. Operators can override `McpCallbackURLs`; an empty value disables OAuth flows again. `McpLogoutURLs` is optional.
 
 Register each consumer with a dedicated public Cognito app client, following
 `McpClient`: authorization code, no secret, refresh tokens, exact callback/logout
@@ -423,5 +423,7 @@ The schema does not expose arbitrary font loading; Inter is not forced. Layout
 remains Cognito's, not a custom page. **Activation prerequisite:** the current
 LITE pool/classic domain must be moved to a managed-login-capable tier and domain
 version before applying these branding resources. The flag defaults to false so the Lite pool and custom in-app login can be deployed without those prerequisites. MCP OAuth works with the classic hosted UI and does not require enabling managed-login branding.
+
+For Muse (`custom.freedms`), `https://agent.meta.ai/api/hatch/oauth/callback` is pre-registered by default in the template. The only remaining operator registration step is a stack deploy/update with a reviewed stack parameter update. For an existing stack with an explicit `McpCallbackURLs` value, include Muse's callback in that value; an override replaces the default, so include every callback you intend to retain.
 
 For ChatGPT, create a custom MCP server at `https://app.<RootDomain>/api/mcp` using OAuth and the dedicated client ID. Copy the exact production redirect URI from its management screen into `McpCallbackURLs`; do not guess a callback ID or use a wildcard. New connections can use callback-specific URLs when the issuer does not advertise RFC 9207 support. See [OpenAI authentication documentation](https://developers.openai.com/plugins/build/auth). Register the callback with a reviewed stack parameter update, then sign in and approve the requested scopes in ChatGPT. Public endpoint checks alone do not verify the final OAuth connection.

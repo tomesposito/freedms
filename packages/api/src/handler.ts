@@ -1,3 +1,4 @@
+import { ideas } from './ideas.js';
 import type { TurnstileVerifier } from './turnstile.js';
 import { submitAccessRequest, manageAccessRequests, canManageAccessRequests, type PilotOperator, type AccessRequestMail } from './access-requests.js';
 import { createMcpHandler, isMcpPath } from './mcp/server.js';
@@ -94,6 +95,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       }}) : repository;
 
       const execute = async (): Promise<ApiResponse> => {
+        if (/^\/(ideas|admin\/ideas)(\/|$)/.test(path)) return await ideas(request, principal, repositories, now(), options.pilotOperator);
         if (/^\/admin\/access-requests(\/|$)/.test(path)) return await manageAccessRequests(request, principal, repositories, now(), options.pilotOperator);
         if (options.hosted && ((path === '/admin/users' && method === 'POST') || /^\/(account|admin)\/mfa(\/|$)/.test(path)))
           throw new ApiError(403, 'HOSTED_ACCOUNT_MANAGEMENT', 'Pilot accounts and authenticator recovery are managed by the pilot operator.');

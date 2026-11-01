@@ -8,7 +8,7 @@
 > - **License today:** MIT, as recorded in LICENSE; alternatives remain draft D-1.
 > - **Decision process:** IDDs D-1 onward record context, options, and a recommendation.
 >   D-1, D-3, and D-4 were **DECIDED by the owner on 2026-10-19** (recorded in each
->   IDD below). D-2 and D-5–D-7 remain **DRAFT — awaiting the owner's pick**; D-8 has an accepted MCP-specific decision.
+>   IDD below). D-2 and D-5–D-7 remain **DRAFT — awaiting the owner's pick**; D-8 has an accepted MCP-specific decision; D-9 was decided 2026-10-31 and D-10 on 2026-11-01.
 
 ## 1. Vision & positioning
 
@@ -521,6 +521,73 @@ selected by dealer administrators.
 Record who approved what, recheck permission and current record state at execution,
 and make cancellation/revocation effective. Add bounded autonomy only after a
 specific workflow has demonstrated correctness, consent enforcement, and recoverability.
+
+### D-9 — In-app Ideas (user suggestions)
+
+**Status: DECIDED — owner, 2026-10-31: in-app "Ideas" with human review;
+nothing auto-builds (issue #88).**
+
+**Context:** agent-built software makes it cheap to act on a plain-language
+request (the "liquid software" pattern: a freeform input wired to an agent that
+implements what is submitted). In a multi-tenant dealer product, an unreviewed
+submission path into the build is a scope, security, and product-direction
+risk, and popularity is not a product vision.
+
+**Options:** no in-app channel (feedback by conversation only); a public board
+with voting; a private in-app "Ideas" box with owner review.
+
+**Decision:** private in-app "Ideas." Dealer users submit a title and a
+freeform description from inside the app; a dealership's admin sees their own
+people's submissions. Submissions are stored per tenant with submitter,
+surface, and product version, rate-limited like the rest of the app, and land
+in an operator-side review queue alongside access requests. A suggestion is
+input, never an instruction: the owner and Muse review together against the
+product vision (digest folded into the Monday persona-and-journey pass once
+the feature ships); accepted ideas become ordinary sweep issues, declined
+ideas get a stated reason, and shipped ideas link the release. Submitter
+statuses: Received → Under review → Accepted / Declined (with reason) /
+Shipped. No public board and no voting in v1 — voting turns direction into a
+popularity contest and a public board leaks build strategy. The same decision
+was taken for OpenSight the same day (IDD D-88 there, issue #178).
+
+### D-10 — MCP consumer registration (scalable connector onboarding)
+
+**Status: DECIDED — owner, 2026-11-01: dynamic registration bridge over
+Cognito; no customer ever handles a client ID (issues #90, #91, #92).**
+
+**Context:** #71 put the MCP server behind Cognito OAuth with one
+hand-registered app client. Registering Muse as the first consumer
+(2026-11-01) required a person to fetch the MCP client's ID from the AWS
+console — acceptable once for the operator, impossible as a customer flow.
+Cognito offers no RFC 7591 dynamic client registration (verified against the
+pool's discovery document: no registration_endpoint), which is the mechanism
+modern MCP clients use to self-register. A client ID identifies the consuming
+app (Muse, ChatGPT), never the dealer; dealers already connect by sign-in
+and consent per #71 and must never handle an ID.
+
+**Options:** hand-register each consumer in the console (status quo); replace
+Cognito with a home-grown authorization server for MCP; add a registration
+bridge in front of Cognito.
+
+**Decision:** registration bridge. The API gains an RFC 7591 registration
+endpoint (#92) that creates a Cognito app client for the requesting consumer
+(its name and redirect URIs) through the Cognito API and returns the client
+ID; the API's IAM role gains one narrow permission — app-client management on
+this pool only. Registration alone grants nothing: a person still signs in
+and consents, and tokens stay scoped to that person's tenant and role.
+Redirect URIs are validated (https, localhost for development) and
+registration is rate-limited. Known consumers' callbacks also ship as
+template defaults (#90), so the major assistants work before the bridge is
+deployed. Dealer-facing management is an in-app "AI connections" page (#91):
+which apps hold grants for the workspace, their scopes in plain words, and
+revoke — grants recorded by the API and enforced on MCP calls, so revocation
+never depends on storing token values. A home-grown authorization server is
+rejected: token issuance is the most security-critical surface in the product
+and Cognito does it well; the bridge adds only the one verb Cognito lacks.
+Open detail, not a blocker: advertising the registration endpoint through
+pure discovery is constrained because the authorization-server metadata lives
+on Cognito's domain — consumers that accept a registration address directly
+are unaffected; a metadata facade is a later option.
 
 ## 9. AI direction — less dealer work (owner, 2026-10-19)
 

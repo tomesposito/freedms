@@ -7,4 +7,5 @@ export type BehavioralEvent =
   | {event: 'jacket_checklist_completed'};
 export interface AnalyticsRecord { id: string; tenantId: string; occurredAt: string; data: BehavioralEvent }
 export interface FunnelStage { reached: boolean; firstAt: string | null; count: number }
-export interface Funnel { tenantProvisioned: FunnelStage; vehicleStocked: FunnelStage; leadCreated: FunnelStage; pencilCreated: FunnelStage; sold: FunnelStage; jacketComplete: FunnelStage }
+export interface Activation { cohortStart: string | null; firstVehicleAt: string | null; firstLeadOrDealAt: string | null; activated: boolean }
+export interface Funnel { activation: Activation; tenantProvisioned: FunnelStage; vehicleStocked: FunnelStage; leadCreated: FunnelStage; pencilCreated: FunnelStage; sold: FunnelStage; jacketComplete: FunnelStage }
