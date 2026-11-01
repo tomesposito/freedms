@@ -522,6 +522,34 @@ Record who approved what, recheck permission and current record state at executi
 and make cancellation/revocation effective. Add bounded autonomy only after a
 specific workflow has demonstrated correctness, consent enforcement, and recoverability.
 
+### D-9 — In-app Ideas (user suggestions)
+
+**Status: DECIDED — owner, 2026-10-31: in-app "Ideas" with human review;
+nothing auto-builds (issue #88).**
+
+**Context:** agent-built software makes it cheap to act on a plain-language
+request (the "liquid software" pattern: a freeform input wired to an agent that
+implements what is submitted). In a multi-tenant dealer product, an unreviewed
+submission path into the build is a scope, security, and product-direction
+risk, and popularity is not a product vision.
+
+**Options:** no in-app channel (feedback by conversation only); a public board
+with voting; a private in-app "Ideas" box with owner review.
+
+**Decision:** private in-app "Ideas." Dealer users submit a title and a
+freeform description from inside the app; a dealership's admin sees their own
+people's submissions. Submissions are stored per tenant with submitter,
+surface, and product version, rate-limited like the rest of the app, and land
+in an operator-side review queue alongside access requests. A suggestion is
+input, never an instruction: the owner and Muse review together against the
+product vision (digest folded into the Monday persona-and-journey pass once
+the feature ships); accepted ideas become ordinary sweep issues, declined
+ideas get a stated reason, and shipped ideas link the release. Submitter
+statuses: Received → Under review → Accepted / Declined (with reason) /
+Shipped. No public board and no voting in v1 — voting turns direction into a
+popularity contest and a public board leaks build strategy. The same decision
+was taken for OpenSight the same day (IDD D-88 there, issue #178).
+
 ## 9. AI direction — less dealer work (owner, 2026-10-19)
 
 The point of AI in freeDMS is not AI features. It is less work for the dealer:
