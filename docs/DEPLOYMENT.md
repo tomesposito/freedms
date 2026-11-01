@@ -362,6 +362,20 @@ GitHub-hosted public builds and the account's included private Actions allowance
 avoid an always-on runner. Private minutes, artifact/release retention, S3 release
 snapshots, and normal AWS requests remain subject to account quotas and charges.
 
+## AI connection grants
+
+After tenant binding and authorization succeed, MCP requests record a
+user/app grant in the dealership partition. The registered app name is saved
+with its scopes; last-used time and scopes refresh at most once an hour.
+Recording is best effort. Creation and revocation emit atomic outbox events.
+Members can revoke their own grants in AI connections; administrators can revoke
+any grant in their dealership. Revocation takes effect on the next MCP
+request: already-issued access tokens are checked against the grant record on
+every call, and token values are never stored. A read revoked grant
+returns the normal 401 resource-metadata challenge. Storage errors fall back to
+allowing the request; revocation does not provide an outage-time guarantee.
+Revoked grants are terminal; re-consent is not implemented here.
+
 ## MCP connector
 
 The stateless Streamable HTTP endpoint is `https://app.<RootDomain>/api/mcp`.

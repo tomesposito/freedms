@@ -1,5 +1,5 @@
 import type { McpRegistration } from './mcp/registration.js';
-import type { Idea } from '@freedms/shared';
+import type { McpGrant, Idea } from '@freedms/shared';
 import type { AccessRequest } from '@freedms/shared';
 import { debitNormal, type AccountBalance } from '@freedms/shared';
 import { leadStages, leadSources, type LeadReport } from '@freedms/shared';
@@ -20,6 +20,9 @@ export interface TenantRepository {
   saveMcpRegistration(record: McpRegistration): Promise<void>;
   deleteMcpRegistration(clientId: string): Promise<void>;
   consumeMcpRegistrationAttempt(source: string, bucket: number, limit: number): Promise<boolean>;
+  mcpGrants(): Promise<McpGrant[]>;
+  mcpGrant(id: string): Promise<McpGrant | undefined>;
+  saveMcpGrant(record: McpGrant, expectedVersion: number, event?: OutboxEvent): Promise<void>;
   ideas(): Promise<Idea[]>;
   idea(id: string): Promise<Idea | undefined>;
   saveIdea(record: Idea, expectedVersion: number, event: OutboxEvent): Promise<void>;
@@ -355,4 +358,11 @@ export function assertIdea(tenantId: string, record: Idea, expectedVersion: numb
   assertScope(tenantId, record, event);
   assertEvent(record.id, record.version, event, expectedVersion ? 'idea.status_changed' : 'idea.submitted');
   if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid idea version');
+}
+
+export function assertMcpGrant(tenantId: string, record: McpGrant, expectedVersion: number, event?: OutboxEvent): void {
+  assertScope(tenantId, record, ...(event ? [event] : []));
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid grant version');
+  if ((!expectedVersion || record.revokedAt) && !event) throw new Error('Grant changes require an outbox event');
+  if (event) assertEvent(record.id, record.version, event, expectedVersion ? 'mcp-grant.revoked' : 'mcp-grant.recorded');
 }

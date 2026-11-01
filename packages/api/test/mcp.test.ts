@@ -32,6 +32,9 @@ async function setup(provider?: QuickEntryProvider, clock: () => Date = () => no
     return {response, ...JSON.parse(response.body)};
   };
   const call = async (name: string, args: unknown = {}, jwt = token()) => (await request('tools/call', {name, arguments: args}, jwt)).result;
+  // Existing tool-operation audit assertions start after connection bookkeeping.
+  // First-use grant events and their human attribution are covered in mcp-grants.test.ts.
+  for (const sub of ['admin-A', 'admin-B']) await request('tools/list', {}, token({sub}));
   return {repositories, handle, request, call};
 }
 test('MCP initialize, ping, scoped tool discovery, metadata and adapter dispatch', async () => {
@@ -771,7 +774,9 @@ const feedInput = {formats: ['csv', 'json'], includedStatuses: ['available'], re
 const reportInput = {name: 'Inventory', dataset: 'inventory', columns: ['stockNumber', 'vehicle'], from: '2020-01-01', to: '2026-10-30'};
 async function staffToken(s: Awaited<ReturnType<typeof setup>>) {
   const user = data(await s.call('create_user', {...userInput, email: 'staff76@example.test'}));
-  return token({sub: user.userId});
+  const jwt = token({sub: user.userId});
+  await s.request('tools/list', {}, jwt);
+  return jwt;
 }
 
 test('documents MCP upload, search, content, retention and confirmed disposal reuse storage and audit', async () => {

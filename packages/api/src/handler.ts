@@ -1,4 +1,5 @@
 import { registerMcpClient, deleteMcpRegistration, type RegistrationConfig } from './mcp/registration.js';
+import { aiConnections } from './ai-connections.js';
 import { ideas } from './ideas.js';
 import type { TurnstileVerifier } from './turnstile.js';
 import { submitAccessRequest, manageAccessRequests, canManageAccessRequests, type PilotOperator, type AccessRequestMail } from './access-requests.js';
@@ -97,6 +98,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       }}) : repository;
 
       const execute = async (): Promise<ApiResponse> => {
+        if (/^\/ai-connections(\/|$)/.test(path)) return await aiConnections(request, principal, repositories, now());
         if (/^\/(ideas|admin\/ideas)(\/|$)/.test(path)) return await ideas(request, principal, repositories, now(), options.pilotOperator);
         if (path === '/admin/mcp-clients' || path.startsWith('/admin/mcp-clients/')) {
           if (!canManageAccessRequests(principal, options.pilotOperator)) throw new ApiError(403, 'FORBIDDEN', 'Only the pilot operator can manage registered clients.');

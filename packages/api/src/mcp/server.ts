@@ -1,3 +1,4 @@
+import { grantRevoked } from './grants.js';
 import type { AuthClaims, DealView } from '@freedms/shared';
 import { authorize } from '../auth.js';
 import { ApiError, missing, requireId } from '../errors.js';
@@ -30,14 +31,6 @@ export function createMcpHandler(repositories: RepositoryFactory, execute: (requ
     if (message.jsonrpc !== '2.0' || typeof message.method !== 'string' ||
       (id !== undefined && typeof id !== 'string' && !(typeof id === 'number' && Number.isFinite(id))) ||
       (message.params !== undefined && (!message.params || typeof message.params !== 'object' || Array.isArray(message.params)))) return fail(null, -32600, 'Invalid request.');
-    if (id === undefined) return {...response(202, null), body: ''};
-    if (message.method === 'initialize') {
-      const params = message.params as Record<string, unknown> | undefined;
-      if (!params || typeof params.protocolVersion !== 'string' || !params.capabilities || !params.clientInfo) return fail(id, -32602, 'Invalid initialization parameters.');
-      return rpc(id, {protocolVersion: ['2025-03-26', '2025-06-18', '2025-11-25'].includes(params.protocolVersion) ? params.protocolVersion : '2025-11-25', capabilities: {tools: {listChanged: false}}, serverInfo: {name: 'freeDMS', version: '0.1.0'}});
-    }
-    if (message.method === 'ping') return rpc(id, {});
-    if (!['tools/list', 'tools/call'].includes(message.method)) return fail(id, -32601, 'Method not found.');
     try {
       // Access tokens contain no tenant attribute. Resolve the subject's immutable binding,
       // then use the exact same live membership/role check as hosted REST sessions.
@@ -47,6 +40,18 @@ export function createMcpHandler(repositories: RepositoryFactory, execute: (requ
         const candidate: AuthClaims = {sub: access.sub, 'custom:tenant_id': tenantId, iss: access.iss, aud: config.clientId, exp: access.exp, token_use: 'id'};
         try { await authorize(candidate, repositories); claims = candidate; } catch (e) { if (!(e instanceof ApiError) || e.status !== 403) throw e; }
       }
+      if (claims && await grantRevoked(repositories, tenantId!, access, config)) {
+        const result = response(401, {error: {code: 'UNAUTHORIZED', message: 'Sign in to continue.'}});
+        result.headers['www-authenticate'] = `Bearer resource_metadata="${metadata}"`; return result;
+      }
+      if (id === undefined) return {...response(202, null), body: ''};
+      if (message.method === 'initialize') {
+        const params = message.params as Record<string, unknown> | undefined;
+        if (!params || typeof params.protocolVersion !== 'string' || !params.capabilities || !params.clientInfo) return fail(id, -32602, 'Invalid initialization parameters.');
+        return rpc(id, {protocolVersion: ['2025-03-26', '2025-06-18', '2025-11-25'].includes(params.protocolVersion) ? params.protocolVersion : '2025-11-25', capabilities: {tools: {listChanged: false}}, serverInfo: {name: 'freeDMS', version: '0.1.0'}});
+      }
+      if (message.method === 'ping') return rpc(id, {});
+      if (!['tools/list', 'tools/call'].includes(message.method)) return fail(id, -32601, 'Method not found.');
       const available = claims ? tools.filter(t => t.method === 'GET' || access.scope.split(' ').includes('freedms/mcp.write')) : [];
       if (message.method === 'tools/list') return rpc(id, {tools: available.map(({path: _path, method, ...t}) => ({...t, annotations: {readOnlyHint: method === 'GET', destructiveHint: method !== 'GET', openWorldHint: t.name === 'import_vehicles'}}))});
       const params = object(message.params); onlyKeys(params, ['name', 'arguments']);

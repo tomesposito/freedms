@@ -1,5 +1,5 @@
 import type { McpRegistration } from './mcp/registration.js';
-import type { Idea } from '@freedms/shared';
+import type { McpGrant, Idea } from '@freedms/shared';
 import type { AccessRequest } from '@freedms/shared';
 import { acceptanceWrite } from './invites.js';
 import { validateMemberWrite } from './users.js';
@@ -10,7 +10,7 @@ import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   // In-process, warm-instance only; the consistent epoch Get validates across instances.
@@ -126,6 +126,22 @@ export class DynamoRepositories implements RepositoryFactory {
           put('MEMBERSHIP_GUARD', {version: (guard?.version ?? 0) + 1}, guard ? '#d.#v = :v' : 'attribute_not_exists(PK)', guard?.version),
           ...(this.subjectBindings ? [subjectPut(user.id)] : []), {Put: {TableName: this.table, Item: {...key(`USER#${requireId(user.id)}`), data: user}}},
           {Put: {TableName: this.table, Item: {...key(`MEMBER#${requireId(member.userId)}`), data: member}}}, eventPut(event)
+        ]);
+      },
+      mcpGrants: () => listRows<McpGrant>('MCPGRANT#'),
+      mcpGrant: id => get<McpGrant>(`MCPGRANT#${requireId(id)}`),
+      saveMcpGrant: async (record, expectedVersion, event) => {
+        assertMcpGrant(tenantId, record, expectedVersion, event);
+        const row = put(`MCPGRANT#${requireId(record.id)}`, record, expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined);
+        const guardedRow = expectedVersion ? {Put: {...row.Put,
+          ConditionExpression: '#d.#v = :v AND #d.revokedAt = :active AND #d.userId = :user AND #d.clientId = :client',
+          ExpressionAttributeValues: {':v': expectedVersion, ':active': null, ':user': record.userId, ':client': record.clientId}
+        }} : row;
+        // A separate unique pair guard makes concurrent first uses create only one grant.
+        await transact([
+          guardedRow,
+          ...(expectedVersion ? [] : [put(`MCPGRANTPAIR#${encodeURIComponent(record.userId)}#${encodeURIComponent(record.clientId)}`, {id: record.id})]),
+          ...(event ? [eventPut(event)] : [])
         ]);
       },
       ideas: () => listRows<Idea>('IDEA#'),

@@ -39,6 +39,7 @@ export function sidebarNavigation(admin: boolean, pilotOperator = false): string
     ...(admin && pilotOperator ? [['Pilot', [destination('Ideas review', '#/ideas-review', '<path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h4"/>'), destination('Pilot requests', '#/pilot-requests', '<path d="M4 4h16v16H4zM4 13h5l2 3h2l2-3h5M8 8h8"/>')]] as [string, Destination[]]] : []),
     ['Workspace', [
       destination('Ideas', '#/ideas', '<path d="M9 18h6m-6 3h6M8 14a6 6 0 1 1 8 0l-1 4H9z"/>'),
+      destination('AI connections', '#/ai-connections', '<path d="M8 12h8M9 5H5v14h4m6-14h4v14h-4"/>'),
       destination('Account', '#/account', '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="9" r="3"/><path d="M6 20v-2a6 6 0 0 1 12 0v2"/>'),
       ...(admin ? [destination('Users', '#/users', '<circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6m2 4a5 5 0 0 1 3 4v3"/>')] : []),
     ]],
