@@ -50,6 +50,18 @@ Real captures from the local app on the current build — the same screens the
 verification tours use. The sample dealership data is local-only; the app itself
 always starts empty.
 
+**AI connections**
+
+Members can see and revoke their own AI app connections. Administrators can also
+see and revoke everyone’s connections at the dealership. Scopes are shown in
+plain words, alongside setup guidance and the last-used date.
+
+![AI connections and dealership view](docs/screenshots/ai-connections.png)
+
+This local demo capture uses a real first MCP tool request with an offline test
+token. Run `node --import tsx packages/web/test/ai-connections-tour.mjs` to check
+the empty state, recorded connection, admin view, revoke flow, and mobile layout.
+
 **Ideas and human review**
 
 Every signed-in member can submit a private idea and see its status. Dealership

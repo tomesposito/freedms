@@ -294,6 +294,9 @@ Resources:
       Policies:
         - Statement:
             - Effect: Allow
+              Action: [cognito-idp:CreateUserPoolClient, cognito-idp:DeleteUserPoolClient]
+              Resource: !GetAtt UserPool.Arn
+            - Effect: Allow
               Action: [ses:SendEmail]
               Resource: '*'
               Condition:
@@ -311,6 +314,13 @@ Resources:
           Properties:
             ApiId: !Ref Api
             Path: /mcp
+            Method: POST
+            Auth: {Authorizer: NONE}
+        McpRegistration:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /mcp/register
             Method: POST
             Auth: {Authorizer: NONE}
         McpMetadata:

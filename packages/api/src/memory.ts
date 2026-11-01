@@ -1,4 +1,5 @@
-import type { Idea } from '@freedms/shared';
+import type { McpRegistration } from './mcp/registration.js';
+import type { McpGrant, Idea } from '@freedms/shared';
 import type { AccessRequest } from '@freedms/shared';
 import type { AccountBalance } from '@freedms/shared';
 import { acceptanceWrite } from './invites.js';
@@ -8,10 +9,10 @@ import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import type { Customer, CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
-import { assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 const forecastKinds = new Set<CrmEntity['kind']>(['deal', 'service-appointment', 'part', 'parts-sale', 'repair-order']);
-interface State { ideas: Map<string, Idea>; accessRequests: Map<string, AccessRequest>; leadPageEpoch: number; leadPageCache: Map<string, LeadPage>; accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
+interface State { mcpGrants: Map<string, McpGrant>; mcpRegistrations: Map<string, McpRegistration>; mcpAttempts: Map<string, {bucket: number; count: number}>; ideas: Map<string, Idea>; accessRequests: Map<string, AccessRequest>; leadPageEpoch: number; leadPageCache: Map<string, LeadPage>; accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
   private states = new Map<string, State>();
   async ideasQueue(): Promise<Idea[]> {
@@ -24,7 +25,7 @@ export class MemoryRepositories implements RepositoryFactory {
   forTenant(tenantId: string): TenantRepository {
     requireId(tenantId);
     let state = this.states.get(tenantId);
-    if (!state) { state = {ideas: new Map(), accessRequests: new Map(), leadPageEpoch: 0, leadPageCache: new Map(), accountingEpoch: 0, accountingCache: new Map(), forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), crmByKind: new Map(), partNumbers: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
+    if (!state) { state = {mcpGrants: new Map(), mcpRegistrations: new Map(), mcpAttempts: new Map(), ideas: new Map(), accessRequests: new Map(), leadPageEpoch: 0, leadPageCache: new Map(), accountingEpoch: 0, accountingCache: new Map(), forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), crmByKind: new Map(), partNumbers: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
     const s = state;
     const storeCrm = (record: CrmEntity) => {
       const stored = structuredClone(record);
@@ -54,12 +55,38 @@ export class MemoryRepositories implements RepositoryFactory {
         validateMemberWrite(user, member, expected, event, [...s.memberships.values()].map(membership => ({membership, user: s.users.get(membership.userId)!})));
         s.users.set(user.id, structuredClone(user)); s.memberships.set(user.id, structuredClone(member)); s.events.set(event.id, structuredClone(event));
       },
+      mcpGrants: async () => structuredClone([...s.mcpGrants.values()]),
+      mcpGrant: async id => structuredClone(s.mcpGrants.get(requireId(id))),
+      saveMcpGrant: async (record, expectedVersion, event) => {
+        assertMcpGrant(tenantId, record, expectedVersion, event); requireId(record.id);
+        if (event) check(event);
+        const old = s.mcpGrants.get(record.id);
+        if ((old?.version ?? 0) !== expectedVersion || old?.revokedAt ||
+          (old && (old.userId !== record.userId || old.clientId !== record.clientId)) ||
+          (!expectedVersion && [...s.mcpGrants.values()].some(g => g.userId === record.userId && g.clientId === record.clientId))) throw conflict();
+        s.mcpGrants.set(record.id, structuredClone(record));
+        if (event) s.events.set(event.id, structuredClone(event));
+      },
       ideas: async () => structuredClone([...s.ideas.values()]),
       idea: async id => structuredClone(s.ideas.get(requireId(id))),
       saveIdea: async (record, expectedVersion, event) => {
         assertIdea(tenantId, record, expectedVersion, event); requireId(record.id); check(event);
         if ((s.ideas.get(record.id)?.version ?? 0) !== expectedVersion) throw conflict();
         s.ideas.set(record.id, structuredClone(record)); s.events.set(event.id, structuredClone(event));
+      },
+      mcpRegistration: async id => structuredClone(s.mcpRegistrations.get(requireId(id))),
+      mcpRegistrations: async () => structuredClone([...s.mcpRegistrations.values()]),
+      saveMcpRegistration: async record => {
+        assertScope(tenantId, record); requireId(record.client_id);
+        if (s.mcpRegistrations.has(record.client_id)) throw conflict();
+        s.mcpRegistrations.set(record.client_id, structuredClone(record));
+      },
+      deleteMcpRegistration: async id => { s.mcpRegistrations.delete(requireId(id)); },
+      consumeMcpRegistrationAttempt: async (source, bucket, limit) => {
+        const old = s.mcpAttempts.get(source);
+        const count = old?.bucket === bucket ? old.count : 0;
+        if (count >= limit) return false;
+        s.mcpAttempts.set(source, {bucket, count: count + 1}); return true;
       },
       accessRequest: async email => structuredClone(s.accessRequests.get(email.toLowerCase())),
       accessRequests: async () => structuredClone([...s.accessRequests.values()]),
