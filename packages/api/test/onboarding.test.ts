@@ -82,6 +82,7 @@ test('expired, malformed and unknown public tokens return 200 invalid through lo
 test('acceptance is atomic, single-use, role-fixed, isolated and signs in as staff', async () => {
   const s = await setup(), a = await s.create(), b = await s.create(), invite = a.invites[0];
   const repo = s.repositories.forTenant(invite.tenantId), other = s.repositories.forTenant(b.invites[0].tenantId);
+  assert.equal((await repo.tenant())!.inviteAcceptedAt, undefined);
   const before = await other.workspaceUsers(), otherInvites = await other.crmList('invite');
   const invitesBefore = await repo.crmList('invite');
   const path = `/invite/${invite.token}/accept`, body = {name: 'New Name', email: 'STAFF@example.test'};
@@ -93,6 +94,8 @@ test('acceptance is atomic, single-use, role-fixed, isolated and signs in as sta
   assert.equal(results.filter(r => r.data.outcome === 'accepted').length, 1);
   assert.equal(results.filter(r => r.data.outcome === 'refused').length, 1);
   const accepted = (await repo.crmGet('invite', invite.id))!;
+  assert.equal((await repo.tenant())!.inviteAcceptedAt, now.toISOString());
+  assert.equal((await other.tenant())!.inviteAcceptedAt, undefined);
   assert.equal(accepted.status, 'accepted'); assert.equal(accepted.acceptedAt, now.toISOString()); assert.equal(accepted.acceptedName, 'New Name');
   assert.equal(accepted.token, ''); assert.equal(accepted.tokenHash, '');
   assert.deepEqual(await repo.crmList('invite'), invitesBefore.map(row => row.id === accepted.id ? accepted : row));
@@ -108,6 +111,10 @@ test('acceptance is atomic, single-use, role-fixed, isolated and signs in as sta
   assert.ok(!JSON.stringify(events).includes(invite.token)); assert.ok(!JSON.stringify(events).includes('@'));
   assert.deepEqual(await other.workspaceUsers(), before); assert.deepEqual(await other.crmList('invite'), otherInvites);
   assert.equal((await s.call(`/admin/invites/${invite.id}/reissue`, a.token, 'POST', {version: 2})).status, 409);
+  s.advance(new Date(now.getTime() + 86400000));
+  const second = a.invites[1];
+  assert.equal((await s.call(`/invite/${second.token}/accept`, '', 'POST', {name: second.name, email: second.email})).data.outcome, 'accepted');
+  assert.equal((await repo.tenant())!.inviteAcceptedAt, now.toISOString());
 });
 test('revoked, expired and unknown acceptance links refuse; existing members keep pending invites', async () => {
   const s = await setup(), a = await s.create(), [invite, expiring] = a.invites;
@@ -122,16 +129,18 @@ test('revoked, expired and unknown acceptance links refuse; existing members kee
   s.advance(new Date('2026-11-01T12:00:00Z'));
   assert.equal((await accept(expiring)).data.reason, 'expired');
   assert.equal((await s.call('/invite/bad/accept', '', 'POST', {name: 'Name', email: invite.email})).data.outcome, 'refused');
+  assert.equal((await repo.tenant())!.inviteAcceptedAt, undefined);
 });
 test('Dynamo acceptance conditions invite and membership guard in the same transaction as identity and both events', async () => {
   const {DynamoRepositories} = await import('../src/dynamo.js');
   const {GetCommand, QueryCommand, TransactWriteCommand} = await import('@aws-sdk/lib-dynamodb');
   const s = await setup(), a = await s.create(), invite = a.invites[0];
   const rows = await s.repositories.forTenant(invite.tenantId).workspaceUsers();
+  const tenant = (await s.repositories.forTenant(invite.tenantId).tenant())!;
   const commands: any[] = [];
   const client = {send: async (command: any) => {
     commands.push(command);
-    if (command instanceof GetCommand) return command.input.Key?.SK === 'MEMBERSHIP_GUARD' ? {Item: {data: {version: 4}}} : {Item: {data: invite}};
+    if (command instanceof GetCommand) return command.input.Key?.SK === 'MEMBERSHIP_GUARD' ? {Item: {data: {version: 4}}} : {Item: {data: command.input.Key?.SK === 'PROFILE' ? tenant : invite}};
     if (command instanceof QueryCommand) return {Items: rows.map(r => ({data: command.input.ExpressionAttributeValues?.[':prefix'] === 'USER#' ? r.user : r.membership}))};
     return {};
   }} as unknown as import('@aws-sdk/lib-dynamodb').DynamoDBDocumentClient;
@@ -140,13 +149,18 @@ test('Dynamo acceptance conditions invite and membership guard in the same trans
   assert.equal(await repo.acceptInvite(invite, user, now), 'accepted');
   assert.equal(commands[0].input.Key.SK, 'MEMBERSHIP_GUARD');
   const items = (commands.at(-1) as InstanceType<typeof TransactWriteCommand>).input.TransactItems!;
-  assert.equal(items.length, 6); assert.ok(items.every(i => i.Put?.Item?.PK === `TENANT#${invite.tenantId}`));
+  assert.equal(items.length, 7); assert.ok(items.every(i => i.Put?.Item?.PK === `TENANT#${invite.tenantId}`));
   assert.equal(items[0].Put?.ExpressionAttributeValues?.[':v'], 4);
   assert.equal(items[1].Put?.ExpressionAttributeValues?.[':v'], invite.version);
   assert.equal(items[1].Put?.ConditionExpression, '#d.#v = :v');
   assert.equal(items[1].Put?.Item?.data.status, 'accepted');
   assert.equal(items[3].Put?.Item?.data.role, 'staff');
-  assert.deepEqual(items.slice(4).map(i => i.Put?.Item?.data.type), ['invite.accepted', 'user.added']);
+  assert.deepEqual(items.slice(4, 6).map(i => i.Put?.Item?.data.type), ['invite.accepted', 'user.added']);
+  assert.equal(items[6].Put?.Item?.SK, 'PROFILE');
+  assert.deepEqual(items[6].Put?.Item?.data, {...tenant, inviteAcceptedAt: now.toISOString()});
+  tenant.inviteAcceptedAt = new Date(now.getTime() - 86400000).toISOString();
+  await repo.acceptInvite(invite, user, now);
+  assert.equal(commands.at(-1).input.TransactItems[6].Put.Item.data.inviteAcceptedAt, tenant.inviteAcceptedAt);
   await assert.rejects(repo.acceptInvite({...invite, tenantId: 'other'}, user, now));
   invite.status = 'revoked'; await assert.rejects(repo.acceptInvite(invite, user, now));
 });

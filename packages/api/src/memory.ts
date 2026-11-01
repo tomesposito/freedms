@@ -39,10 +39,11 @@ export class MemoryRepositories implements RepositoryFactory {
     return {
       webhookDispatchScope: {owner: this, tenantId},
       acceptInvite: async (invite, user, now) => {
-        const write = acceptanceWrite(tenantId, s.crm.get(`invite#${invite.id}`) as import('@freedms/shared').Invite | undefined, invite, user, [...s.memberships.values()].map(membership => ({membership, user: s.users.get(membership.userId)!})), now);
+        const write = acceptanceWrite(tenantId, s.crm.get(`invite#${invite.id}`) as import('@freedms/shared').Invite | undefined, invite, user, [...s.memberships.values()].map(membership => ({membership, user: s.users.get(membership.userId)!})), now, s.tenant);
         if (!write) return 'already-member';
-        const {record, member, event, memberEvent} = write;
+        const {record, member, event, memberEvent, tenant} = write;
         check(event); check(memberEvent);
+        s.tenant = structuredClone(tenant);
         storeCrm(record); s.users.set(user.id, structuredClone(user)); s.memberships.set(user.id, structuredClone(member));
         s.events.set(event.id, structuredClone(event)); s.events.set(memberEvent.id, structuredClone(memberEvent));
         return 'accepted';

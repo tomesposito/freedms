@@ -64,7 +64,8 @@ export async function manageInvites(request: ApiRequest, principal: Principal, r
   return response(200, {data: record});
 }
 /** Validate against the stored invite inside the repository write boundary. */
-export function acceptanceWrite(tenantId: string, current: Invite | undefined, supplied: Invite, user: User, rows: WorkspaceUser[], now: Date) {
+export function acceptanceWrite(tenantId: string, current: Invite | undefined, supplied: Invite, user: User, rows: WorkspaceUser[], now: Date, tenant: Tenant | undefined) {
+  if (!tenant || tenant.id !== tenantId) throw conflict();
   if (!current || current.tenantId !== tenantId || supplied.tenantId !== tenantId || current.version !== supplied.version || current.tokenHash !== supplied.tokenHash || current.status !== 'pending' || current.expiresAt <= now.toISOString()) throw conflict();
   if (user.email !== current.email || !user.name.trim() || rows.some(r => r.user.id === user.id)) throw conflict();
   if (rows.some(r => r.user.email?.toLowerCase() === current.email.toLowerCase() && r.membership.active)) return undefined;
@@ -74,7 +75,7 @@ export function acceptanceWrite(tenantId: string, current: Invite | undefined, s
   const member = {tenantId, userId: user.id, role: current.role, active: true, version: 1};
   const event = {...inviteWrite(record, user.id, current.version).event, type: 'invite.accepted' as const};
   const memberEvent = {...event, id: randomUUID(), aggregateId: user.id, aggregateVersion: 1, type: 'user.added' as const};
-  return {record, member, event, memberEvent};
+  return {record, member, event, memberEvent, tenant: {...tenant, inviteAcceptedAt: tenant.inviteAcceptedAt ?? now.toISOString()}};
 }
 export async function publicInvite(request: ApiRequest, repositories: RepositoryFactory, now: Date, hosted = false) {
   const method = request.method.toUpperCase();

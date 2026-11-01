@@ -101,15 +101,16 @@ export class DynamoRepositories implements RepositoryFactory {
     return {
       webhookDispatchScope: {owner: this, tenantId},
       acceptInvite: async (invite, user, now) => {
+        // Read the guard before the profile: competing acceptances cannot move the first stamp.
         const guard = await get<{version: number}>('MEMBERSHIP_GUARD');
         const current = await get<import('@freedms/shared').Invite>(`INVITE#${requireId(invite.id)}`);
-        const write = acceptanceWrite(tenantId, current, invite, user, await workspaceUsers(), now);
+        const write = acceptanceWrite(tenantId, current, invite, user, await workspaceUsers(), now, await get<Tenant>('PROFILE'));
         if (!write) return 'already-member';
-        const {record, member, event, memberEvent} = write;
+        const {record, member, event, memberEvent, tenant} = write;
         await transact([
           put('MEMBERSHIP_GUARD', {version: (guard?.version ?? 0) + 1}, guard ? '#d.#v = :v' : 'attribute_not_exists(PK)', guard?.version),
           put(`INVITE#${invite.id}`, record, '#d.#v = :v', invite.version),
-          ...(this.subjectBindings ? [subjectPut(user.id)] : []), put(`USER#${requireId(user.id)}`, user), put(`MEMBER#${user.id}`, member), eventPut(event), eventPut(memberEvent)
+          ...(this.subjectBindings ? [subjectPut(user.id)] : []), put(`USER#${requireId(user.id)}`, user), put(`MEMBER#${user.id}`, member), eventPut(event), eventPut(memberEvent), put('PROFILE', tenant, 'attribute_exists(PK)')
         ]);
         return 'accepted';
       },

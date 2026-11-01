@@ -24,7 +24,7 @@ export * from './jacket.js';
 import type { Deal, WorkspaceSettings } from './desking.js';
 export * from './desking.js';
 export type Role = 'admin' | 'staff';
-export interface Tenant { id: string; name: string; createdAt: string; address?: string; phone?: string; dealerType?: 'independent' | 'franchise' | 'other' }
+export interface Tenant { id: string; name: string; createdAt: string; inviteAcceptedAt?: string; address?: string; phone?: string; dealerType?: 'independent' | 'franchise' | 'other' }
 export interface User { id: string; name: string; email?: string }
 export interface Membership { tenantId: string; userId: string; role: Role; active: boolean; version?: number }
 export interface SessionUser { id: string; name: string; email: string | null }

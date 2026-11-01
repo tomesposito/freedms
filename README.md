@@ -892,7 +892,9 @@ project to opt in; unset either to disable delivery. Project creation is manual.
 Only typed categorical properties and dealership identity go to the
 [PostHog capture API](https://posthog.com/docs/api/capture); no customer content,
 user IDs, VINs, or economics. `GET /analytics/funnel` derives milestones from the
-owned outbox joined to deal history and document metadata. Client signals use
+owned outbox joined to deal history and document metadata. Its activation projection
+uses the tenant's first invite acceptance as the cohort start and requires the first
+vehicle and first lead or deal within seven days (inclusive). Client signals use
 `POST /analytics/events` and never determine funnel milestones. Quick-entry
 outcomes are usage signals only, with no billing or pricing behavior.
 
