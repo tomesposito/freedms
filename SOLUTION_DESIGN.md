@@ -8,7 +8,7 @@
 > - **License today:** MIT, as recorded in LICENSE; alternatives remain draft D-1.
 > - **Decision process:** IDDs D-1 onward record context, options, and a recommendation.
 >   D-1, D-3, and D-4 were **DECIDED by the owner on 2026-10-19** (recorded in each
->   IDD below). D-2 and D-5–D-7 remain **DRAFT — awaiting the owner's pick**; D-8 has an accepted MCP-specific decision.
+>   IDD below). D-2 and D-5–D-7 remain **DRAFT — awaiting the owner's pick**; D-8 has an accepted MCP-specific decision; D-9 was decided 2026-10-31 and D-10 on 2026-11-01.
 
 ## 1. Vision & positioning
 
@@ -549,6 +549,45 @@ statuses: Received → Under review → Accepted / Declined (with reason) /
 Shipped. No public board and no voting in v1 — voting turns direction into a
 popularity contest and a public board leaks build strategy. The same decision
 was taken for OpenSight the same day (IDD D-88 there, issue #178).
+
+### D-10 — MCP consumer registration (scalable connector onboarding)
+
+**Status: DECIDED — owner, 2026-11-01: dynamic registration bridge over
+Cognito; no customer ever handles a client ID (issues #90, #91, #92).**
+
+**Context:** #71 put the MCP server behind Cognito OAuth with one
+hand-registered app client. Registering Muse as the first consumer
+(2026-11-01) required a person to fetch the MCP client's ID from the AWS
+console — acceptable once for the operator, impossible as a customer flow.
+Cognito offers no RFC 7591 dynamic client registration (verified against the
+pool's discovery document: no registration_endpoint), which is the mechanism
+modern MCP clients use to self-register. A client ID identifies the consuming
+app (Muse, ChatGPT), never the dealer; dealers already connect by sign-in
+and consent per #71 and must never handle an ID.
+
+**Options:** hand-register each consumer in the console (status quo); replace
+Cognito with a home-grown authorization server for MCP; add a registration
+bridge in front of Cognito.
+
+**Decision:** registration bridge. The API gains an RFC 7591 registration
+endpoint (#92) that creates a Cognito app client for the requesting consumer
+(its name and redirect URIs) through the Cognito API and returns the client
+ID; the API's IAM role gains one narrow permission — app-client management on
+this pool only. Registration alone grants nothing: a person still signs in
+and consents, and tokens stay scoped to that person's tenant and role.
+Redirect URIs are validated (https, localhost for development) and
+registration is rate-limited. Known consumers' callbacks also ship as
+template defaults (#90), so the major assistants work before the bridge is
+deployed. Dealer-facing management is an in-app "AI connections" page (#91):
+which apps hold grants for the workspace, their scopes in plain words, and
+revoke — grants recorded by the API and enforced on MCP calls, so revocation
+never depends on storing token values. A home-grown authorization server is
+rejected: token issuance is the most security-critical surface in the product
+and Cognito does it well; the bridge adds only the one verb Cognito lacks.
+Open detail, not a blocker: advertising the registration endpoint through
+pure discovery is constrained because the authorization-server metadata lives
+on Cognito's domain — consumers that accept a registration address directly
+are unaffected; a metadata facade is a later option.
 
 ## 9. AI direction — less dealer work (owner, 2026-10-19)
 
