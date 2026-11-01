@@ -1,3 +1,4 @@
+import type { Idea } from '@freedms/shared';
 import type { AccessRequest } from '@freedms/shared';
 import { acceptanceWrite } from './invites.js';
 import { validateMemberWrite } from './users.js';
@@ -8,7 +9,7 @@ import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   // In-process, warm-instance only; the consistent epoch Get validates across instances.
@@ -27,6 +28,18 @@ export class DynamoRepositories implements RepositoryFactory {
         ConditionExpression: 'attribute_not_exists(PK) OR #d.#t = :tenant',
         ExpressionAttributeNames: {'#d': 'data', '#t': 'tenantId'}, ExpressionAttributeValues: {':tenant': tenantId}}}
     ]}));
+  }
+  /** Materialized operator queue, atomically maintained with the tenant row and outbox. */
+  async ideasQueue(): Promise<Idea[]> {
+    const rows: Idea[] = []; let cursor: Record<string, unknown> | undefined;
+    do {
+      const result = await this.client.send(new QueryCommand({TableName: this.table,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: {':pk': 'OPERATOR#IDEAS', ':prefix': 'IDEA#'},
+        ConsistentRead: true, ExclusiveStartKey: cursor}));
+      rows.push(...(result.Items ?? []).map(item => item.data as Idea)); cursor = result.LastEvaluatedKey;
+    } while (cursor);
+    return rows;
   }
   async tenantForSubject(subject: string): Promise<string | undefined> {
     const result = await this.client.send(new GetCommand({TableName: this.table,
@@ -111,6 +124,16 @@ export class DynamoRepositories implements RepositoryFactory {
           put('MEMBERSHIP_GUARD', {version: (guard?.version ?? 0) + 1}, guard ? '#d.#v = :v' : 'attribute_not_exists(PK)', guard?.version),
           ...(this.subjectBindings ? [subjectPut(user.id)] : []), {Put: {TableName: this.table, Item: {...key(`USER#${requireId(user.id)}`), data: user}}},
           {Put: {TableName: this.table, Item: {...key(`MEMBER#${requireId(member.userId)}`), data: member}}}, eventPut(event)
+        ]);
+      },
+      ideas: () => listRows<Idea>('IDEA#'),
+      idea: id => get<Idea>(`IDEA#${requireId(id)}`),
+      saveIdea: async (record, expectedVersion, event) => {
+        assertIdea(tenantId, record, expectedVersion, event);
+        await transact([
+          put(`IDEA#${requireId(record.id)}`, record, expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined),
+          eventPut(event),
+          {Put: {TableName: this.table, Item: {PK: 'OPERATOR#IDEAS', SK: `IDEA#${tenantId}#${record.id}`, data: record}}}
         ]);
       },
       accessRequest: email => get<AccessRequest>(`ACCESSREQUEST#${email.toLowerCase()}`),

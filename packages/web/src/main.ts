@@ -1,3 +1,4 @@
+import { ideasRoute, ideasQueueRoute } from './ideas';
 import { fetchWithRetry } from './api-client';
 import { loadErrorHtml, bindLoadRetry } from './load-error';
 import { brandIconUrl, brandLogoUrl, brandReversedLogoUrl } from './brand';
@@ -270,6 +271,8 @@ async function route(): Promise<void> {
     else if (parts[0] === 'compliance') await complianceRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, parts[1]);
     else if (parts[0] === 'documents') await documentsRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'pilot-requests') await pilotRequestsRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, session.canManagePilotRequests === true, parts[1]);
+    else if (parts[0] === 'ideas') await ideasRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, session.principal.userId);
+    else if (parts[0] === 'ideas-review') await ideasQueueRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, session.canManagePilotRequests === true);
     else if (parts[0] === 'users') await usersRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void start(); }, admin: session.principal.role === 'admin'}, session.principal.tenantId, !localMode);
     else if (parts[0] === 'webhooks') await webhooksRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'account') await accountRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, {}, !localMode, cognito);

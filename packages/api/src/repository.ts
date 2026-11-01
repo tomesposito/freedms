@@ -1,3 +1,4 @@
+import type { Idea } from '@freedms/shared';
 import type { AccessRequest } from '@freedms/shared';
 import { debitNormal, type AccountBalance } from '@freedms/shared';
 import { leadStages, leadSources, type LeadReport } from '@freedms/shared';
@@ -13,6 +14,9 @@ export interface LeadPage { leads: Lead[]; customers: Customer[]; total: number 
 export const OPERATOR_TENANT_ID = 'operator';
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
+  ideas(): Promise<Idea[]>;
+  idea(id: string): Promise<Idea | undefined>;
+  saveIdea(record: Idea, expectedVersion: number, event: OutboxEvent): Promise<void>;
   /** Stable factory/tenant identity across short-lived repository wrappers. */
   readonly webhookDispatchScope?: {owner: object; tenantId: string};
   accessRequest(email: string): Promise<AccessRequest | undefined>;
@@ -62,7 +66,7 @@ export interface TenantRepository {
   delete(id: string, expectedVersion: number, event: OutboxEvent): Promise<void>;
   provision(tenant: Tenant, user: User, membership: Membership, event: OutboxEvent, acceptance?: CrmWrite): Promise<void>;
 }
-export interface RepositoryFactory { tenantForSubject?(subject: string): Promise<string | undefined>; forTenant(tenantId: string): TenantRepository }
+export interface RepositoryFactory { ideasQueue?(): Promise<Idea[]>; tenantForSubject?(subject: string): Promise<string | undefined>; forTenant(tenantId: string): TenantRepository }
 export function matches(vehicle: Vehicle, query: VehicleQuery): boolean {
   return (!query.status || vehicle.status === query.status) && (!query.search ||
     [vehicle.stockNumber, vehicle.vin, vehicle.make, vehicle.model, vehicle.trim, vehicle.location]
@@ -339,4 +343,10 @@ export function accountingBalanceSelection(range: SalesReportRange) {
       });
     }
   };
+}
+
+export function assertIdea(tenantId: string, record: Idea, expectedVersion: number, event: OutboxEvent): void {
+  assertScope(tenantId, record, event);
+  assertEvent(record.id, record.version, event, expectedVersion ? 'idea.status_changed' : 'idea.submitted');
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid idea version');
 }

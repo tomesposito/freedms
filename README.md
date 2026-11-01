@@ -50,6 +50,33 @@ Real captures from the local app on the current build — the same screens the
 verification tours use. The sample dealership data is local-only; the app itself
 always starts empty.
 
+**Ideas and human review**
+
+Every signed-in member can submit a private idea and see its status. Dealership
+admins also see their own team's submissions. Only the configured pilot operator
+can review the cross-tenant queue; status changes never start a build or forward
+suggestion text to agents or webhooks.
+
+![Ideas submission and personal list](docs/screenshots/ideas.png)
+
+![Operator Ideas review queue](docs/screenshots/ideas-operator.png)
+
+These are real offline captures using the demo seed, a submission through the
+Ideas form, and a review through the operator form. Refresh them with
+`node --import tsx packages/web/test/ideas-tour.mjs` (the same `PLAYWRIGHT_ROOT`
+and `CHROMIUM_PATH` overrides as the other tours). The tour also checks the empty
+state, decline reason visibility, and both mobile layouts.
+
+API: `POST /ideas`, `GET /ideas` (own submissions), `GET /ideas/dealership`
+(tenant admin), `GET /admin/ideas`, and `PUT /admin/ideas/:tenantId/:id`
+(configured pilot operator). Submission uses the existing WAF per-IP rate limit
+and API Gateway stage throttles; there is no separate in-process limiter.
+New ideas start Received. Operators can move any status to Under review,
+Accepted, Declined, or Shipped, including correcting terminal states. Declined
+requires a reason; Shipped accepts an optional note. Updates require the current
+record version. Both storage implementations write audit events; Dynamo also
+updates its operator queue projection in the same transaction.
+
 **Phone layouts (390px)** — normal fictional demo records, with full-width filter
 fields and wide tables scrolling inside their cards. Swipe tables horizontally
 to see the remaining columns.
