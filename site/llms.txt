@@ -16,6 +16,7 @@ The hosted service at app.freedms.co is in an invite-only pilot. The code is pub
 
 ## Links
 
+- freeDMS compared with Frazer, DealerCenter, AutoManager and Wayne Reaves: https://freedms.co/compare.html
 - Homepage: https://freedms.co/
 - What dealer management software costs: https://freedms.co/dms-cost.html
 - Free dealer management software for independent dealers: https://freedms.co/free-dealer-management-software.html
