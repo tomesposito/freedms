@@ -436,6 +436,15 @@ Local tokens are signed, expire in one hour, and use the same identity claims as
 Cognito (`sub`, `custom:tenant_id`, `iss`, `aud`, `exp`, `token_use`). This is a
 loopback-only development shim, **not production account authentication**.
 
+To exercise Ideas review and pilot requests locally, start the stack with
+`LOCAL_PILOT_OPERATOR=1 npm run dev`. Each signed-in local user with an active
+admin membership acts as the pilot operator for their request, including when
+switching between workspaces. Staff users never become operators. Either static
+`PILOT_OPERATOR_SUBJECT` or `PILOT_OPERATOR_TENANT_ID` setting takes precedence
+and disables this dynamic selection. Unset the flag (or use any value other than
+`1`) for the default behavior. This setting is local-stack only and has no effect
+on hosted deployments.
+
 Storage and the signing key are in memory. API restart clears all records and
 invalidates tokens. Signing out or losing the tab session loses access to that
 workspace; creating another session creates a new empty dealership. Use separate
