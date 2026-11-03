@@ -1,3 +1,5 @@
+import { assistantChat, DenyAssistantEntitlement, type AssistantEntitlement } from './assistant.js';
+import { UnconfiguredAssistantProvider, type AssistantProvider } from './assistant-provider.js';
 import { registerMcpClient, deleteMcpRegistration, type RegistrationConfig } from './mcp/registration.js';
 import { aiConnections } from './ai-connections.js';
 import { ideas } from './ideas.js';
@@ -56,7 +58,7 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
   if (!body || Buffer.byteLength(body) > limit) throw invalid(`A JSON body of at most ${limit} bytes is required.`);
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
-export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
+export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {assistantProvider?: AssistantProvider; assistantEntitlement?: AssistantEntitlement; registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
   const sender = options.hosted ? guardHostedWebhookSender(webhookSender ?? hostedWebhookSender()) : webhookSender ?? fetchWebhookSender;
   const handle = async (request: ApiRequest): Promise<ApiResponse> => {
     if (request.path.replace(/\/$/, '') === '/mcp/register') return registerMcpClient(request, repositories, now(), options.registration);
@@ -98,6 +100,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       }}) : repository;
 
       const execute = async (): Promise<ApiResponse> => {
+        if (path === '/assistant/chat' && method === 'POST') return assistantChat(request, principal, options.assistantProvider ?? new UnconfiguredAssistantProvider(), options.assistantEntitlement ?? new DenyAssistantEntitlement(), handle);
         if (/^\/ai-connections(\/|$)/.test(path)) return await aiConnections(request, principal, repositories, now());
         if (/^\/(ideas|admin\/ideas)(\/|$)/.test(path)) return await ideas(request, principal, repositories, now(), options.pilotOperator);
         if (path === '/admin/mcp-clients' || path.startsWith('/admin/mcp-clients/')) {

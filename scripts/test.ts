@@ -79,3 +79,5 @@ import '../packages/web/test/ideas.test.js';
 import '../packages/api/test/mcp-registration.test.js';
 import '../packages/api/test/mcp-grants.test.js';
 import '../packages/web/test/ai-connections.test.js';
+
+import '../packages/api/test/assistant.test.js';
