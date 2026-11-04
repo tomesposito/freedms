@@ -12,15 +12,17 @@ import {createHandler} from '../../api/src/handler.ts';
 import {seedDemo} from '../../api/src/demo-seed.ts';
 const require=createRequire(resolve(process.env.PLAYWRIGHT_ROOT || `${homedir()}/workspace/tools/screenshots`, 'package.json'));
 const {chromium}=require('playwright-core');
-const out=process.env.SCREENSHOT_DIR || '.pilot/mobile-tour';
+const out=process.env.SCREENSHOT_DIR || 'docs/screenshots';
 const repositories=new MemoryRepositories();
 const now=new Date();
 await repositories.forTenant('mobile-demo').provision({id:'mobile-demo',name:'Demo Motors',createdAt:now.toISOString()}, {id:'admin',name:'Demo Owner',email:'owner@example.test'}, {tenantId:'mobile-demo',userId:'admin',role:'admin',active:true}, {id:'created',tenantId:'mobile-demo',actorId:'admin',aggregateId:'mobile-demo',aggregateVersion:1,type:'tenant.created',occurredAt:now.toISOString(),deliveryStatus:'pending'});
 await seedDemo(repositories,'mobile-demo','admin',now);
 const claims={sub:'admin','custom:tenant_id':'mobile-demo',iss:'offline',aud:'offline',exp:now.getTime()/1000+3600,token_use:'id'};
 // Explicit extraction fixture: no hosted model or external service is called.
-const extracted = {stockNumber:'PHOTO-1',vin:'1HGCM82633A004352',year:2003,make:'Honda',model:'Accord',listPrice:8000,cost:6000};
-const provider = {configured:true,supportsVision:true,extractVehicle:async()=>extracted,extractLead:async()=>({}),extractVehiclePhoto:async()=>extracted};
+// Restore the pre-#106 tour's text Silverado and photo Camry review states.
+const textDraft = {year:2019,make:'Chevrolet',model:'Silverado',trim:'LT',listPrice:24995,cost:18500,notes:'88,000 miles'};
+const photoDraft = {vin:'1HGCM82633A004352',year:2021,make:'Toyota',model:'Camry',trim:'SE',listPrice:26995};
+const provider = {configured:true,supportsVision:true,extractVehicle:async()=>textDraft,extractLead:async()=>({}),extractVehiclePhoto:async()=>photoDraft};
 const handle=createHandler(repositories,{decode:async()=>{throw new Error('Offline tour');}},()=>now,undefined,provider);
 const call=async(path,method='GET',body)=>{
   const url=new URL(path,'http://offline');
@@ -56,7 +58,27 @@ try {
   });
   await page.setViewportSize({width:1280,height:900});
   const go = path => page.goto(`http://127.0.0.1:5198/#${path}`,{waitUntil:'networkidle'});
-  const shot = name => page.screenshot({path:`docs/screenshots/${name}.png`,fullPage:true});
+  const shot = (name, fullPage=true) => page.screenshot({path:`${out}/${name}.png`,fullPage});
+  // Keep the sticky command bar in frame while focusing each caption's section.
+  const sectionShot = async (name, heading) => {
+    const target = page.getByRole('heading',{name:heading,exact:true});
+    await target.waitFor();
+    await target.evaluate(el=>window.scrollTo(0,window.scrollY+el.getBoundingClientRect().top-70));
+    const box = await target.boundingBox();
+    const bar = await page.locator('.command-bar').boundingBox();
+    assert.ok(box && box.y >= 42 && box.y + box.height < 800, `${name}: heading in frame`);
+    assert.ok(bar && bar.y >= 0 && bar.y + bar.height <= 70, `${name}: command bar in frame`);
+    await shot(name,false);
+  };
+  await go('/parts');
+  await sectionShot('parts-catalog','Catalog');
+  await sectionShot('parts-counter-sale','Counter sale');
+  await sectionShot('parts-orders','Purchase orders');
+  await go(`/deals/${deal.id}`);
+  await page.locator('#totals').getByText('Amount financed',{exact:false}).first().waitFor();
+  await sectionShot('deal-worksheet','Worksheet totals');
+  await page.locator('#share-create').waitFor();
+  await sectionShot('deal-share','Share with buyer');
   await go('/import');
   await page.locator('#import-file').setInputFiles({name:'inventory.csv',mimeType:'text/csv',buffer:Buffer.from('stockNumber,vin,year,make,model,listPrice,cost\nIMPORT-1,1HGCM82633A004352,2003,Honda,Accord,8000,6000\nIMPORT-2,invalid,2020,Ford,Focus,12000,9000\n')});
   await page.locator('#import-preview').click(); await page.locator('#import-results table').waitFor(); await shot('import-preview');
@@ -64,12 +86,12 @@ try {
   await page.locator('#csv [name=file]').setInputFiles({name:'statement.csv',mimeType:'text/csv',buffer:Buffer.from(`id,date,description,amountCents\nBANK-1,${yesterday},Deposit,100000\nBANK-2,${yesterday},Fee,-2500\n`)});
   await page.getByRole('button',{name:'Preview CSV',exact:true}).click(); await page.locator('#confirm-import').waitFor(); await shot('bank-import-preview');
   await go('/');
-  await page.locator('#quick-entry textarea').fill('Stock a 2003 Honda Accord, stock PHOTO-1, VIN 1HGCM82633A004352, price $8000, cost $6000');
-  await page.getByRole('button',{name:'Draft vehicle',exact:true}).click(); await page.getByText('Review the AI draft — nothing is saved until you save.',{exact:true}).waitFor(); await shot('quick-entry-draft');
+  await page.locator('#quick-entry textarea').fill('Just took in a 2019 Chevrolet Silverado LT, list $24,995, cost $18,500, 88,000 miles');
+  await page.getByRole('button',{name:'Draft vehicle',exact:true}).click(); await page.getByText('Review the AI draft — nothing is saved until you save.',{exact:true}).waitFor(); assert.equal(await page.locator('[name=model]').inputValue(),'Silverado'); assert.equal(await page.locator('[name=listPrice]').inputValue(),'24995.00'); await shot('quick-entry-draft');
   await go('/');
   await page.locator('#quick-entry input[type=file]').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=','base64')});
-  await page.getByText('Review the AI draft — nothing is saved until you save.',{exact:true}).waitFor(); await shot('quick-entry-photo');
+  await page.getByText('Review the AI draft — nothing is saved until you save.',{exact:true}).waitFor(); assert.equal(await page.locator('[name=model]').inputValue(),'Camry'); assert.equal(await page.locator('[name=listPrice]').inputValue(),'26995.00'); assert.equal(await page.locator('[name=vin]').inputValue(),photoDraft.vin); await shot('quick-entry-photo');
   await go('/welcome'); await shot('invite-welcome');
   assert.deepEqual(errors,[]);
-  console.log('PASS: README import, statement, text/photo drafts and welcome shell captures. Extraction uses an explicit offline fixture.');
+  console.log('PASS: README parts sections, worksheet/share, import, statement, text/photo drafts and welcome shell captures. Extraction uses an explicit offline fixture.');
 } finally {await browser?.close();vite.kill();}

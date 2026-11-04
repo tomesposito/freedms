@@ -161,21 +161,21 @@ try {
     assert.ok(await page.evaluate(()=>getComputedStyle(document.querySelector('.sidebar')).position==='fixed' && document.documentElement.scrollWidth<=innerWidth),`${path}: slim sidebar`);
     await page.locator('#sidebar-toggle').click();
     await page.screenshot({path:`${out}/desktop-${path.slice(1)||'inventory'}.png`,fullPage:true});
-    if(['/leads','/reports','/accounting','/parts','/service'].includes(path)) await page.screenshot({path:`docs/screenshots/${({'/leads':'leads-list','/parts':'parts-catalog','/service':'service-board'})[path] || path.slice(1)}.png`,fullPage:true});
+    if(['/leads','/reports','/accounting','/service'].includes(path)) await page.screenshot({path:`docs/screenshots/${({'/leads':'leads-list','/service':'service-board'})[path] || path.slice(1)}.png`,fullPage:true});
   }
   // Refresh the README shell captures from the same real offline fixtures.
+  // Parts and worksheet/share section captures belong to readme-shell-tour.mjs.
   const captures = {
     'inventory-list': '/', 'leads-list': '/leads', 'equity-mining': '/leads/equity',
-    'deal-worksheet': `/deals/${deal.id}`, 'credit-application': `/deals/${deal.id}/credit`,
+    'credit-application': `/deals/${deal.id}/credit`,
     'compliance': `/deals/${deal.id}/compliance`, 'deal-jacket': `/deals/${deals.find(d=>d.status==='sold').id}/jacket`,
     'service-board': '/service', 'service-settings': '/service/settings', 'repair-order': `/service/repair-orders/${ros[0].id}`,
-    'parts-catalog': '/parts', 'parts-counter-sale': '/parts', 'parts-orders': '/parts',
     'accounting': '/accounting', 'accounts-payable': '/accounting/ap', 'accounts-receivable': '/accounting/ar',
     'cash-register': `/accounting/cash/${bank.id}`, 'bank-reconciliation': `/accounting/reconciliations/${period.id}`,
     'deal-pack': `/accounting/deals/${deal.id}`, 'reports': '/reports', 'documents': '/documents',
     'compliance-log': '/compliance', 'privacy-requests': '/compliance/privacy', 'audit-log': '/compliance/audit',
     'fi-products': '/fi-products', 'listing-feeds': '/feeds', 'webhooks': '/webhooks', 'account-mfa': '/account',
-    'user-management': '/users', 'deal-share': `/deals/${deal.id}`,
+    'user-management': '/users',
   };
   for (const [name, path] of Object.entries(captures)) {
     await page.goto(`http://127.0.0.1:5198/?capture=${name}#${path}`, {waitUntil:'networkidle'});
