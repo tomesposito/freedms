@@ -6,6 +6,50 @@ import { assistantToolSpecs, runAssistant } from '../src/assistant.js';
 import { createHandler } from '../src/handler.js';
 import { MemoryRepositories } from '../src/memory.js';
 import { LocalAssistantProvider } from '../src/local-assistant.js';
+
+test('Assistant template defaults off and scopes invocation to the configured model', async () => {
+  const {readFile} = await import('node:fs/promises');
+  const template = await readFile(new URL('../../../infra/template.yaml', import.meta.url), 'utf8');
+  const parameters = template.split('Parameters:\n')[1]?.split('\nConditions:')[0];
+  assert.ok(parameters);
+  const model = parameters.match(/^  AssistantModelId:\n((?:^    .*\n)+)/m)?.[1];
+  assert.ok(model, 'AssistantModelId parameter exists');
+  assert.equal((parameters.match(/^  AssistantModelId:$/gm) ?? []).length, 1);
+  assert.match(model, /^    Type: String$/m);
+  assert.match(model, /^    Default: ''$/m);
+  const inventory = template.match(/^  InventoryFunction:\n((?:^    .*\n)+)/m)?.[1];
+  assert.ok(inventory, 'API Lambda resource exists');
+  const environment = inventory.split('      Environment:\n')[1]?.split('      Policies:')[0];
+  assert.ok(environment);
+  assert.equal((template.match(/^          FREEDMS_ASSISTANT_MODEL: !Ref AssistantModelId$/gm) ?? []).length, 1);
+  assert.match(environment, /^          FREEDMS_ASSISTANT_MODEL: !Ref AssistantModelId$/m);
+  const policies = inventory.split('      Policies:\n')[1]?.split('      Events:')[0];
+  assert.ok(policies);
+  const statements = policies.match(/^            - Effect:.*\n(?:^              .*\n)*/gm) ?? [];
+  const bedrock = statements.filter(statement => statement.includes('bedrock:'));
+  assert.equal(bedrock.length, 1);
+  assert.equal(bedrock[0], [
+    '            - Effect: Allow',
+    '              Action: [bedrock:InvokeModel]',
+    '              Resource:',
+    "                - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${AssistantModelId}'",
+    "                - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/${AssistantModelId}'",
+    '',
+  ].join('\n'));
+  assert.ok(!bedrock[0].includes('*'), 'no wildcard actions or resources');
+  for (const [parameter, variable] of [
+    ['StripeSecretKey', 'FREEDMS_STRIPE_SECRET_KEY'],
+    ['StripeWebhookSecret', 'FREEDMS_STRIPE_WEBHOOK_SECRET'],
+    ['StripePriceAssistant', 'FREEDMS_STRIPE_PRICE_ASSISTANT'],
+    ['StripePriceAssistantPro', 'FREEDMS_STRIPE_PRICE_ASSISTANT_PRO'],
+    ['StripePriceAssistantHeavy', 'FREEDMS_STRIPE_PRICE_ASSISTANT_HEAVY'],
+    ['StripePriceTopup', 'FREEDMS_STRIPE_PRICE_TOPUP'],
+  ]) {
+    assert.equal((parameters.match(new RegExp(`^  ${parameter}:$`, 'gm')) ?? []).length, 1, parameter);
+    assert.equal((environment.match(new RegExp(`^          ${variable}: !Ref ${parameter}$`, 'gm')) ?? []).length, 1, variable);
+  }
+});
+
 const claims: AuthClaims = {sub: 'user-A', 'custom:tenant_id': 'A', iss: 'test', aud: 'test', exp: 9999999999, token_use: 'id'};
 const user: AssistantMessage[] = [{role: 'user', content: [{text: 'Look up vehicles'}]}];
 const reply = (text = 'Done'): AssistantMessage => ({role: 'assistant', content: [{text}]});

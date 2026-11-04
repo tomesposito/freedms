@@ -15,6 +15,10 @@ Parameters:
     Type: String
     Default: ''
     Description: Workspace of the pilot operator (both operator parameters are required)
+  AssistantModelId:
+    Type: String
+    Default: ''
+    Description: Empty = assistant off; set to a Bedrock Sonnet 5.5 inference profile (or model) ID the account can invoke in the stack region
   StripeSecretKey:
     Type: String
     Default: ''
@@ -301,6 +305,7 @@ Resources:
         Variables:
           PILOT_OPERATOR_SUBJECT: !Ref PilotOperatorSubject
           PILOT_OPERATOR_TENANT_ID: !Ref PilotOperatorTenantId
+          FREEDMS_ASSISTANT_MODEL: !Ref AssistantModelId
           FREEDMS_STRIPE_SECRET_KEY: !Ref StripeSecretKey
           FREEDMS_STRIPE_WEBHOOK_SECRET: !Ref StripeWebhookSecret
           FREEDMS_STRIPE_PRICE_ASSISTANT: !Ref StripePriceAssistant
@@ -323,6 +328,11 @@ Resources:
             - Effect: Allow
               Action: [cognito-idp:CreateUserPoolClient, cognito-idp:DeleteUserPoolClient]
               Resource: !GetAtt UserPool.Arn
+            - Effect: Allow
+              Action: [bedrock:InvokeModel]
+              Resource:
+                - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${AssistantModelId}'
+                - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/${AssistantModelId}'
             - Effect: Allow
               Action: [ses:SendEmail]
               Resource: '*'

@@ -674,6 +674,11 @@ instead.
 
 ## 9. AI direction — less dealer work (owner, 2026-10-19)
 
+**Shipped:** The in-app AI assistant is live behind configuration through
+`AssistantModelId` / `FREEDMS_ASSISTANT_MODEL`, and off when unset. It runs on
+Bedrock per D-13, bills action credits per D-7 through Stripe per D-11, and is
+gated by the availability rules in D-12.
+
 The point of AI in freeDMS is not AI features. It is less work for the dealer:
 less typing, fewer clicks, follow-up that happens without someone remembering.
 Owner direction, recorded 2026-10-19. Three fronts:
