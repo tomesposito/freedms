@@ -128,7 +128,7 @@ test('assistant entitlement matrix enforces plan status, disable setting, exhaus
   const s = await setup();
   for (const path of ['/assistant/pool', '/assistant/usage']) assert.equal((await s.get(path)).error.code, 'ASSISTANT_PLAN_REQUIRED');
   assert.equal((await s.chat()).error.code, 'ASSISTANT_PLAN_REQUIRED');
-  for (const status of ['past_due', 'cancelled'] as const) {await s.plan({status}); assert.equal((await s.chat()).error.code, 'ASSISTANT_PLAN_REQUIRED');}
+  for (const status of ['past_due', 'cancelled'] as const) {await s.plan({status}); assert.equal((await s.chat()).error.code, status === 'past_due' ? 'ASSISTANT_PAST_DUE' : 'ASSISTANT_PLAN_REQUIRED');}
   await s.plan({status: 'active', disabled: true}); assert.equal((await s.chat()).status, 403); assert.equal((await s.chat()).error.code, 'ASSISTANT_DISABLED');
   await s.plan({disabled: false}); await s.balance(0); assert.equal((await s.chat()).error.code, 'ASSISTANT_CREDITS_EXHAUSTED');
   await s.plan({overageEnabled: true}); assert.equal((await s.chat()).status, 200);
@@ -217,7 +217,7 @@ test('assistant Dynamo billing keys, pagination, conditional writes and atomic t
 
 test('assistant admin readout, active seats, authorization, missing plan and validation', async () => {
   const s = await setup();
-  assert.deepEqual((await s.get('/assistant/admin')).data, {plan: null});
+  assert.deepEqual((await s.get('/assistant/admin')).data, {plan: null, billingConfigured: false});
   assert.equal((await s.settings({disabled: true})).error.code, 'ASSISTANT_PLAN_REQUIRED');
   await s.plan({tier: 'assistant-pro'});
   let data = (await s.get('/assistant/admin')).data;

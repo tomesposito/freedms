@@ -63,8 +63,8 @@ conversation, paywall, disabled, exhausted, unconfigured, and mobile states.
 
 **AI assistant admin**
 
-Admins manage the plan, credit pool, usage, and dealership switch. Billing setup
-is pending until the Stripe step. This capture uses the local offline provider.
+Admins manage the plan, credits, usage, and dealership switch. Billing uses Stripe
+when configured. This local capture shows billing isn't set up yet.
 
 ![AI assistant admin plan, pool, usage, and controls](docs/screenshots/ai-assistant-admin.png)
 

@@ -72,22 +72,30 @@ export class AssistantBilling implements AssistantEntitlement {
     const cycle = await this.ensureCycle(plan);
     const usedCredits = (await this.repository.assistantLedger(cycle.cycleStart)).reduce((sum, row) => sum + row.credits, 0);
     const balanceCredits = cycle.allotmentCredits + cycle.topUpCredits - usedCredits;
-    return {plan, cycle, pool: {tier: plan.tier, status: plan.status, disabled: plan.disabled, overageEnabled: plan.overageEnabled,
+    return {plan, cycle, pool: {tier: plan.tier, status: this.effectiveStatus(plan), disabled: plan.disabled, overageEnabled: plan.overageEnabled,
       overageCapCredits: plan.overageCapCredits, perRequestCreditCap: plan.perRequestCreditCap, cycleStart: cycle.cycleStart, cycleEnd: cycle.cycleEnd,
       allotmentCredits: cycle.allotmentCredits, topUpCredits: cycle.topUpCredits, usedCredits, balanceCredits,
       overageCreditsUsed: Math.max(0, -balanceCredits)}};
   }
   async pool(actor: Actor) { return (await this.snapshot(actor)).pool; }
+  private effectiveStatus(plan: AssistantPlan) {
+    if (plan.accessUntil && this.now().getTime() >= Date.parse(plan.accessUntil)) return 'cancelled' as const;
+    if (plan.status === 'cancelled' && plan.accessUntil && this.now().getTime() < Date.parse(plan.accessUntil)) return 'active' as const;
+    return plan.status;
+  }
   async status(actor: Actor) {
     const plan = await this.plan(actor);
-    if (!plan || plan.status !== 'active') return {status: 'no-plan' as const, plan};
+    if (!plan) return {status: 'no-plan' as const, plan};
     if (plan.disabled) return {status: 'disabled' as const, plan};
+    if (this.effectiveStatus(plan) === 'past_due') return {status: 'past-due' as const, plan};
+    if (this.effectiveStatus(plan) !== 'active') return {status: 'no-plan' as const, plan};
     const pool = await this.pool(actor);
     return {status: pool.balanceCredits <= 0 && (!plan.overageEnabled || pool.overageCreditsUsed >= plan.overageCapCredits) ? 'exhausted' as const : 'ok' as const, plan, pool};
   }
   async check(actor: Actor) { return (await this.status(actor)).status === 'ok'; }
   async requireEntitlement(actor: Actor) {
     const result = await this.status(actor);
+    if (result.status === 'past-due') throw new ApiError(402, 'ASSISTANT_PAST_DUE', 'Payment is past due. Update billing in Account → AI assistant.');
     if (result.status === 'no-plan') throw new ApiError(402, 'ASSISTANT_PLAN_REQUIRED', 'An AI assistant plan is required.');
     if (result.status === 'disabled') throw new ApiError(403, 'ASSISTANT_DISABLED', 'The AI assistant is disabled for this workspace.');
     if (result.status === 'exhausted') throw new ApiError(402, 'ASSISTANT_CREDITS_EXHAUSTED', 'The AI assistant credit pool is exhausted.');
@@ -121,7 +129,7 @@ export class AssistantBilling implements AssistantEntitlement {
     const tier = assistantTiers[plan.tier];
     return {plan: {tier: plan.tier, tierName: tier.name, pricePerUserCents: tier.pricePerUserCents,
       creditsPerUser: tier.creditsPerUser, billedUserCount: cycle.billedUserCount,
-      monthlyTotalCents: tier.pricePerUserCents * cycle.billedUserCount, renewalDate: cycle.cycleEnd, status: plan.status},
+      monthlyTotalCents: tier.pricePerUserCents * cycle.billedUserCount, renewalDate: cycle.cycleEnd, status: plan.status, accessUntil: plan.accessUntil},
       pool, usage: (await this.usage(actor)).byUser,
       controls: {disabled: plan.disabled, overageEnabled: plan.overageEnabled,
         overageCapCredits: plan.overageCapCredits, perRequestCreditCap: plan.perRequestCreditCap}};

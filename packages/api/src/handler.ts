@@ -1,3 +1,5 @@
+import { billingAction, billingReturnUrl, stripeWebhook } from './assistant-stripe.js';
+import { UnconfiguredStripeBilling, type StripeBilling } from './stripe.js';
 import { AssistantBilling } from './assistant-billing.js';
 import { assistantChat, type AssistantEntitlement } from './assistant.js';
 import { UnconfiguredAssistantProvider, type AssistantProvider } from './assistant-provider.js';
@@ -41,7 +43,7 @@ import { ApiError, conflict, missing, requireId } from './errors.js';
 import { OPERATOR_TENANT_ID, type RepositoryFactory, type TenantRepository } from './repository.js';
 import type { VinDecoder } from './vin.js';
 import { pageNumber, invalid, object, onlyKeys, text, vehicleInput, version, view, vin } from './validation.js';
-export interface ApiRequest { sourceIp?: string; authorization?: string; agent?: boolean; method: string; path: string; query?: Record<string, string | undefined>; body?: string; claims?: AuthClaims; intakeToken?: string; acceptEncoding?: string }
+export interface ApiRequest { stripeSignature?: string; origin?: string; sourceIp?: string; authorization?: string; agent?: boolean; method: string; path: string; query?: Record<string, string | undefined>; body?: string; claims?: AuthClaims; intakeToken?: string; acceptEncoding?: string }
 export interface ApiResponse { statusCode: number; headers: Record<string, string>; body: string; isBase64Encoded?: boolean }
 export function response(statusCode: number, body: unknown): ApiResponse {
   return {statusCode, headers: {'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff'}, body: JSON.stringify(body)};
@@ -59,7 +61,7 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
   if (!body || Buffer.byteLength(body) > limit) throw invalid(`A JSON body of at most ${limit} bytes is required.`);
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
-export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {assistantSeedLocalPlan?: boolean; assistantProvider?: AssistantProvider; assistantEntitlement?: AssistantEntitlement; registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
+export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {stripe?: StripeBilling; appBaseUrl?: string; assistantSeedLocalPlan?: boolean; assistantProvider?: AssistantProvider; assistantEntitlement?: AssistantEntitlement; registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
   const sender = options.hosted ? guardHostedWebhookSender(webhookSender ?? hostedWebhookSender()) : webhookSender ?? fetchWebhookSender;
   const handle = async (request: ApiRequest): Promise<ApiResponse> => {
     if (request.path.replace(/\/$/, '') === '/mcp/register') return registerMcpClient(request, repositories, now(), options.registration);
@@ -82,6 +84,10 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       }
       if (request.path.startsWith('/invite/')) return compressResponse(await publicInvite(request, repositories, now(), options.hosted), request.acceptEncoding);
       if (request.path.replace(/\/$/, '') === '/access-requests') return compressResponse(await submitAccessRequest(request, repositories, now(), options.mail, options.turnstile), request.acceptEncoding);
+      if (request.path.replace(/\/$/, '') === '/assistant/billing/webhook' && request.method.toUpperCase() === 'POST') {
+        await stripeWebhook(repositories, options.stripe ?? new UnconfiguredStripeBilling(), request.body ?? '', request.stripeSignature, now());
+        return response(200, {received: true});
+      }
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
@@ -102,9 +108,14 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
 
       const execute = async (): Promise<ApiResponse> => {
         const billing = new AssistantBilling(repository, now, options.assistantSeedLocalPlan === true && !options.hosted);
+        if (/^\/assistant\/admin\/billing\/(checkout|topup|portal)$/.test(path) && method === 'POST') {
+          if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can manage billing.');
+          return response(200, {data: await billingAction(repository, options.stripe ?? new UnconfiguredStripeBilling(), principal, path.split('/').at(-1)!,
+            request.body ? parseBody(request.body) : {}, billingReturnUrl(options.appBaseUrl, request.origin, options.hosted === true), now())});
+        }
         if ((path === '/assistant/admin' && method === 'GET') || (path === '/assistant/admin/settings' && method === 'PUT')) {
           if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can manage the AI assistant.');
-          return response(200, {data: method === 'GET' ? await billing.admin(principal) : await billing.updateSettings(principal, parseBody(request.body))});
+          return response(200, {data: {...(method === 'GET' ? await billing.admin(principal) : await billing.updateSettings(principal, parseBody(request.body))), billingConfigured: options.stripe?.configured ?? false}});
         }
         if (path === '/assistant/pool' && method === 'GET') return response(200, {data: await billing.pool(principal)});
         if (path === '/assistant/usage' && method === 'GET') return response(200, {data: await billing.usage(principal)});

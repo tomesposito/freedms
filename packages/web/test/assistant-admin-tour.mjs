@@ -53,8 +53,8 @@ try {
   await page.getByRole('heading',{name:'CONTROLS',exact:true}).waitFor();
   await page.getByRole('heading',{name:'PLAN',exact:true}).waitFor();
   await page.getByRole('heading',{name:'CREDIT POOL',exact:true}).waitFor();
-  await page.getByRole('button',{name:'Manage billing',exact:true}).click();
-  await page.getByRole('status').filter({hasText:'Billing setup is pending.'}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Manage billing',exact:true}).isDisabled(),true);
+  await page.getByRole('status').filter({hasText:"Billing isn't set up yet."}).waitFor();
   await page.screenshot({path:`${out}/admin.png`,fullPage:true});
   await copyFile(`${out}/admin.png`,'docs/screenshots/ai-assistant-admin.png');
   const save = async (action) => {
@@ -85,5 +85,5 @@ try {
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.screenshot({path:`${out}/mobile.png`,fullPage:true});
   assert.deepEqual(errors,[]);
-  console.log('PASS: admin plan/pool/controls, pending billing, cap edits, disable/chat rejection/hidden trigger, re-enable, mobile layout.');
+  console.log('PASS: admin plan/pool/controls, unconfigured billing, cap edits, disable/chat rejection/hidden trigger, re-enable, mobile layout.');
 } finally {await browser?.close();vite.kill();}

@@ -14,8 +14,14 @@ export interface VehicleQuery { status?: VehicleStatus; search?: string }
 export interface LeadQuery { search?: string; stage?: Lead['stage']; assignee?: string | null; limit: number; offset: number }
 export interface LeadPage { leads: Lead[]; customers: Customer[]; total: number }
 export const OPERATOR_TENANT_ID = 'operator';
+export interface AssistantBillingLink {tenantId: string; customerId: string; version: number}
+export interface StripeCommit {eventId: string; paymentId?: string; plan: AssistantPlan; cycle?: AssistantCycle; event: OutboxEvent}
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
+  assistantBillingLink(): Promise<AssistantBillingLink | undefined>;
+  saveAssistantBillingLink(record: AssistantBillingLink, event: OutboxEvent): Promise<void>;
+  stripeEventProcessed(id: string): Promise<boolean>;
+  commitStripeEvent(commit: StripeCommit): Promise<void>;
   assistantPlan(): Promise<AssistantPlan | undefined>;
   saveAssistantPlan(record: AssistantPlan, expectedVersion: number, event: OutboxEvent): Promise<void>;
   assistantCycle(cycleStart: string): Promise<AssistantCycle | undefined>;
@@ -84,7 +90,7 @@ export interface TenantRepository {
   delete(id: string, expectedVersion: number, event: OutboxEvent): Promise<void>;
   provision(tenant: Tenant, user: User, membership: Membership, event: OutboxEvent, acceptance?: CrmWrite): Promise<void>;
 }
-export interface RepositoryFactory { ideasQueue?(): Promise<Idea[]>; tenantForSubject?(subject: string): Promise<string | undefined>; forTenant(tenantId: string): TenantRepository }
+export interface RepositoryFactory { tenantForStripeCustomer?(customerId: string): Promise<string | undefined>; ideasQueue?(): Promise<Idea[]>; tenantForSubject?(subject: string): Promise<string | undefined>; forTenant(tenantId: string): TenantRepository }
 export function matches(vehicle: Vehicle, query: VehicleQuery): boolean {
   return (!query.status || vehicle.status === query.status) && (!query.search ||
     [vehicle.stockNumber, vehicle.vin, vehicle.make, vehicle.model, vehicle.trim, vehicle.location]
@@ -382,7 +388,8 @@ function assertAssistantVersion(record: {version: number}, expected: number) {
 export function assertAssistantPlan(tenantId: string, record: AssistantPlan, expected: number, event: OutboxEvent) {
   assertScope(tenantId, record, event); assertAssistantVersion(record, expected);
   assertEvent(record.id, record.version, event, 'assistant-plan.updated');
-  if (record.id !== 'assistant-plan' || !['assistant', 'assistant-pro', 'assistant-heavy'].includes(record.tier) ||
+  if ([record.stripeCustomerId, record.stripeSubscriptionId].some(v => v !== undefined && (typeof v !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(v))) ||
+      (record.accessUntil !== undefined && !Number.isFinite(Date.parse(record.accessUntil))) || record.id !== 'assistant-plan' || !['assistant', 'assistant-pro', 'assistant-heavy'].includes(record.tier) ||
       !['active', 'past_due', 'cancelled'].includes(record.status) || !Number.isFinite(Date.parse(record.cycleAnchor)) ||
       typeof record.disabled !== 'boolean' || typeof record.overageEnabled !== 'boolean' ||
       (record.overageCapCredits !== undefined && (!Number.isSafeInteger(record.overageCapCredits) || record.overageCapCredits < 0)) ||
@@ -408,4 +415,10 @@ export function assertAssistantCommit(tenantId: string, entries: AssistantLedger
     assertAssistantLedger(tenantId, entry);
     if (entry.cycleStart !== cycle.cycleStart) throw new Error('Invalid assistant turn cycle');
   }
+}
+
+export function assertBillingLink(tenantId: string, record: AssistantBillingLink, event: OutboxEvent) {
+  assertScope(tenantId, record, event);
+  assertEvent('assistant-billing', 1, event, 'assistant-billing.updated');
+  if (record.version !== 1 || !/^[a-zA-Z0-9_-]{1,128}$/.test(record.customerId)) throw new Error('Invalid billing link');
 }

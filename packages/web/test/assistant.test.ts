@@ -5,7 +5,7 @@ const pool: AssistantPool = {tier: 'assistant', status: 'active', disabled: fals
 test('assistant pool state respects plan, disabled, zero and overage in order', () => {
   assert.equal(poolState(), 'loading'); assert.equal(poolState(pool), 'ready');
   for (const status of ['past_due', 'cancelled'] as const) {
-    assert.equal(poolState({...pool, status}), 'paywall');
+    assert.equal(poolState({...pool, status}), status === 'past_due' ? 'past-due' : 'paywall');
     assert.equal(poolState({...pool, status, disabled: true}), 'disabled');
   }
   assert.equal(poolState({...pool, disabled: true, balanceCredits: 0}), 'disabled');
@@ -58,4 +58,10 @@ test('assistant receipts use actual credits and working state does not invent to
 
 test('assistant tray locks at monthly overage cap', () => {
   assert.equal(poolState({...pool, overageEnabled: true, balanceCredits: -2, overageCapCredits: 2, overageCreditsUsed: 2}), 'exhausted');
+});
+test('past due has a distinct locked state and payment note', () => {
+  assert.equal(chatErrorState({code: 'ASSISTANT_PAST_DUE', status: 402}), 'past-due');
+  assert.match(trayHtml('past-due'), /Payment is past due/);
+  assert.match(trayHtml('past-due'), /Account → AI assistant/);
+  assert.match(trayHtml('past-due'), /The assistant is a paid add-on/);
 });

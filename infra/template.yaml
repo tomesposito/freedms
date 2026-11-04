@@ -15,6 +15,26 @@ Parameters:
     Type: String
     Default: ''
     Description: Workspace of the pilot operator (both operator parameters are required)
+  StripeSecretKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+  StripeWebhookSecret:
+    Type: String
+    Default: ''
+    NoEcho: true
+  StripePriceAssistant:
+    Type: String
+    Default: ''
+  StripePriceAssistantPro:
+    Type: String
+    Default: ''
+  StripePriceAssistantHeavy:
+    Type: String
+    Default: ''
+  StripePriceTopup:
+    Type: String
+    Default: ''
   TurnstileSecret:
     Type: String
     Default: ''
@@ -281,6 +301,13 @@ Resources:
         Variables:
           PILOT_OPERATOR_SUBJECT: !Ref PilotOperatorSubject
           PILOT_OPERATOR_TENANT_ID: !Ref PilotOperatorTenantId
+          FREEDMS_STRIPE_SECRET_KEY: !Ref StripeSecretKey
+          FREEDMS_STRIPE_WEBHOOK_SECRET: !Ref StripeWebhookSecret
+          FREEDMS_STRIPE_PRICE_ASSISTANT: !Ref StripePriceAssistant
+          FREEDMS_STRIPE_PRICE_ASSISTANT_PRO: !Ref StripePriceAssistantPro
+          FREEDMS_STRIPE_PRICE_ASSISTANT_HEAVY: !Ref StripePriceAssistantHeavy
+          FREEDMS_STRIPE_PRICE_TOPUP: !Ref StripePriceTopup
+          FREEDMS_APP_BASE_URL: !Sub 'https://app.${RootDomain}'
           TURNSTILE_SECRET: !Ref TurnstileSecret
           MAIL_FROM: !Ref MailFrom
           ACCESS_REQUEST_NOTIFY_TO: !Ref AccessRequestNotifyTo
@@ -329,6 +356,13 @@ Resources:
             ApiId: !Ref Api
             Path: /.well-known/oauth-protected-resource
             Method: GET
+            Auth: {Authorizer: NONE}
+        StripeWebhook:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/assistant/billing/webhook'
+            Method: POST
             Auth: {Authorizer: NONE}
         AccessRequests:
           Type: HttpApi

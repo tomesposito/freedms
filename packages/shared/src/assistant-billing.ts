@@ -6,6 +6,7 @@ export const assistantTiers = {
 export interface AssistantPlan {
   id: 'assistant-plan'; tenantId: string; tier: keyof typeof assistantTiers;
   status: 'active' | 'past_due' | 'cancelled'; cycleAnchor: string;
+  stripeCustomerId?: string; stripeSubscriptionId?: string; accessUntil?: string;
   disabled: boolean; overageEnabled: boolean; overageCapCredits: number; perRequestCreditCap: number; version: number;
 }
 export interface AssistantCycle {

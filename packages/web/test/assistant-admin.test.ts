@@ -19,3 +19,14 @@ test('no plan and nonadmin render plain empty states without controls or API acc
   await assistantAdminRoute({admin: false, api: async () => {throw Error('must not call');}, shell: value => {rendered = value;}, current: () => true, refresh: () => {}, flash: () => {throw Error('unexpected');}});
   assert.equal(rendered, assistantAdminHtml(data, false)); assert.match(rendered, /Only a workspace admin/); assert.doesNotMatch(rendered, /<input/);
 });
+test('configured billing renders shared tiers, checkout, portal, topup, past due and cancellation', () => {
+  const empty = assistantAdminHtml({plan: null, billingConfigured: true});
+  for (const name of ['Assistant', 'Assistant Pro', 'Assistant Heavy']) assert.ok(empty.includes(`Subscribe to ${name}`));
+  for (const price of ['$15', '$29', '$49']) assert.ok(empty.includes(price));
+  assert.doesNotMatch(empty, /isn't set up/);
+  const active = assistantAdminHtml({...data, billingConfigured: true});
+  assert.match(active, /data-billing="portal"/); assert.match(active, /data-topup-credits/); assert.match(active, /data-billing="topup"/);
+  const due = assistantAdminHtml({...data, billingConfigured: true, plan: {...data.plan!, status: 'past_due'}});
+  assert.match(due, /Payment is past due/); assert.match(due, /Manage billing to update payment/);
+  assert.match(assistantAdminHtml({...data, billingConfigured: true, plan: {...data.plan!, accessUntil: '2026-12-03T00:00:00Z'}}), /Cancels Dec 3, 2026/);
+});

@@ -1,3 +1,4 @@
+import { stripeBillingFromEnv } from './stripe.js';
 import { LocalAssistantProvider } from './local-assistant.js';
 import { assistantProviderFromEnv } from './assistant-provider.js';
 import { turnstileVerifierFromEnv } from './turnstile.js';
@@ -21,7 +22,7 @@ const tokens = new LocalTokens(randomBytes(48).toString('hex'));
 const pilotOperator = {userId: process.env.PILOT_OPERATOR_SUBJECT ?? '', tenantId: process.env.PILOT_OPERATOR_TENANT_ID ?? ''};
 const resolveOperator = localOperatorResolver(repositories, tokens, pilotOperator,
   process.env.LOCAL_PILOT_OPERATOR === '1' && process.env.PILOT_OPERATOR_SUBJECT === undefined && process.env.PILOT_OPERATOR_TENANT_ID === undefined);
-const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv(), undefined, {assistantProvider: process.env.FREEDMS_ASSISTANT_STUB === '1' ? new LocalAssistantProvider() : assistantProviderFromEnv(), assistantSeedLocalPlan: process.env.FREEDMS_ASSISTANT_STUB === '1', pilotOperator, turnstile: turnstileVerifierFromEnv()});
+const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv(), undefined, {stripe: stripeBillingFromEnv(), appBaseUrl: process.env.FREEDMS_APP_BASE_URL, assistantProvider: process.env.FREEDMS_ASSISTANT_STUB === '1' ? new LocalAssistantProvider() : assistantProviderFromEnv(), assistantSeedLocalPlan: process.env.FREEDMS_ASSISTANT_STUB === '1', pilotOperator, turnstile: turnstileVerifierFromEnv()});
 const server = createServer(async (req, res) => {
   let result;
   try {
@@ -43,7 +44,7 @@ const server = createServer(async (req, res) => {
       const token = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
       const credentials = localAuth(url.pathname, isIntake, token, tokens);
       if ('claims' in credentials) await resolveOperator(token);
-      result = await handle({sourceIp: req.socket.remoteAddress, method: req.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body, acceptEncoding: req.headers['accept-encoding'], ...credentials});
+      result = await handle({stripeSignature: typeof req.headers['stripe-signature'] === 'string' ? req.headers['stripe-signature'] : undefined, origin: req.headers.origin, sourceIp: req.socket.remoteAddress, method: req.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body, acceptEncoding: req.headers['accept-encoding'], ...credentials});
     }
   } catch (error) { result = errorResponse(error); }
   res.writeHead(result.statusCode, result.headers); res.end(result.isBase64Encoded ? Buffer.from(result.body, 'base64') : result.body);

@@ -5,17 +5,20 @@ export interface AssistantPool {
   tier: string; status: 'active' | 'past_due' | 'cancelled'; disabled: boolean;
   overageEnabled: boolean; balanceCredits: number; cycleEnd: string;
 }
-export type AssistantState = 'loading' | 'ready' | 'paywall' | 'disabled' | 'exhausted' | 'unconfigured' | 'unavailable';
+export type AssistantState = 'loading' | 'ready' | 'paywall' | 'past-due' | 'disabled' | 'exhausted' | 'unconfigured' | 'unavailable';
 type ApiError = {code?: string; status?: number};
 export function poolState(pool?: AssistantPool, error?: ApiError): AssistantState {
+  if (error?.code === 'ASSISTANT_PAST_DUE') return 'past-due';
   if (error) return error.code === 'ASSISTANT_PLAN_REQUIRED' || error.status === 402 ? 'paywall' : 'unavailable';
   if (!pool) return 'loading';
   if (pool.disabled) return 'disabled';
+  if (pool.status === 'past_due') return 'past-due';
   if (pool.status !== 'active') return 'paywall';
   if (pool.balanceCredits <= 0 && (!pool.overageEnabled || (pool.overageCreditsUsed ?? Math.max(0, -pool.balanceCredits)) >= (pool.overageCapCredits ?? 500))) return 'exhausted';
   return 'ready';
 }
 export function chatErrorState(error: ApiError): AssistantState | undefined {
+  if (error.code === 'ASSISTANT_PAST_DUE') return 'past-due';
   if (error.code === 'ASSISTANT_UNAVAILABLE' || error.status === 503) return 'unconfigured';
   if (error.code === 'ASSISTANT_DISABLED') return 'disabled';
   if (error.code === 'ASSISTANT_CREDITS_EXHAUSTED') return 'exhausted';
@@ -31,12 +34,14 @@ interface Reply {reply: string; transcript: {tool: string; ok: boolean}[]; credi
 export interface AssistantTurn {text: string; result?: Reply; error?: string}
 const locked: Record<AssistantState, string> = {
   ready: 'Ask, or tell it what to do…', loading: 'Checking assistant plan…', unavailable: 'Unable to check assistant plan — reopen to retry',
+  'past-due': 'Locked — payment is past due',
   paywall: 'Locked — this store has no assistant plan', exhausted: 'Out of credits',
   disabled: 'Locked — assistant turned off by an admin', unconfigured: 'Locked — assistant is not set up',
 };
 function stateBody(state: AssistantState, pool?: AssistantPool): string {
   switch (state) {
     case 'ready': return `<section><h2>What do you need done?</h2><p>Ask about anything in the store, or hand it a job. It uses the same tools as the AI connections your dealers already run — as you, with your permissions.</p><ul class="assistant-capabilities"><li>Find cars, leads, deals, and repair orders</li><li>Add and update records — stock a vehicle, move a lead, post a note</li><li>Run the numbers on a pencil or a report</li></ul><div class="assistant-note"><b>It cannot, ever:</b> capture a signature, attest a compliance check, accept terms, handle MFA, or make a credit decision. Those have no tools. They stay with a person.</div></section>`;
+    case 'past-due': return `<p role="status">Payment is past due. Ask an admin to update billing in Account → AI assistant.</p>${stateBody('paywall', pool)}`;
     case 'paywall': return `<section><h2>The assistant is a paid add-on.</h2><p>freeDMS itself is free. The assistant is not — it runs on a frontier model and works the store as you do. It is priced in credits: a lookup costs 1, a change costs 2, and the pool is shared by the whole dealership.</p>${[['Assistant', 75, 15], ['Assistant Pro', 175, 29], ['Assistant Heavy', 350, 49]].map(([name, credits, price]) => `<div class="assistant-tier"><div><b>${e(name)}</b><small>${e(credits)} credits per user</small></div><strong>$${e(price)} / user / mo</strong></div>`).join('')}<div class="assistant-note">Failed actions never charge, and the pool stops hard at zero — nobody gets a surprise bill.</div><div class="assistant-callout">Ask your admin to turn it on</div><p class="assistant-small">Admins subscribe under Account → AI assistant. Your usage is recorded under your name, like everything else you do in the store.</p></section>`;
     case 'exhausted': {
       const date = pool?.cycleEnd ? new Date(pool.cycleEnd) : undefined;
@@ -50,7 +55,7 @@ function stateBody(state: AssistantState, pool?: AssistantPool): string {
 export function trayHtml(state: AssistantState, turns: AssistantTurn[] = [], pool?: AssistantPool, busy = false, draft = ''): string {
   // Disabled means absent: the shell hides entirely (see paint), and there is no tray to render.
   if (state === 'disabled') return '';
-  return `<header class="assistant-header"><div><h2 id="assistant-title">AI assistant${state === 'exhausted' ? '' : `<span>${state === 'paywall' ? 'PAID' : 'BEDROCK'}</span>`}</h2><button type="button" id="assistant-close" aria-label="Close AI assistant">✕</button></div><p>Works in this workspace as you · ${state === 'paywall' ? 'billed to the dealership' : 'every action is recorded as yours'}</p></header><div class="assistant-body" aria-live="polite">${turns.map((turn, i) => `<div class="assistant-user">${e(turn.text)}</div>${turn.result ? `${turn.result.transcript.map(row => `<div class="assistant-tool ${row.ok ? 'done' : 'failed'}"><i aria-hidden="true"></i>${e(toolLabel(row.tool))}<small>${row.ok ? 'done' : 'failed'}</small></div>`).join('')}<div class="assistant-reply">${e(turn.result.reply)}</div><div class="assistant-receipt">${e(receipt(turn.result.creditsUsed))}</div>` : ''}${turn.error ? `<div class="assistant-error" role="alert">${e(turn.error)}${state === 'ready' && !busy ? `<button type="button" data-assistant-retry="${e(i)}">Retry</button>` : ''}</div>` : ''}`).join('')}${busy ? '<div class="assistant-working" role="status">● ● ● <span>Working…</span></div>' : ''}${state !== 'ready' || !turns.length ? stateBody(state, pool) : ''}</div><form class="assistant-composer"><textarea id="assistant-input" aria-label="Message AI assistant" rows="2" maxlength="16000" placeholder="${e(locked[state])}" ${state !== 'ready' || busy ? 'disabled' : ''}>${e(draft)}</textarea><button class="primary" type="submit" ${state !== 'ready' || busy ? 'disabled' : ''}>Send</button></form>`;
+  return `<header class="assistant-header"><div><h2 id="assistant-title">AI assistant${state === 'exhausted' ? '' : `<span>${(state === 'paywall' || state === 'past-due') ? 'PAID' : 'BEDROCK'}</span>`}</h2><button type="button" id="assistant-close" aria-label="Close AI assistant">✕</button></div><p>Works in this workspace as you · ${(state === 'paywall' || state === 'past-due') ? 'billed to the dealership' : 'every action is recorded as yours'}</p></header><div class="assistant-body" aria-live="polite">${turns.map((turn, i) => `<div class="assistant-user">${e(turn.text)}</div>${turn.result ? `${turn.result.transcript.map(row => `<div class="assistant-tool ${row.ok ? 'done' : 'failed'}"><i aria-hidden="true"></i>${e(toolLabel(row.tool))}<small>${row.ok ? 'done' : 'failed'}</small></div>`).join('')}<div class="assistant-reply">${e(turn.result.reply)}</div><div class="assistant-receipt">${e(receipt(turn.result.creditsUsed))}</div>` : ''}${turn.error ? `<div class="assistant-error" role="alert">${e(turn.error)}${state === 'ready' && !busy ? `<button type="button" data-assistant-retry="${e(i)}">Retry</button>` : ''}</div>` : ''}`).join('')}${busy ? '<div class="assistant-working" role="status">● ● ● <span>Working…</span></div>' : ''}${state !== 'ready' || !turns.length ? stateBody(state, pool) : ''}</div><form class="assistant-composer"><textarea id="assistant-input" aria-label="Message AI assistant" rows="2" maxlength="16000" placeholder="${e(locked[state])}" ${state !== 'ready' || busy ? 'disabled' : ''}>${e(draft)}</textarea><button class="primary" type="submit" ${state !== 'ready' || busy ? 'disabled' : ''}>Send</button></form>`;
 }
 
 type Api = <T>(path: string, method?: string, body?: unknown) => Promise<T>;

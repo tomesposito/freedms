@@ -104,9 +104,34 @@ turns remain visible but are omitted from subsequent API history. Requests inclu
 at most the last 24 completed exchanges plus the new message (49 turns).
 Neither chat content nor drafts are persisted or logged by the tray.
 
-The paywall and locked states mention Account → AI assistant as explanatory copy;
-this change does not build an admin page, Stripe integration, infrastructure, or
-context skills. No endpoints or server-side chat persistence are added.
+Account → AI assistant lets admins subscribe, open Stripe's billing portal, and
+buy top-ups at 25 cents per credit. The three prices come from shared tier data.
+Without billing configuration the page says "Billing isn't set up yet" and
+purchase actions are unavailable. Settings and existing plans still work.
+
+Configure `FREEDMS_STRIPE_SECRET_KEY`, `FREEDMS_STRIPE_WEBHOOK_SECRET`, and
+`FREEDMS_STRIPE_PRICE_ASSISTANT`, `FREEDMS_STRIPE_PRICE_ASSISTANT_PRO`,
+`FREEDMS_STRIPE_PRICE_ASSISTANT_HEAVY`, `FREEDMS_STRIPE_PRICE_TOPUP`.
+Prices are created in Stripe: USD monthly per-user prices and a USD 25-cent
+one-time per-credit price. Set `FREEDMS_APP_BASE_URL` to the app's absolute URL;
+the template uses the app domain, and local development uses its loopback origin.
+No trial or promotional credits are granted. Checkout uses the active user count.
+
+The signature-authenticated webhook is `POST /assistant/billing/webhook`
+(hosted URL: `/api/assistant/billing/webhook`). Subscribe it to checkout completion
+and asynchronous payment success, subscription created/updated/deleted, and invoice
+paid/payment_failed/payment_action_required events. Requests use Stripe API version
+`2025-03-31.basil`; configure the webhook endpoint to the same version. The adapter
+reads subscription item periods and also accepts older subscription-level periods.
+Customer linkage is stored before checkout. Webhooks resolve the stored customer
+binding and commit receipts, plan changes, credit additions and outbox events
+atomically. Payment-session receipts prevent different events crediting one payment
+twice. Stripe retries optimistic conflicts; duplicate deliveries are acknowledged.
+
+Past-due subscriptions pause use with `ASSISTANT_PAST_DUE` and a payment note.
+Cancellation shows its access-end date; access stops then, or immediately when
+Stripe reports an ended subscription. Disabled assistants remain hidden.
+Chat content is never persisted or logged.
 
 Offline verification: `npm test` and
 `node --import tsx packages/web/test/assistant-tour.mjs`. The tour constructs states

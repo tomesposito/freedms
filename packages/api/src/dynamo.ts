@@ -11,7 +11,7 @@ import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertAssistantCommit, assertAssistantPlan, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   // In-process, warm-instance only; the consistent epoch Get validates across instances.
@@ -46,6 +46,11 @@ export class DynamoRepositories implements RepositoryFactory {
   async tenantForSubject(subject: string): Promise<string | undefined> {
     const result = await this.client.send(new GetCommand({TableName: this.table,
       Key: {PK: `SUBJECT#${requireId(subject)}`, SK: 'TENANT'}, ConsistentRead: true}));
+    return result.Item?.data?.tenantId;
+  }
+  async tenantForStripeCustomer(customerId: string): Promise<string | undefined> {
+    const result = await this.client.send(new GetCommand({TableName: this.table,
+      Key: {PK: `STRIPECUSTOMER#${requireId(customerId)}`, SK: 'TENANT'}, ConsistentRead: true}));
     return result.Item?.data?.tenantId;
   }
   forTenant(tenantId: string): TenantRepository {
@@ -143,6 +148,23 @@ export class DynamoRepositories implements RepositoryFactory {
           guardedRow,
           ...(expectedVersion ? [] : [put(`MCPGRANTPAIR#${encodeURIComponent(record.userId)}#${encodeURIComponent(record.clientId)}`, {id: record.id})]),
           ...(event ? [eventPut(event)] : [])
+        ]);
+      },
+      assistantBillingLink: () => get<AssistantBillingLink>('ASSISTANTBILLING'),
+      saveAssistantBillingLink: async (record, event) => {
+        assertBillingLink(tenantId, record, event);
+        await transact([put('ASSISTANTBILLING', record), eventPut(event), {Put: {TableName: this.table,
+          Item: {PK: `STRIPECUSTOMER#${requireId(record.customerId)}`, SK: 'TENANT', data: {tenantId}}, ConditionExpression: 'attribute_not_exists(PK)'}}]);
+      },
+      stripeEventProcessed: async id => !!await get(`STRIPERECEIPT#${requireId(id)}`),
+      commitStripeEvent: async ({eventId, paymentId, plan, cycle, event}) => {
+        assertAssistantPlan(tenantId, plan, plan.version - 1, event);
+        if (cycle) assertAssistantCycle(tenantId, cycle, cycle.version - 1);
+        await transact([
+          put(`STRIPERECEIPT#${requireId(eventId)}`, {tenantId}),
+          ...(paymentId ? [put(`STRIPERECEIPT#${requireId(paymentId)}`, {tenantId})] : []),
+          put('ASSISTANTPLAN', plan, plan.version > 1 ? '#d.#v = :v' : 'attribute_not_exists(PK)', plan.version > 1 ? plan.version - 1 : undefined),
+          ...(cycle ? [put(`ASSISTANTCYCLE#${requireId(cycle.id)}`, cycle, cycle.version > 1 ? '#d.#v = :v' : 'attribute_not_exists(PK)', cycle.version > 1 ? cycle.version - 1 : undefined)] : []), eventPut(event)
         ]);
       },
       assistantPlan: () => get<AssistantPlan>('ASSISTANTPLAN'),

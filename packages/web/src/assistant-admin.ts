@@ -1,32 +1,35 @@
+import { assistantTiers } from '@freedms/shared';
 import type { UI } from './desking';
 import { escapeHtml as e } from './format';
 import { showLoadError } from './load-error';
 
-export const pendingBilling = 'Billing setup is pending. Plans are set up by the operator for now — self-serve billing arrives with the Stripe step.';
+export const pendingBilling = "Billing isn't set up yet.";
 export const assistantAccountCard = '<section class="card"><h2><a href="#/account/assistant">AI assistant</a></h2><p>Plan, credits, and controls for this dealership.</p></section>';
 export interface AssistantAdminData {
-  plan: null | {tier: string; tierName: string; pricePerUserCents: number; creditsPerUser: number; billedUserCount: number; monthlyTotalCents: number; renewalDate: string; status: string};
+  billingConfigured?: boolean;
+  plan: null | {tier: string; tierName: string; pricePerUserCents: number; creditsPerUser: number; billedUserCount: number; monthlyTotalCents: number; renewalDate: string; status: string; accessUntil?: string};
   pool?: {allotmentCredits: number; topUpCredits: number; balanceCredits: number; usedCredits: number; cycleStart: string; cycleEnd: string};
   usage?: {userId: string; name: string; actions: number; credits: number; lastUsedAt: string | null}[];
   controls?: {disabled: boolean; overageEnabled: boolean; overageCapCredits: number; perRequestCreditCap: number};
 }
-const date = (value: string) => e(new Date(value + 'T12:00:00Z').toLocaleDateString(undefined, {month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC'}));
+const date = (value: string) => e(new Date(value.slice(0, 10) + 'T12:00:00Z').toLocaleDateString(undefined, {month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC'}));
 const dollars = (cents: number) => e((cents / 100).toLocaleString('en-US', {style: 'currency', currency: 'USD', maximumFractionDigits: 2, minimumFractionDigits: cents % 100 ? 2 : 0}));
 export function assistantAdminHtml(data: AssistantAdminData, admin = true): string {
   if (!admin) return '<section class="card">Only a workspace admin can change assistant settings.</section>';
   const heading = '<h1>AI assistant</h1><p>Plan, credits, and controls for this dealership. Changes here apply to everyone in the store.</p>';
-  if (!data.plan) return `${heading}<section class="card empty"><h2>No AI assistant plan yet</h2><p>${pendingBilling}</p></section>`;
+  const tiers = Object.entries(assistantTiers).map(([key, tier]) => `<div class="assistant-admin-row"><strong>${e(tier.name)}</strong><span>${dollars(tier.pricePerUserCents)} / user / mo</span><span>${tier.creditsPerUser} credits / user</span><button data-billing="checkout" data-tier="${key}">Subscribe to ${e(tier.name)}</button></div>`).join('');
+  if (!data.plan) return `${heading}<section class="card empty"><h2>No AI assistant plan yet</h2>${data.billingConfigured ? tiers : `<p>${pendingBilling}</p>`}</section>`;
   const plan = data.plan, pool = data.pool!, controls = data.controls!, usage = data.usage ?? [];
   const total = pool.allotmentCredits + pool.topUpCredits;
   const percent = total ? Math.min(100, Math.max(0, pool.usedCredits / total * 100)) : 100;
   return `${heading}<section class="card"><h2 class="eyebrow">PLAN</h2><div class="assistant-admin-row">
     <span><strong>${e(plan.tierName)}</strong> — ${dollars(plan.pricePerUserCents)} / user / mo</span><span>${e(plan.billedUserCount)} users</span>
-    <span>${dollars(plan.monthlyTotalCents)} / month</span><span>Renews ${date(plan.renewalDate)}</span><span class="badge">${e(plan.status)}</span>
-    <button data-billing>Manage billing</button></div><p role="status" data-billing-status hidden>${pendingBilling}</p></section>
+    <span>${dollars(plan.monthlyTotalCents)} / month</span><span>${plan.accessUntil ? `Cancels ${date(plan.accessUntil)}` : `Renews ${date(plan.renewalDate)}`}</span><span class="badge">${e(plan.status)}</span>
+    <button data-billing="portal" ${data.billingConfigured ? '' : 'disabled'}>Manage billing</button></div>${plan.status === 'past_due' ? '<p role="status">Payment is past due. Use Manage billing to update payment and resume the assistant.</p>' : ''}${data.billingConfigured ? '' : `<p role="status">${pendingBilling}</p>`}${data.billingConfigured && plan.status === 'cancelled' ? tiers : ''}</section>
     <section class="card"><h2 class="eyebrow">CREDIT POOL</h2><div class="assistant-admin-row"><span>${e(pool.balanceCredits)} of ${e(total)} credits left</span>
-    <span>${e(pool.usedCredits)} used</span><span>Resets ${date(pool.cycleEnd)}</span><button data-billing>Top up</button></div>
+    <span>${e(pool.usedCredits)} used</span><span>Resets ${date(pool.cycleEnd)}</span>${data.billingConfigured ? '<label>Credits to add<input data-topup-credits type="number" min="1" max="100000" step="1" value="100" required></label>' : ''}<button data-billing="topup" ${data.billingConfigured && plan.status === 'active' ? '' : 'disabled'}>Top up</button></div>
     <progress class="assistant-admin-progress" max="100" value="${percent}" aria-label="Credit pool used">${percent}%</progress>
-    <p class="muted">Top-ups are 25¢ a credit. Failed assistant actions are never charged.</p><p role="status" data-billing-status hidden>${pendingBilling}</p></section>
+    <p class="muted">Top-ups are 25¢ a credit. Failed assistant actions are never charged.</p></section>
     <section class="card"><h2 class="eyebrow">USAGE BY PERSON — THIS CYCLE</h2>${usage.length ? `<div class="table-wrap"><table><thead><tr><th>Person</th><th>Actions</th><th>Credits</th><th>Last used</th></tr></thead><tbody>${usage.map(row => `<tr><td>${e(row.name)}</td><td>${e(row.actions)}</td><td>${e(row.credits)}</td><td>${row.lastUsedAt ? e(new Date(row.lastUsedAt).toLocaleString()) : 'Never'}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">No assistant use yet this cycle.</p>'}</section>
     <section class="card"><h2 class="eyebrow">CONTROLS</h2>
     <div class="assistant-admin-control"><div><label for="assistant-enabled">Assistant for this dealership</label><p class="muted">Turning off stops all use and charging here. It does not cancel the plan.</p></div><input id="assistant-enabled" data-setting="disabled" type="checkbox" role="switch" ${controls.disabled ? '' : 'checked'}></div>
@@ -40,8 +43,16 @@ export async function assistantAdminRoute(ui: UI): Promise<void> {
     const data = await ui.api<AssistantAdminData>('/assistant/admin');
     if (!ui.current()) return;
     ui.shell(assistantAdminHtml(data));
-    document.querySelectorAll<HTMLButtonElement>('[data-billing]').forEach(button => button.addEventListener('click', () => {
-      button.closest('section')!.querySelector<HTMLElement>('[data-billing-status]')!.hidden = false;
+    document.querySelectorAll<HTMLButtonElement>('[data-billing]').forEach(button => button.addEventListener('click', async () => {
+      const action = button.dataset.billing!;
+      const input = document.querySelector<HTMLInputElement>('[data-topup-credits]');
+      if (action === 'topup' && !input?.checkValidity()) { input?.reportValidity(); return; }
+      button.disabled = true;
+      try {
+        const result = await ui.api<{url: string}>(`/assistant/admin/billing/${action}`, 'POST', action === 'checkout' ? {tier: button.dataset.tier} : action === 'topup' ? {credits: Number(input!.value)} : {});
+        if (ui.current()) window.location.assign(result.url);
+      } catch (error) { if (ui.current()) ui.flash(error); }
+      finally { button.disabled = false; }
     }));
     document.querySelectorAll<HTMLInputElement>('[data-setting]').forEach(input => input.addEventListener('change', async () => {
       const key = input.dataset.setting!;
