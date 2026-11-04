@@ -1,10 +1,12 @@
 export const assistantTiers = {
-  assistant: {creditsPerUser: 75}, 'assistant-pro': {creditsPerUser: 175}, 'assistant-heavy': {creditsPerUser: 350},
+  assistant: {name: 'Assistant', pricePerUserCents: 1500, creditsPerUser: 75},
+  'assistant-pro': {name: 'Assistant Pro', pricePerUserCents: 2900, creditsPerUser: 175},
+  'assistant-heavy': {name: 'Assistant Heavy', pricePerUserCents: 4900, creditsPerUser: 350},
 } as const;
 export interface AssistantPlan {
   id: 'assistant-plan'; tenantId: string; tier: keyof typeof assistantTiers;
   status: 'active' | 'past_due' | 'cancelled'; cycleAnchor: string;
-  disabled: boolean; overageEnabled: boolean; perRequestCreditCap: number; version: number;
+  disabled: boolean; overageEnabled: boolean; overageCapCredits: number; perRequestCreditCap: number; version: number;
 }
 export interface AssistantCycle {
   id: string; tenantId: string; cycleStart: string; cycleEnd: string; billedUserCount: number;

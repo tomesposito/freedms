@@ -385,6 +385,7 @@ export function assertAssistantPlan(tenantId: string, record: AssistantPlan, exp
   if (record.id !== 'assistant-plan' || !['assistant', 'assistant-pro', 'assistant-heavy'].includes(record.tier) ||
       !['active', 'past_due', 'cancelled'].includes(record.status) || !Number.isFinite(Date.parse(record.cycleAnchor)) ||
       typeof record.disabled !== 'boolean' || typeof record.overageEnabled !== 'boolean' ||
+      (record.overageCapCredits !== undefined && (!Number.isSafeInteger(record.overageCapCredits) || record.overageCapCredits < 0)) ||
       !Number.isSafeInteger(record.perRequestCreditCap) || record.perRequestCreditCap < 1) throw new Error('Invalid assistant plan');
 }
 export function assertAssistantCycle(tenantId: string, record: AssistantCycle, expected: number) {

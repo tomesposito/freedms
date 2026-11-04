@@ -102,6 +102,10 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
 
       const execute = async (): Promise<ApiResponse> => {
         const billing = new AssistantBilling(repository, now, options.assistantSeedLocalPlan === true && !options.hosted);
+        if ((path === '/assistant/admin' && method === 'GET') || (path === '/assistant/admin/settings' && method === 'PUT')) {
+          if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can manage the AI assistant.');
+          return response(200, {data: method === 'GET' ? await billing.admin(principal) : await billing.updateSettings(principal, parseBody(request.body))});
+        }
         if (path === '/assistant/pool' && method === 'GET') return response(200, {data: await billing.pool(principal)});
         if (path === '/assistant/usage' && method === 'GET') return response(200, {data: await billing.usage(principal)});
         if (path === '/assistant/chat' && method === 'POST') return assistantChat(request, principal, options.assistantProvider ?? new UnconfiguredAssistantProvider(), options.assistantEntitlement ?? billing, handle);

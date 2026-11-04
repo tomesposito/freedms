@@ -1,6 +1,7 @@
 import { escapeHtml as e } from './format';
 
 export interface AssistantPool {
+  overageCapCredits?: number; overageCreditsUsed?: number;
   tier: string; status: 'active' | 'past_due' | 'cancelled'; disabled: boolean;
   overageEnabled: boolean; balanceCredits: number; cycleEnd: string;
 }
@@ -11,7 +12,7 @@ export function poolState(pool?: AssistantPool, error?: ApiError): AssistantStat
   if (!pool) return 'loading';
   if (pool.disabled) return 'disabled';
   if (pool.status !== 'active') return 'paywall';
-  if (pool.balanceCredits <= 0 && !pool.overageEnabled) return 'exhausted';
+  if (pool.balanceCredits <= 0 && (!pool.overageEnabled || (pool.overageCreditsUsed ?? Math.max(0, -pool.balanceCredits)) >= (pool.overageCapCredits ?? 500))) return 'exhausted';
   return 'ready';
 }
 export function chatErrorState(error: ApiError): AssistantState | undefined {
@@ -49,7 +50,7 @@ function stateBody(state: AssistantState, pool?: AssistantPool): string {
 export function trayHtml(state: AssistantState, turns: AssistantTurn[] = [], pool?: AssistantPool, busy = false, draft = ''): string {
   // Disabled means absent: the shell hides entirely (see paint), and there is no tray to render.
   if (state === 'disabled') return '';
-  return `<header class="assistant-header"><div><h2 id="assistant-title">AI assistant${state === 'exhausted' || state === 'disabled' ? '' : `<span>${state === 'paywall' ? 'PAID' : 'BEDROCK'}</span>`}</h2><button type="button" id="assistant-close" aria-label="Close AI assistant">✕</button></div><p>Works in this workspace as you · ${state === 'paywall' ? 'billed to the dealership' : 'every action is recorded as yours'}</p></header><div class="assistant-body" aria-live="polite">${turns.map((turn, i) => `<div class="assistant-user">${e(turn.text)}</div>${turn.result ? `${turn.result.transcript.map(row => `<div class="assistant-tool ${row.ok ? 'done' : 'failed'}"><i aria-hidden="true"></i>${e(toolLabel(row.tool))}<small>${row.ok ? 'done' : 'failed'}</small></div>`).join('')}<div class="assistant-reply">${e(turn.result.reply)}</div><div class="assistant-receipt">${e(receipt(turn.result.creditsUsed))}</div>` : ''}${turn.error ? `<div class="assistant-error" role="alert">${e(turn.error)}${state === 'ready' && !busy ? `<button type="button" data-assistant-retry="${e(i)}">Retry</button>` : ''}</div>` : ''}`).join('')}${busy ? '<div class="assistant-working" role="status">● ● ● <span>Working…</span></div>' : ''}${state !== 'ready' || !turns.length ? stateBody(state, pool) : ''}</div><form class="assistant-composer"><textarea id="assistant-input" aria-label="Message AI assistant" rows="2" maxlength="16000" placeholder="${e(locked[state])}" ${state !== 'ready' || busy ? 'disabled' : ''}>${e(draft)}</textarea><button class="primary" type="submit" ${state !== 'ready' || busy ? 'disabled' : ''}>Send</button></form>`;
+  return `<header class="assistant-header"><div><h2 id="assistant-title">AI assistant${state === 'exhausted' ? '' : `<span>${state === 'paywall' ? 'PAID' : 'BEDROCK'}</span>`}</h2><button type="button" id="assistant-close" aria-label="Close AI assistant">✕</button></div><p>Works in this workspace as you · ${state === 'paywall' ? 'billed to the dealership' : 'every action is recorded as yours'}</p></header><div class="assistant-body" aria-live="polite">${turns.map((turn, i) => `<div class="assistant-user">${e(turn.text)}</div>${turn.result ? `${turn.result.transcript.map(row => `<div class="assistant-tool ${row.ok ? 'done' : 'failed'}"><i aria-hidden="true"></i>${e(toolLabel(row.tool))}<small>${row.ok ? 'done' : 'failed'}</small></div>`).join('')}<div class="assistant-reply">${e(turn.result.reply)}</div><div class="assistant-receipt">${e(receipt(turn.result.creditsUsed))}</div>` : ''}${turn.error ? `<div class="assistant-error" role="alert">${e(turn.error)}${state === 'ready' && !busy ? `<button type="button" data-assistant-retry="${e(i)}">Retry</button>` : ''}</div>` : ''}`).join('')}${busy ? '<div class="assistant-working" role="status">● ● ● <span>Working…</span></div>' : ''}${state !== 'ready' || !turns.length ? stateBody(state, pool) : ''}</div><form class="assistant-composer"><textarea id="assistant-input" aria-label="Message AI assistant" rows="2" maxlength="16000" placeholder="${e(locked[state])}" ${state !== 'ready' || busy ? 'disabled' : ''}>${e(draft)}</textarea><button class="primary" type="submit" ${state !== 'ready' || busy ? 'disabled' : ''}>Send</button></form>`;
 }
 
 type Api = <T>(path: string, method?: string, body?: unknown) => Promise<T>;

@@ -38,7 +38,7 @@ async function setup(provider: AssistantProvider = new Fake(), seed = false, hos
   };
   const plan = async (patch: Partial<AssistantPlan> = {}, tenant = 'A') => {
     const repo = repositories.forTenant(tenant), old = await repo.assistantPlan();
-    const record: AssistantPlan = {id: 'assistant-plan', tenantId: tenant, tier: 'assistant', status: 'active', cycleAnchor: '2026-01-01', disabled: false, overageEnabled: false, perRequestCreditCap: 25, ...old, ...patch, version: (old?.version ?? 0) + 1};
+    const record: AssistantPlan = {id: 'assistant-plan', tenantId: tenant, tier: 'assistant', status: 'active', cycleAnchor: '2026-01-01', disabled: false, overageEnabled: false, overageCapCredits: 500, perRequestCreditCap: 25, ...old, ...patch, version: (old?.version ?? 0) + 1};
     await repo.saveAssistantPlan(record, record.version - 1, event(tenant, 'assistant-plan.updated', record.id, record.version));
   };
   const repo = repositories.forTenant('A');
@@ -54,7 +54,11 @@ async function setup(provider: AssistantProvider = new Fake(), seed = false, hos
     await repo.saveMember({id, name: id, email: `${id}@example.test`}, {tenantId: 'A', userId: id, role: 'staff', active, version}, version - 1,
       event('A', old ? (active ? 'user.reactivated' : 'user.deactivated') : 'user.added', id, version));
   };
-  return {repositories, repo, billing, actor, plan, chat, get, balance, member, date: (value: string) => {date = new Date(value);}};
+  const settings = async (body: unknown, tenant = 'A', user?: string) => {
+    const result = await handle({method: 'PUT', path: '/assistant/admin/settings', claims: auth(tenant, user), body: JSON.stringify(body)});
+    return {status: result.statusCode, ...JSON.parse(result.body)};
+  };
+  return {repositories, repo, billing, actor, plan, chat, get, balance, member, settings, date: (value: string) => {date = new Date(value);}};
 }
 test('assistant billing prices derive from registry methods and reserve photo pricing', () => {
   for (const tool of tools) assert.deepEqual(priceForTool(tool.name), {actionClass: tool.method === 'GET' ? 'read' : 'write', credits: tool.method === 'GET' ? 1 : 2});
@@ -209,4 +213,55 @@ test('assistant Dynamo billing keys, pagination, conditional writes and atomic t
   await assert.rejects(repo.appendAssistantLedger({...row, tenantId: 'B'}), /scope/);
   await assert.rejects(repo.commitAssistantLedger([{...row, tenantId: 'B'}], cycle, 1), /scope/);
   assert.equal(commands.length, count);
+});
+
+test('assistant admin readout, active seats, authorization, missing plan and validation', async () => {
+  const s = await setup();
+  assert.deepEqual((await s.get('/assistant/admin')).data, {plan: null});
+  assert.equal((await s.settings({disabled: true})).error.code, 'ASSISTANT_PLAN_REQUIRED');
+  await s.plan({tier: 'assistant-pro'});
+  let data = (await s.get('/assistant/admin')).data;
+  assert.equal(data.plan.tierName, 'Assistant Pro'); assert.equal(data.plan.monthlyTotalCents, 2900);
+  assert.equal(data.plan.billedUserCount, 1); assert.equal(data.plan.renewalDate, '2026-02-01');
+  await s.member('staff'); await s.member('inactive'); await s.member('inactive', false);
+  data = (await s.get('/assistant/admin')).data;
+  assert.equal(data.plan.billedUserCount, 2); assert.equal(data.plan.monthlyTotalCents, 5800);
+  for (const result of [await s.get('/assistant/admin', 'A', 'staff'), await s.settings({disabled: true}, 'A', 'staff')]) {
+    assert.equal(result.status, 403); assert.equal(result.error.code, 'FORBIDDEN');
+  }
+  for (const body of [null, [], {perRequestCreditCap: 1.5}, {perRequestCreditCap: 0}, {perRequestCreditCap: 1001}, {overageCapCredits: -1}, {overageCapCredits: 100001}, {overageCapCredits: null}, {disabled: 'true'}, {overageEnabled: 1}, {tier: 'assistant-heavy'}]) assert.equal((await s.settings(body)).status, 400);
+});
+test('admin switch isolates tenants, blocks every member and restores use with audited updates', async () => {
+  const s = await setup(new Fake([reply, reply, reply])); await s.plan(); await s.plan({}, 'B'); await s.member('staff');
+  const before = await s.repositories.forTenant('B').assistantPlan();
+  assert.equal((await s.settings({disabled: true})).status, 200);
+  assert.equal((await s.repo.assistantPlan())!.disabled, true);
+  const event = (await s.repo.events()).find(row => row.type === 'assistant-plan.updated' && row.aggregateVersion === 2)!;
+  assert.equal(event.actorId, 'user-A'); assert.equal(event.tenantId, 'A');
+  for (const user of ['user-A', 'staff']) assert.equal((await s.chat('A', user)).error.code, 'ASSISTANT_DISABLED');
+  assert.equal((await s.chat('B')).status, 200);
+  assert.deepEqual(await s.repositories.forTenant('B').assistantPlan(), before);
+  assert.equal((await s.settings({disabled: false})).status, 200);
+  for (const user of ['user-A', 'staff']) assert.equal((await s.chat('A', user)).status, 200);
+  const rows = (await s.get('/assistant/usage')).data.byUser;
+  assert.equal(rows.find((row: {userId: string}) => row.userId === 'user-A').name, 'Test');
+  assert.ok(rows.every((row: {lastUsedAt: string}) => row.lastUsedAt === '2026-01-01T12:00:00.000Z'));
+});
+test('admin caps are enforced by the loop, exhaustion clears when monthly cap increases', async () => {
+  const s = await setup(new Fake([calls('search_vehicles', 'search_vehicles')])); await s.plan();
+  await s.settings({perRequestCreditCap: 1});
+  const result = await s.chat(); assert.equal(result.data.creditsUsed, 1); assert.match(result.data.reply, /credit cap/);
+  const o = await setup(new Fake([calls('search_vehicles', 'search_vehicles', 'search_vehicles'), reply]));
+  await o.plan(); await o.balance(0); await o.settings({overageEnabled: true, overageCapCredits: 2});
+  const exhausted = await o.chat(); assert.equal(exhausted.data.creditsUsed, 2); assert.match(exhausted.data.reply, /monthly overage cap/);
+  assert.equal((await o.billing.status(o.actor)).status, 'exhausted');
+  assert.equal((await o.chat()).error.code, 'ASSISTANT_CREDITS_EXHAUSTED');
+  await o.settings({overageCapCredits: 3}); assert.equal((await o.chat()).data.creditsUsed, 1);
+  await o.settings({overageCapCredits: 0}); assert.equal((await o.billing.status(o.actor)).status, 'exhausted');
+});
+test('legacy plan normalizes missing overage cap and repository rejects invalid present caps', async () => {
+  const s = await setup(); await s.plan({overageCapCredits: undefined});
+  assert.equal((await s.get('/assistant/pool')).data.overageCapCredits, 500);
+  assert.equal((await s.get('/assistant/admin')).data.controls.overageCapCredits, 500);
+  for (const value of [-1, 1.5, NaN]) await assert.rejects(s.plan({overageCapCredits: value}), /Invalid assistant plan/);
 });

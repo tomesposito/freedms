@@ -55,3 +55,7 @@ test('assistant receipts use actual credits and working state does not invent to
   const html = trayHtml('ready', [{text: 'Find cars'}], pool, true);
   assert.match(html, /Working…/); assert.doesNotMatch(html, /assistant-tool|This used/); assert.match(html, /<textarea[^>]*disabled/);
 });
+
+test('assistant tray locks at monthly overage cap', () => {
+  assert.equal(poolState({...pool, overageEnabled: true, balanceCredits: -2, overageCapCredits: 2, overageCreditsUsed: 2}), 'exhausted');
+});

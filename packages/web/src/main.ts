@@ -1,3 +1,4 @@
+import { assistantAdminRoute } from './assistant-admin';
 import { mountAssistant, resetAssistant } from './assistant';
 import { aiConnectionsRoute } from './ai-connections';
 import { ideasRoute, ideasQueueRoute } from './ideas';
@@ -279,6 +280,7 @@ async function route(): Promise<void> {
     else if (parts[0] === 'ideas-review') await ideasQueueRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, session.canManagePilotRequests === true);
     else if (parts[0] === 'users') await usersRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void start(); }, admin: session.principal.role === 'admin'}, session.principal.tenantId, !localMode);
     else if (parts[0] === 'webhooks') await webhooksRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
+    else if (parts[0] === 'account' && parts[1] === 'assistant') await assistantAdminRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'account') await accountRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, {}, !localMode, cognito);
     else if (parts[0] === 'feeds') await feedRoute({api, download, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'accounting') await accountingRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});

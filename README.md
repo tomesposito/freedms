@@ -61,6 +61,15 @@ it is not a live model response.
 Run `node --import tsx packages/web/test/assistant-tour.mjs` for the empty,
 conversation, paywall, disabled, exhausted, unconfigured, and mobile states.
 
+**AI assistant admin**
+
+Admins manage the plan, credit pool, usage, and dealership switch. Billing setup
+is pending until the Stripe step. This capture uses the local offline provider.
+
+![AI assistant admin plan, pool, usage, and controls](docs/screenshots/ai-assistant-admin.png)
+
+Run `node --import tsx packages/web/test/assistant-admin-tour.mjs` to verify the controls.
+
 **AI connections**
 
 Members can see and revoke their own AI app connections. Administrators can also

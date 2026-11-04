@@ -3,8 +3,10 @@ import { assistantTiers, type AssistantPlan, type AssistantCycle, type Assistant
 import type { TenantRepository } from './repository.js';
 import type { AssistantEntitlement } from './assistant.js';
 import { tools } from './mcp/tools.js';
+import { object, onlyKeys, invalid } from './validation.js';
 import { ApiError } from './errors.js';
 
+export const DEFAULT_ASSISTANT_OVERAGE_CAP = 500;
 export const DEFAULT_ASSISTANT_CREDIT_CAP = 25;
 export const PHOTO_PRICE = {actionClass: 'photo', credits: 3} as const;
 export const ANSWER_PRICE = {actionClass: 'answer', credits: 1} as const;
@@ -42,11 +44,11 @@ export class AssistantBilling implements AssistantEntitlement {
     let plan = await this.repository.assistantPlan();
     if (!plan && this.seedLocalPlan) {
       plan = {id: 'assistant-plan', tenantId: actor.tenantId, tier: 'assistant', status: 'active', cycleAnchor: this.now().toISOString(),
-        disabled: false, overageEnabled: false, perRequestCreditCap: DEFAULT_ASSISTANT_CREDIT_CAP, version: 1};
+        disabled: false, overageEnabled: false, overageCapCredits: DEFAULT_ASSISTANT_OVERAGE_CAP, perRequestCreditCap: DEFAULT_ASSISTANT_CREDIT_CAP, version: 1};
       await this.repository.saveAssistantPlan(plan, 0, {id: randomUUID(), tenantId: actor.tenantId, actorId: actor.userId,
         aggregateId: plan.id, aggregateVersion: 1, type: 'assistant-plan.updated', occurredAt: this.now().toISOString(), deliveryStatus: 'pending'});
     }
-    return plan;
+    return plan ? {...plan, overageCapCredits: plan.overageCapCredits ?? DEFAULT_ASSISTANT_OVERAGE_CAP} : undefined;
   }
   private async ensureCycle(plan: AssistantPlan): Promise<AssistantCycle> {
     const date = this.now(), dates = assistantCycleDates(plan.cycleAnchor, date);
@@ -71,7 +73,7 @@ export class AssistantBilling implements AssistantEntitlement {
     const usedCredits = (await this.repository.assistantLedger(cycle.cycleStart)).reduce((sum, row) => sum + row.credits, 0);
     const balanceCredits = cycle.allotmentCredits + cycle.topUpCredits - usedCredits;
     return {plan, cycle, pool: {tier: plan.tier, status: plan.status, disabled: plan.disabled, overageEnabled: plan.overageEnabled,
-      perRequestCreditCap: plan.perRequestCreditCap, cycleStart: cycle.cycleStart, cycleEnd: cycle.cycleEnd,
+      overageCapCredits: plan.overageCapCredits, perRequestCreditCap: plan.perRequestCreditCap, cycleStart: cycle.cycleStart, cycleEnd: cycle.cycleEnd,
       allotmentCredits: cycle.allotmentCredits, topUpCredits: cycle.topUpCredits, usedCredits, balanceCredits,
       overageCreditsUsed: Math.max(0, -balanceCredits)}};
   }
@@ -81,7 +83,7 @@ export class AssistantBilling implements AssistantEntitlement {
     if (!plan || plan.status !== 'active') return {status: 'no-plan' as const, plan};
     if (plan.disabled) return {status: 'disabled' as const, plan};
     const pool = await this.pool(actor);
-    return {status: pool.balanceCredits <= 0 && !plan.overageEnabled ? 'exhausted' as const : 'ok' as const, plan, pool};
+    return {status: pool.balanceCredits <= 0 && (!plan.overageEnabled || pool.overageCreditsUsed >= plan.overageCapCredits) ? 'exhausted' as const : 'ok' as const, plan, pool};
   }
   async check(actor: Actor) { return (await this.status(actor)).status === 'ok'; }
   async requireEntitlement(actor: Actor) {
@@ -98,8 +100,8 @@ export class AssistantBilling implements AssistantEntitlement {
     return {
       stop: price => total + price.credits > pool.perRequestCreditCap
         ? 'The assistant hit the credit cap for this message. Please send another message to continue.'
-        : !pool.overageEnabled && pool.balanceCredits - total < price.credits
-          ? 'The assistant credit pool is exhausted. Add credits or wait for the next cycle to continue.' : undefined,
+        : pool.balanceCredits + (plan.overageEnabled ? plan.overageCapCredits : 0) - total < price.credits
+          ? plan.overageEnabled ? 'The assistant reached the monthly overage cap. Raise the cap or wait for the next cycle to continue.' : 'The assistant credit pool is exhausted. Add credits or wait for the next cycle to continue.' : undefined,
       charge: (action, price, usage = zeroUsage) => {
         pending.push({id: randomUUID(), tenantId: actor.tenantId, actorId: actor.userId, action, ...price, ...usage,
           cycleStart: pool.cycleStart, createdAt: this.now().toISOString()}); total += price.credits;
@@ -112,12 +114,44 @@ export class AssistantBilling implements AssistantEntitlement {
       },
     };
   }
+  async admin(actor: Actor) {
+    const plan = await this.plan(actor);
+    if (!plan) return {plan: null};
+    const {cycle, pool} = await this.snapshot(actor);
+    const tier = assistantTiers[plan.tier];
+    return {plan: {tier: plan.tier, tierName: tier.name, pricePerUserCents: tier.pricePerUserCents,
+      creditsPerUser: tier.creditsPerUser, billedUserCount: cycle.billedUserCount,
+      monthlyTotalCents: tier.pricePerUserCents * cycle.billedUserCount, renewalDate: cycle.cycleEnd, status: plan.status},
+      pool, usage: (await this.usage(actor)).byUser,
+      controls: {disabled: plan.disabled, overageEnabled: plan.overageEnabled,
+        overageCapCredits: plan.overageCapCredits, perRequestCreditCap: plan.perRequestCreditCap}};
+  }
+  async updateSettings(actor: Actor, input: unknown) {
+    const body = object(input);
+    onlyKeys(body, ['disabled', 'overageEnabled', 'overageCapCredits', 'perRequestCreditCap']);
+    for (const key of ['disabled', 'overageEnabled']) {
+      if (key in body && typeof body[key] !== 'boolean') throw invalid(`${key} must be a boolean.`);
+    }
+    for (const [key, min, max] of [['overageCapCredits', 0, 100000], ['perRequestCreditCap', 1, 1000]] as const) {
+      if (key in body && (typeof body[key] !== 'number' || !Number.isInteger(body[key]) || body[key] < min || body[key] > max))
+        throw invalid(`${key} must be an integer from ${min} to ${max}.`);
+    }
+    const plan = await this.plan(actor);
+    if (!plan) throw new ApiError(402, 'ASSISTANT_PLAN_REQUIRED', 'An AI assistant plan is required.');
+    const updated = {...plan, ...body, version: plan.version + 1} as AssistantPlan;
+    await this.repository.saveAssistantPlan(updated, plan.version, {id: randomUUID(), tenantId: actor.tenantId,
+      actorId: actor.userId, aggregateId: plan.id, aggregateVersion: updated.version, type: 'assistant-plan.updated',
+      occurredAt: this.now().toISOString(), deliveryStatus: 'pending'});
+    return this.admin(actor);
+  }
   async usage(actor: Actor) {
     const pool = await this.pool(actor);
-    const byUser = new Map<string, {userId: string; actions: number; credits: number} & AssistantTokenUsage>();
+    const names = new Map((await this.repository.workspaceUsers()).map(row => [row.membership.userId, row.user.name]));
+    const byUser = new Map<string, {userId: string; name: string; lastUsedAt: string | null; actions: number; credits: number} & AssistantTokenUsage>();
     for (const row of await this.repository.assistantLedger(pool.cycleStart)) {
       if (actor.role !== 'admin' && row.actorId !== actor.userId) continue;
-      const sum = byUser.get(row.actorId) ?? {userId: row.actorId, actions: 0, credits: 0, ...zeroUsage};
+      const sum = byUser.get(row.actorId) ?? {userId: row.actorId, name: names.get(row.actorId) ?? row.actorId, lastUsedAt: null, actions: 0, credits: 0, ...zeroUsage};
+      if (!sum.lastUsedAt || row.createdAt > sum.lastUsedAt) sum.lastUsedAt = row.createdAt;
       sum.actions++; sum.credits += row.credits;
       for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) sum[key] += row[key];
       byUser.set(row.actorId, sum);
