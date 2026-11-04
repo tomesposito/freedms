@@ -62,7 +62,7 @@ try {
   let visit=0;
   const goto=()=>page.goto(`http://127.0.0.1:5199/?tour=${++visit}#/`,{waitUntil:'networkidle'});
   const open=()=>page.locator('#assistant-trigger').click();
-  const shot=async name=>{await page.evaluate(async()=>{await Promise.all(document.getAnimations().map(animation=>animation.finished));});await page.screenshot({path:`${out}/${name}.png`,fullPage:false});};
+  const shot=async name=>{await page.evaluate(async()=>{await Promise.all(document.getAnimations().map(animation=>animation.finished.catch(()=>{})));});await page.screenshot({path:`${out}/${name}.png`,fullPage:false});};
   const input=page.locator('#assistant-input');
   await goto();
   const initial=(await call('/assistant/pool')).balanceCredits;
