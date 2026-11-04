@@ -21,7 +21,7 @@ const tokens = new LocalTokens(randomBytes(48).toString('hex'));
 const pilotOperator = {userId: process.env.PILOT_OPERATOR_SUBJECT ?? '', tenantId: process.env.PILOT_OPERATOR_TENANT_ID ?? ''};
 const resolveOperator = localOperatorResolver(repositories, tokens, pilotOperator,
   process.env.LOCAL_PILOT_OPERATOR === '1' && process.env.PILOT_OPERATOR_SUBJECT === undefined && process.env.PILOT_OPERATOR_TENANT_ID === undefined);
-const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv(), undefined, {assistantProvider: process.env.FREEDMS_ASSISTANT_STUB === '1' ? new LocalAssistantProvider() : assistantProviderFromEnv(), assistantEntitlement: process.env.FREEDMS_ASSISTANT_STUB === '1' ? {check: async () => true} : undefined, pilotOperator, turnstile: turnstileVerifierFromEnv()});
+const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv(), undefined, {assistantProvider: process.env.FREEDMS_ASSISTANT_STUB === '1' ? new LocalAssistantProvider() : assistantProviderFromEnv(), assistantSeedLocalPlan: process.env.FREEDMS_ASSISTANT_STUB === '1', pilotOperator, turnstile: turnstileVerifierFromEnv()});
 const server = createServer(async (req, res) => {
   let result;
   try {

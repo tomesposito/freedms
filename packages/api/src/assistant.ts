@@ -1,3 +1,4 @@
+import { AssistantBilling, ANSWER_PRICE, priceForTool, zeroUsage, type AssistantMeter } from './assistant-billing.js';
 import type { AuthClaims, Principal } from '@freedms/shared';
 import type { AssistantMessage, AssistantProvider, AssistantToolSpec } from './assistant-provider.js';
 import { assistantUnavailable, assistantFailure } from './assistant-provider.js';
@@ -15,20 +16,33 @@ export const assistantToolSpecs: AssistantToolSpec[] = tools.map(({name, descrip
 }}));
 const stepLimit = 'The assistant hit the step limit for this message. Please send another message to continue.';
 export async function runAssistant(messages: AssistantMessage[], provider: AssistantProvider, claims: AuthClaims,
-  execute: (request: ApiRequest) => Promise<ApiResponse>) {
+  execute: (request: ApiRequest) => Promise<ApiResponse>, meter?: AssistantMeter) {
   const history = structuredClone(messages), transcript: {tool: string; ok: boolean}[] = [];
+  const finish = async (reply: string) => ({reply, transcript, creditsUsed: await meter?.finish() ?? 0});
   for (let round = 0; round <= 10; round++) {
     const answer = await provider.converse(history, assistantToolSpecs);
     const calls = answer.content?.flatMap(block => block.toolUse ? [block.toolUse] : []) ?? [];
-    if (!calls.length) return {reply: answer.content?.map(block => block.text ?? '').join('\n') ?? '', transcript};
-    if (round === 10) return {reply: stepLimit, transcript};
+    let usage = provider.lastUsage ? {...provider.lastUsage} : zeroUsage;
+    if (!calls.length) {
+      // Every no-tool final round costs one credit, including after tool rounds.
+      // Never expose an answer that cannot be paid for: return the stop note instead.
+      const stop = meter?.stop(ANSWER_PRICE);
+      if (stop) return finish(stop);
+      meter?.charge('answer', ANSWER_PRICE, usage);
+      return finish(answer.content?.map(block => block.text ?? '').join('\n') ?? '');
+    }
+    if (round === 10) return finish(stepLimit);
     if (calls.length > 20 || calls.some(call => !call.toolUseId || !call.name) || new Set(calls.map(call => call.toolUseId)).size !== calls.length) throw assistantFailure();
     history.push(answer);
     const results: NonNullable<AssistantMessage['content']> = [];
     for (const call of calls) {
       const tool = tools.find(tool => tool.name === call.name);
+      const price = priceForTool(call.name!);
+      const stop = price && meter?.stop(price);
+      if (stop) return finish(stop);
       const result = tool ? await executeTool(tool, call.input, claims, execute)
         : {isError: true, content: [{text: 'Tool unavailable.'}]};
+      if (!result.isError && price) { meter?.charge(call.name!, price, usage); usage = zeroUsage; }
       transcript.push({tool: call.name!, ok: !result.isError});
       const raw = result.content.map(block => block.text).join('\n');
       const text = raw.length > 16000 ? raw.slice(0, 16000) + '\n[Tool result truncated]' : raw;
@@ -36,12 +50,13 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
     }
     history.push({role: 'user', content: results});
   }
-  return {reply: stepLimit, transcript};
+  return finish(stepLimit);
 }
 export async function assistantChat(request: ApiRequest, principal: Principal, provider: AssistantProvider,
   entitlement: AssistantEntitlement, execute: (request: ApiRequest) => Promise<ApiResponse>) {
   // Fail closed before any provider or tool call, including when no model is configured.
-  if (!await entitlement.check(principal)) throw new ApiError(402, 'ASSISTANT_PLAN_REQUIRED', 'An AI assistant plan is required.');
+  if (entitlement instanceof AssistantBilling) await entitlement.requireEntitlement(principal);
+  else if (!await entitlement.check(principal)) throw new ApiError(402, 'ASSISTANT_PLAN_REQUIRED', 'An AI assistant plan is required.');
   if (!provider.configured) throw assistantUnavailable();
   const input = parseBody(request.body); onlyKeys(input, ['messages']);
   if (!Array.isArray(input.messages) || !input.messages.length || input.messages.length > 50) throw invalid('Provide 1–50 conversation turns.');
@@ -51,5 +66,5 @@ export async function assistantChat(request: ApiRequest, principal: Principal, p
     return {role: turn.role as 'user' | 'assistant', content: [{text: turn.text}]};
   });
   if (messages.at(-1)?.role !== 'user') throw invalid('The last turn must be from the user.');
-  return response(200, {data: await runAssistant(messages, provider, request.claims!, execute)});
+  return response(200, {data: await runAssistant(messages, provider, request.claims!, execute, entitlement instanceof AssistantBilling ? await entitlement.meter(principal) : undefined)});
 }

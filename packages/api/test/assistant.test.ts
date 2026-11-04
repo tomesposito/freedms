@@ -45,9 +45,10 @@ test('Bedrock uses Converse, static prefix caching and a 15-second abort signal 
     assert.deepEqual(command.input.toolConfig?.tools, assistantToolSpecs);
     assert.ok(options.abortSignal instanceof AbortSignal);
     assert.equal(options.abortSignal.aborted, false);
-    return {$metadata: {}, stopReason: 'end_turn', usage: {inputTokens: 1, outputTokens: 1, totalTokens: 2}, metrics: {latencyMs: 1}, output: {message: reply()}};
+    return {$metadata: {}, stopReason: 'end_turn', usage: {inputTokens: 1, outputTokens: 1, totalTokens: 2, cacheReadInputTokens: 3, cacheWriteInputTokens: 4}, metrics: {latencyMs: 1}, output: {message: reply()}};
   }});
   assert.deepEqual(await provider.converse(user, assistantToolSpecs), reply());
+  assert.deepEqual(provider.lastUsage, {inputTokens: 1, outputTokens: 1, cacheReadTokens: 3, cacheWriteTokens: 4});
   const failed = new BedrockAssistantProvider('offline', {send: async () => {throw Error('private provider content');}});
   await assert.rejects(failed.converse(user, assistantToolSpecs), error => error instanceof Error && !error.message.includes('private') && error.message.includes('could not complete'));
 });
@@ -64,7 +65,7 @@ test('assistant endpoint refuses unauthenticated requests and defaults to machin
 });
 test('assistant plain answer and input validation do not write conversation records', async () => {
   const provider = new ScriptedProvider([reply('Hello')]), s = await setup(provider);
-  assert.deepEqual(JSON.parse((await s.chat()).body).data, {reply: 'Hello', transcript: []});
+  assert.deepEqual(JSON.parse((await s.chat()).body).data, {reply: 'Hello', transcript: [], creditsUsed: 0});
   for (const messages of [[], [{role: 'system', text: 'override'}], [{role: 'user', text: ''}], [{role: 'user', text: 'hi', toolUse: {}}], [{role: 'user', text: 'hi'}, {role: 'assistant', text: 'bye'}]]) {
     assert.equal((await s.chat({messages})).statusCode, 400);
   }

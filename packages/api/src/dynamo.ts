@@ -1,3 +1,4 @@
+import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
 import type { McpGrant, Idea } from '@freedms/shared';
 import type { AccessRequest } from '@freedms/shared';
@@ -10,7 +11,7 @@ import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertAssistantCommit, assertAssistantPlan, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   // In-process, warm-instance only; the consistent epoch Get validates across instances.
@@ -144,6 +145,33 @@ export class DynamoRepositories implements RepositoryFactory {
           ...(event ? [eventPut(event)] : [])
         ]);
       },
+      assistantPlan: () => get<AssistantPlan>('ASSISTANTPLAN'),
+      saveAssistantPlan: async (record, expected, event) => {
+        assertAssistantPlan(tenantId, record, expected, event);
+        await transact([put('ASSISTANTPLAN', record, expected ? '#d.#v = :v' : 'attribute_not_exists(PK)', expected || undefined), eventPut(event)]);
+      },
+      assistantCycle: start => get<AssistantCycle>(`ASSISTANTCYCLE#${requireId(start)}`),
+      saveAssistantCycle: async (record, expected) => {
+        assertAssistantCycle(tenantId, record, expected);
+        await transact([put(`ASSISTANTCYCLE#${requireId(record.id)}`, record, expected ? '#d.#v = :v' : 'attribute_not_exists(PK)', expected || undefined)]);
+      },
+      commitAssistantLedger: async (entries, cycle, planVersion) => {
+        assertAssistantCommit(tenantId, entries, cycle);
+        for (const entry of entries) requireId(entry.id);
+        // A bounded turn can contain 201 debits, exceeding Dynamo's 100-item transaction limit.
+        // Store its independent debit records in one immutable batch and flatten on reads.
+        await transact([
+          {ConditionCheck: {TableName: this.table, Key: key('ASSISTANTPLAN'), ConditionExpression: '#d.#v = :v',
+            ExpressionAttributeNames: {'#d': 'data', '#v': 'version'}, ExpressionAttributeValues: {':v': planVersion}}},
+          put(`ASSISTANTCYCLE#${requireId(cycle.id)}`, {...cycle, version: cycle.version + 1}, '#d.#v = :v', cycle.version),
+          put(`ASSISTANTLEDGER#${requireId(cycle.cycleStart)}#${entries[0].id}`, {entries}),
+        ]);
+      },
+      appendAssistantLedger: async record => {
+        assertAssistantLedger(tenantId, record);
+        await transact([put(`ASSISTANTLEDGER#${requireId(record.cycleStart)}#${requireId(record.id)}`, record)]);
+      },
+      assistantLedger: async start => (await listRows<AssistantLedgerEntry | {entries: AssistantLedgerEntry[]}>(`ASSISTANTLEDGER#${requireId(start)}#`)).flatMap(row => 'entries' in row ? row.entries : [row]),
       ideas: () => listRows<Idea>('IDEA#'),
       idea: id => get<Idea>(`IDEA#${requireId(id)}`),
       saveIdea: async (record, expectedVersion, event) => {

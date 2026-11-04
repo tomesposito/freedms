@@ -1,3 +1,4 @@
+import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
 import type { McpGrant, Idea } from '@freedms/shared';
 import type { AccessRequest } from '@freedms/shared';
@@ -15,6 +16,14 @@ export interface LeadPage { leads: Lead[]; customers: Customer[]; total: number 
 export const OPERATOR_TENANT_ID = 'operator';
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
+  assistantPlan(): Promise<AssistantPlan | undefined>;
+  saveAssistantPlan(record: AssistantPlan, expectedVersion: number, event: OutboxEvent): Promise<void>;
+  assistantCycle(cycleStart: string): Promise<AssistantCycle | undefined>;
+  saveAssistantCycle(record: AssistantCycle, expectedVersion: number): Promise<void>;
+  /** Atomically publish a completed turn and advance the cycle version; stale snapshots fail closed. */
+  commitAssistantLedger(entries: AssistantLedgerEntry[], cycle: AssistantCycle, planVersion: number): Promise<void>;
+  appendAssistantLedger(entry: AssistantLedgerEntry): Promise<void>;
+  assistantLedger(cycleStart: string): Promise<AssistantLedgerEntry[]>;
   mcpRegistration(clientId: string): Promise<McpRegistration | undefined>;
   mcpRegistrations(): Promise<McpRegistration[]>;
   saveMcpRegistration(record: McpRegistration): Promise<void>;
@@ -365,4 +374,37 @@ export function assertMcpGrant(tenantId: string, record: McpGrant, expectedVersi
   if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid grant version');
   if ((!expectedVersion || record.revokedAt) && !event) throw new Error('Grant changes require an outbox event');
   if (event) assertEvent(record.id, record.version, event, expectedVersion ? 'mcp-grant.revoked' : 'mcp-grant.recorded');
+}
+
+function assertAssistantVersion(record: {version: number}, expected: number) {
+  if (!Number.isSafeInteger(expected) || expected < 0 || record.version !== expected + 1) throw new Error('Invalid assistant version');
+}
+export function assertAssistantPlan(tenantId: string, record: AssistantPlan, expected: number, event: OutboxEvent) {
+  assertScope(tenantId, record, event); assertAssistantVersion(record, expected);
+  assertEvent(record.id, record.version, event, 'assistant-plan.updated');
+  if (record.id !== 'assistant-plan' || !['assistant', 'assistant-pro', 'assistant-heavy'].includes(record.tier) ||
+      !['active', 'past_due', 'cancelled'].includes(record.status) || !Number.isFinite(Date.parse(record.cycleAnchor)) ||
+      typeof record.disabled !== 'boolean' || typeof record.overageEnabled !== 'boolean' ||
+      !Number.isSafeInteger(record.perRequestCreditCap) || record.perRequestCreditCap < 1) throw new Error('Invalid assistant plan');
+}
+export function assertAssistantCycle(tenantId: string, record: AssistantCycle, expected: number) {
+  assertScope(tenantId, record); assertAssistantVersion(record, expected);
+  if (record.id !== record.cycleStart || !Number.isFinite(Date.parse(record.cycleStart)) || !(record.cycleEnd > record.cycleStart) ||
+      [record.billedUserCount, record.allotmentCredits, record.topUpCredits].some(n => !Number.isSafeInteger(n) || n < 0)) throw new Error('Invalid assistant cycle');
+}
+export function assertAssistantLedger(tenantId: string, record: AssistantLedgerEntry) {
+  assertScope(tenantId, record);
+  const prices = {read: 1, write: 2, photo: 3, answer: 1};
+  if (prices[record.actionClass] !== record.credits || !record.action || !record.actorId ||
+      !Number.isFinite(Date.parse(record.cycleStart)) || !Number.isFinite(Date.parse(record.createdAt)) ||
+      [record.inputTokens, record.outputTokens, record.cacheReadTokens, record.cacheWriteTokens].some(n => !Number.isSafeInteger(n) || n < 0)) throw new Error('Invalid assistant ledger');
+}
+
+export function assertAssistantCommit(tenantId: string, entries: AssistantLedgerEntry[], cycle: AssistantCycle) {
+  assertScope(tenantId, cycle);
+  if (!entries.length || entries.length > 201 || new Set(entries.map(row => row.id)).size !== entries.length) throw new Error('Invalid assistant turn');
+  for (const entry of entries) {
+    assertAssistantLedger(tenantId, entry);
+    if (entry.cycleStart !== cycle.cycleStart) throw new Error('Invalid assistant turn cycle');
+  }
 }
