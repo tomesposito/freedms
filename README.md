@@ -61,6 +61,14 @@ it is not a live model response.
 Run `node --import tsx packages/web/test/assistant-tour.mjs` for the empty,
 conversation, paywall, disabled, exhausted, unconfigured, and mobile states.
 
+The assistant also knows the page you are on. On a vehicle, lead, or contact
+page the tray offers that record's skills as chips with the credit cost shown
+before anything runs: summaries of the record, and cleanup that proposes each
+change first — nothing writes until you accept it, and merge proposals are
+flagged for a person, never run.
+
+![AI assistant vehicle summary skill with cost chip and receipt](docs/screenshots/ai-assistant-skills.png)
+
 **AI assistant admin**
 
 Admins manage the plan, credits, usage, and dealership switch. Billing uses Stripe
