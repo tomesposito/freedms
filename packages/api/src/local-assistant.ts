@@ -16,7 +16,9 @@ export class LocalAssistantProvider implements AssistantProvider {
       } catch { summary = 'Inventory results were truncated.'; }
       return {role: 'assistant', content: [{text: `Local test double: ${summary}`}]};
     }
-    const text = last.map(block => block.text ?? '').join(' ');
+    // Context is a separate leading block; the offline double matches only the user's request.
+    const prompt = last.length > 1 && /^(Current context:|No context record is available\.)/.test(last[0].text ?? '') ? last.slice(1) : last;
+    const text = prompt.map(block => block.text ?? '').join(' ');
     if (/vehicle|\bvin\b|\bstock\b/i.test(text)) {
       const search = text.match(/\b[A-HJ-NPR-Z0-9]{17}\b/i)?.[0] ?? text.match(/\bstock\s+(?:number\s+)?[#:]?\s*([\w-]+)/i)?.[1];
       return {role: 'assistant', content: [{toolUse: {toolUseId: 'local-lookup', name: 'search_vehicles', input: {limit: 10, ...(search ? {search} : {})}}}]};

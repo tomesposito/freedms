@@ -1,3 +1,4 @@
+import { parseAssistantContext, assistantContextMessage } from './assistant-skills.js';
 import { AssistantBilling, ANSWER_PRICE, priceForTool, zeroUsage, type AssistantMeter } from './assistant-billing.js';
 import type { AuthClaims, Principal } from '@freedms/shared';
 import type { AssistantMessage, AssistantProvider, AssistantToolSpec } from './assistant-provider.js';
@@ -58,7 +59,7 @@ export async function assistantChat(request: ApiRequest, principal: Principal, p
   if (entitlement instanceof AssistantBilling) await entitlement.requireEntitlement(principal);
   else if (!await entitlement.check(principal)) throw new ApiError(402, 'ASSISTANT_PLAN_REQUIRED', 'An AI assistant plan is required.');
   if (!provider.configured) throw assistantUnavailable();
-  const input = parseBody(request.body); onlyKeys(input, ['messages']);
+  const input = parseBody(request.body); onlyKeys(input, ['messages', 'context']);
   if (!Array.isArray(input.messages) || !input.messages.length || input.messages.length > 50) throw invalid('Provide 1–50 conversation turns.');
   const messages: AssistantMessage[] = input.messages.map((raw, index) => {
     const turn = object(raw); onlyKeys(turn, ['role', 'text']);
@@ -66,5 +67,9 @@ export async function assistantChat(request: ApiRequest, principal: Principal, p
     return {role: turn.role as 'user' | 'assistant', content: [{text: turn.text}]};
   });
   if (messages.at(-1)?.role !== 'user') throw invalid('The last turn must be from the user.');
+  if (input.context !== undefined) {
+    const context = parseAssistantContext(input.context);
+    messages[0].content!.unshift({text: await assistantContextMessage(context, request.claims!, execute)});
+  }
   return response(200, {data: await runAssistant(messages, provider, request.claims!, execute, entitlement instanceof AssistantBilling ? await entitlement.meter(principal) : undefined)});
 }

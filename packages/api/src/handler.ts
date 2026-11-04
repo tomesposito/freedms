@@ -1,3 +1,4 @@
+import { assistantSkillsEndpoint } from './assistant-skills.js';
 import { billingAction, billingReturnUrl, stripeWebhook } from './assistant-stripe.js';
 import { UnconfiguredStripeBilling, type StripeBilling } from './stripe.js';
 import { AssistantBilling } from './assistant-billing.js';
@@ -119,6 +120,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         }
         if (path === '/assistant/pool' && method === 'GET') return response(200, {data: await billing.pool(principal)});
         if (path === '/assistant/usage' && method === 'GET') return response(200, {data: await billing.usage(principal)});
+        if ((path === '/assistant/skills' && method === 'GET') || (['/assistant/skills/run', '/assistant/skills/apply'].includes(path) && method === 'POST')) return assistantSkillsEndpoint(request, principal, options.assistantEntitlement ?? billing, handle, now());
         if (path === '/assistant/chat' && method === 'POST') return assistantChat(request, principal, options.assistantProvider ?? new UnconfiguredAssistantProvider(), options.assistantEntitlement ?? billing, handle);
         if (/^\/ai-connections(\/|$)/.test(path)) return await aiConnections(request, principal, repositories, now());
         if (/^\/(ideas|admin\/ideas)(\/|$)/.test(path)) return await ideas(request, principal, repositories, now(), options.pilotOperator);

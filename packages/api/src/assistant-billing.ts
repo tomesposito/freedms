@@ -155,12 +155,17 @@ export class AssistantBilling implements AssistantEntitlement {
   async usage(actor: Actor) {
     const pool = await this.pool(actor);
     const names = new Map((await this.repository.workspaceUsers()).map(row => [row.membership.userId, row.user.name]));
-    const byUser = new Map<string, {userId: string; name: string; lastUsedAt: string | null; actions: number; credits: number} & AssistantTokenUsage>();
+    const byUser = new Map<string, {userId: string; name: string; lastUsedAt: string | null; actions: number; credits: number; skills: Record<string, {actions: number; credits: number}>} & AssistantTokenUsage>();
     for (const row of await this.repository.assistantLedger(pool.cycleStart)) {
       if (actor.role !== 'admin' && row.actorId !== actor.userId) continue;
-      const sum = byUser.get(row.actorId) ?? {userId: row.actorId, name: names.get(row.actorId) ?? row.actorId, lastUsedAt: null, actions: 0, credits: 0, ...zeroUsage};
+      const sum = byUser.get(row.actorId) ?? {userId: row.actorId, name: names.get(row.actorId) ?? row.actorId, lastUsedAt: null, actions: 0, credits: 0, skills: {}, ...zeroUsage};
       if (!sum.lastUsedAt || row.createdAt > sum.lastUsedAt) sum.lastUsedAt = row.createdAt;
       sum.actions++; sum.credits += row.credits;
+      if (row.action.startsWith('skill:')) {
+        const skill = row.action.split(':')[1];
+        const usage = sum.skills[skill] ?? {actions: 0, credits: 0};
+        usage.actions++; usage.credits += row.credits; sum.skills[skill] = usage;
+      }
       for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) sum[key] += row[key];
       byUser.set(row.actorId, sum);
     }

@@ -65,3 +65,25 @@ test('past due has a distinct locked state and payment note', () => {
   assert.match(trayHtml('past-due'), /Account → AI assistant/);
   assert.match(trayHtml('past-due'), /The assistant is a paid add-on/);
 });
+
+test('assistant hash context mirrors detail and list routes without treating action pages as records', async () => {
+  const {assistantContextFromHash: context} = await import('../src/assistant.js');
+  for (const hash of ['#/', '#/vehicles', '#/vehicles/']) assert.deepEqual(context(hash), {surface: 'vehicles'});
+  assert.deepEqual(context('#/leads'), {surface: 'leads'});
+  for (const [route, surface] of [['vehicles', 'vehicle'], ['leads', 'lead'], ['deals', 'deal']]) assert.deepEqual(context(`#/${route}/record-104`), {surface, id: 'record-104'});
+  for (const hash of ['#/leads/new', '#/leads/equity', '#/deals/new/lead/abc', '#/deals/new/vehicle/abc', '#/deals/settings', '#/vehicles/abc/edit', '#/reports', '#/account']) assert.equal(context(hash), null, hash);
+});
+test('skills show prices; proposals escape all record data and only fixes have unchecked controls', async () => {
+  const {skillChipsHtml, proposalsHtml} = await import('../src/assistant.js');
+  assert.match(skillChipsHtml([{id: 'vehicle_summary', name: 'Vehicle summary', costCredits: 3, kind: 'summary'}]), /Vehicle summary · 3 credits/);
+  const html = proposalsHtml([
+    {proposalId: 'fix:<id>', kind: 'fix', label: '<name>', current: '<script>', proposed: '"<new>'},
+    {proposalId: 'duplicate', kind: 'duplicate', label: '<duplicate>'},
+    {proposalId: 'missing', kind: 'missing', label: '<missing>'},
+    {proposalId: 'stale', kind: 'stale', label: '<stale>'},
+  ], 0);
+  assert.equal((html.match(/type="checkbox"/g) ?? []).length, 1);
+  assert.doesNotMatch(html, / checked|<script>|<name>|<new>|<duplicate>|<missing>|<stale>/);
+  for (const text of ['&lt;script&gt;', '&lt;name&gt;', 'Merge proposal — handle by hand', 'data-assistant-apply disabled', '2 credits per customer', 'same read cost']) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(proposalsHtml([{proposalId: 'duplicate', kind: 'duplicate', label: 'Merge'}], 0), /checkbox|data-assistant-apply/);
+});

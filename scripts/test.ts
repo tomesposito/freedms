@@ -90,3 +90,4 @@ import "../packages/web/test/assistant.test.js";
 import '../packages/web/test/assistant-admin.test.js';
 
 import '../packages/api/test/stripe.test.js';
+import '../packages/api/test/assistant-skills.test.js';

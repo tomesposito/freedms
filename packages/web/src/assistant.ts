@@ -1,5 +1,25 @@
 import { escapeHtml as e } from './format';
 
+export interface AssistantContext {surface: 'vehicle' | 'contact' | 'lead' | 'deal' | 'vehicles' | 'leads' | 'contacts'; id?: string}
+export function assistantContextFromHash(hash: string): AssistantContext | null {
+  const path = hash.split('?')[0].replace(/\/$/, '');
+  if (['#', '#/vehicles'].includes(path)) return {surface: 'vehicles'};
+  if (path === '#/leads') return {surface: 'leads'};
+  const match = /^#\/(vehicles|leads|deals)\/([^/]+)$/.exec(path);
+  if (!match || ['new', 'settings', 'equity', 'reports'].includes(match[2])) return null;
+  return {surface: {vehicles: 'vehicle', leads: 'lead', deals: 'deal'}[match[1]] as AssistantContext['surface'], id: match[2]};
+}
+export interface AssistantSkill {id: string; name: string; costCredits: number; kind: 'summary' | 'cleanup'}
+export interface AssistantProposal {proposalId: string; kind: 'fix' | 'missing' | 'stale' | 'duplicate'; label: string; current?: string; proposed?: string; customerId?: string}
+export function skillChipsHtml(skills: AssistantSkill[], busy = false): string {
+  return `<div class="assistant-skills">${skills.map(s => `<button type="button" data-assistant-skill="${e(s.id)}" ${busy ? 'disabled' : ''}>${e(s.name)} · ${e(s.costCredits)} credits</button>`).join('')}</div>`;
+}
+export function proposalsHtml(proposals: AssistantProposal[], index: number, locked = false): string {
+  return `<div class="assistant-proposals" data-proposals="${index}">${proposals.map(p => p.kind === 'fix'
+    ? `<label><input type="checkbox" value="${e(p.proposalId)}" ${locked ? 'disabled' : ''}><span>${e(p.label)}: ${e(p.current)} → ${e(p.proposed)}</span></label>`
+    : `<p class="assistant-flag">${p.kind === 'duplicate' ? 'Merge proposal — handle by hand. ' : ''}${e(p.label)}</p>`).join('')}${proposals.some(p => p.kind === 'fix') ? '<p>Applying rechecks the scan (same read cost), then costs 2 credits per customer changed.</p><p class="assistant-apply-cost"></p><button type="button" data-assistant-apply disabled>Apply selected</button>' : ''}</div>`;
+}
+
 export interface AssistantPool {
   overageCapCredits?: number; overageCreditsUsed?: number;
   tier: string; status: 'active' | 'past_due' | 'cancelled'; disabled: boolean;
@@ -30,8 +50,8 @@ export function toolLabel(tool: string): string {
   return Object.hasOwn(names, tool) ? names[tool] : words.charAt(0).toUpperCase() + words.slice(1);
 }
 export function receipt(credits: number): string { return `This used ${credits} ${credits === 1 ? 'credit' : 'credits'}`; }
-interface Reply {reply: string; transcript: {tool: string; ok: boolean}[]; creditsUsed: number}
-export interface AssistantTurn {text: string; result?: Reply; error?: string}
+interface Reply {reply: string; transcript: {tool: string; ok: boolean}[]; creditsUsed: number; proposals?: AssistantProposal[]}
+export interface AssistantTurn {text: string; result?: Reply; error?: string; skill?: string; context?: AssistantContext; applied?: boolean}
 const locked: Record<AssistantState, string> = {
   ready: 'Ask, or tell it what to do…', loading: 'Checking assistant plan…', unavailable: 'Unable to check assistant plan — reopen to retry',
   'past-due': 'Locked — payment is past due',
@@ -52,10 +72,10 @@ function stateBody(state: AssistantState, pool?: AssistantPool): string {
     default: return `<p role="status">${e(locked[state])}</p>`;
   }
 }
-export function trayHtml(state: AssistantState, turns: AssistantTurn[] = [], pool?: AssistantPool, busy = false, draft = ''): string {
+export function trayHtml(state: AssistantState, turns: AssistantTurn[] = [], pool?: AssistantPool, busy = false, draft = '', skills: AssistantSkill[] = []): string {
   // Disabled means absent: the shell hides entirely (see paint), and there is no tray to render.
   if (state === 'disabled') return '';
-  return `<header class="assistant-header"><div><h2 id="assistant-title">AI assistant${state === 'exhausted' ? '' : `<span>${(state === 'paywall' || state === 'past-due') ? 'PAID' : 'BEDROCK'}</span>`}</h2><button type="button" id="assistant-close" aria-label="Close AI assistant">✕</button></div><p>Works in this workspace as you · ${(state === 'paywall' || state === 'past-due') ? 'billed to the dealership' : 'every action is recorded as yours'}</p></header><div class="assistant-body" aria-live="polite">${turns.map((turn, i) => `<div class="assistant-user">${e(turn.text)}</div>${turn.result ? `${turn.result.transcript.map(row => `<div class="assistant-tool ${row.ok ? 'done' : 'failed'}"><i aria-hidden="true"></i>${e(toolLabel(row.tool))}<small>${row.ok ? 'done' : 'failed'}</small></div>`).join('')}<div class="assistant-reply">${e(turn.result.reply)}</div><div class="assistant-receipt">${e(receipt(turn.result.creditsUsed))}</div>` : ''}${turn.error ? `<div class="assistant-error" role="alert">${e(turn.error)}${state === 'ready' && !busy ? `<button type="button" data-assistant-retry="${e(i)}">Retry</button>` : ''}</div>` : ''}`).join('')}${busy ? '<div class="assistant-working" role="status">● ● ● <span>Working…</span></div>' : ''}${state !== 'ready' || !turns.length ? stateBody(state, pool) : ''}</div><form class="assistant-composer"><textarea id="assistant-input" aria-label="Message AI assistant" rows="2" maxlength="16000" placeholder="${e(locked[state])}" ${state !== 'ready' || busy ? 'disabled' : ''}>${e(draft)}</textarea><button class="primary" type="submit" ${state !== 'ready' || busy ? 'disabled' : ''}>Send</button></form>`;
+  return `<header class="assistant-header"><div><h2 id="assistant-title">AI assistant${state === 'exhausted' ? '' : `<span>${(state === 'paywall' || state === 'past-due') ? 'PAID' : 'BEDROCK'}</span>`}</h2><button type="button" id="assistant-close" aria-label="Close AI assistant">✕</button></div><p>Works in this workspace as you · ${(state === 'paywall' || state === 'past-due') ? 'billed to the dealership' : 'every action is recorded as yours'}</p></header><div class="assistant-body" aria-live="polite">${state === 'ready' ? skillChipsHtml(skills, busy) : ''}${turns.map((turn, i) => `<div class="assistant-user">${e(turn.text)}</div>${turn.result ? `${turn.result.transcript.map(row => `<div class="assistant-tool ${row.ok ? 'done' : 'failed'}"><i aria-hidden="true"></i>${e(toolLabel(row.tool))}<small>${row.ok ? 'done' : 'failed'}</small></div>`).join('')}<div class="assistant-reply">${e(turn.result.reply)}</div><div class="assistant-receipt">${e(receipt(turn.result.creditsUsed))}</div>${turn.result.proposals ? proposalsHtml(turn.result.proposals, i, busy || state !== 'ready' || !!turn.applied) : ''}` : ''}${turn.error ? `<div class="assistant-error" role="alert">${e(turn.error)}${state === 'ready' && !busy && !turn.skill ? `<button type="button" data-assistant-retry="${e(i)}">Retry</button>` : ''}</div>` : ''}`).join('')}${busy ? '<div class="assistant-working" role="status">● ● ● <span>Working…</span></div>' : ''}${state !== 'ready' || !turns.length ? stateBody(state, pool) : ''}</div><form class="assistant-composer"><textarea id="assistant-input" aria-label="Message AI assistant" rows="2" maxlength="16000" placeholder="${e(locked[state])}" ${state !== 'ready' || busy ? 'disabled' : ''}>${e(draft)}</textarea><button class="primary" type="submit" ${state !== 'ready' || busy ? 'disabled' : ''}>Send</button></form>`;
 }
 
 type Api = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
@@ -63,8 +83,9 @@ type Api = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
 let owner = '', open = false, turns: AssistantTurn[] = [], pool: AssistantPool | undefined;
 let state: AssistantState = 'loading', unconfigured = false, busy = false, draft = '', generation = 0, poolRequest = 0;
 let root: HTMLElement, api: Api;
+let skills: AssistantSkill[] = [], skillContext: AssistantContext | null = null, skillsRequest = 0, skillsError = '';
 export function resetAssistant(): void {
-  generation++; poolRequest++; owner = ''; open = false; turns = []; pool = undefined;
+  generation++; poolRequest++; skillsRequest++; skills = []; skillContext = null; skillsError = ''; owner = ''; open = false; turns = []; pool = undefined;
   state = 'loading'; unconfigured = false; busy = false; draft = '';
   root?.querySelector<HTMLDialogElement>('dialog')?.close();
 }
@@ -79,7 +100,8 @@ function paint(focus = false): void {
   root.style.display = '';
   trigger.setAttribute('aria-expanded', String(open));
   trigger.innerHTML = `<span class="assistant-spark" aria-hidden="true">✦</span>AI assistant${pool ? `<span class="assistant-balance">${e(pool.balanceCredits.toLocaleString('en-US'))} credits</span>` : ''}`;
-  dialog.innerHTML = trayHtml(state, turns, pool, busy, draft);
+  dialog.innerHTML = trayHtml(state, turns, pool, busy, draft, skills);
+  if (skillsError) { const note = document.createElement('p'); note.className = 'assistant-error'; note.textContent = skillsError; dialog.querySelector('.assistant-body')?.prepend(note); }
   if (open && !dialog.open) dialog.showModal();
   if (!open && dialog.open) dialog.close();
   if (open && (focus || hadFocus)) {
@@ -93,6 +115,19 @@ function paint(focus = false): void {
   next.addEventListener('input', () => { draft = next.value; });
   next.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void send(draft); } });
   dialog.querySelectorAll<HTMLButtonElement>('[data-assistant-retry]').forEach(button => button.addEventListener('click', () => { void send(turns[Number(button.dataset.assistantRetry)].text); }));
+  dialog.querySelectorAll<HTMLButtonElement>('[data-assistant-skill]').forEach(button => button.addEventListener('click', () => { void runSkill(button.dataset.assistantSkill!); }));
+  dialog.querySelectorAll<HTMLElement>('[data-proposals]').forEach(list => {
+    const turn = turns[Number(list.dataset.proposals)];
+    const button = list.querySelector<HTMLButtonElement>('[data-assistant-apply]');
+    if (!button) return;
+    const selected = () => Array.from(list.querySelectorAll<HTMLInputElement>('input:checked')).map(input => input.value);
+    list.addEventListener('change', () => {
+      const ids = selected(); button.disabled = busy || state !== 'ready' || !!turn.applied || !ids.length;
+      const customers = new Set(turn.result!.proposals!.filter(p => ids.includes(p.proposalId)).map(p => p.customerId));
+      list.querySelector('.assistant-apply-cost')!.textContent = ids.length ? `Selected writes: ${customers.size * 2} credits, plus scan reads.` : '';
+    });
+    button.addEventListener('click', () => { void runSkill(turn.skill!, turn, selected()); });
+  });
   if (busy || turns.length) { const body = dialog.querySelector('.assistant-body')!; body.scrollTop = body.scrollHeight; }
 }
 function close(): void { open = false; paint(); root.querySelector<HTMLButtonElement>('#assistant-trigger')?.focus(); }
@@ -121,7 +156,8 @@ async function send(text: string): Promise<void> {
   messages.push({role: 'user', text});
   const turn: AssistantTurn = {text}; turns.push(turn); draft = ''; busy = true; paint();
   try {
-    const result = await api<Reply>('/assistant/chat', 'POST', {messages});
+    const context = assistantContextFromHash(location.hash);
+    const result = await api<Reply>('/assistant/chat', 'POST', {messages, ...(context ? {context} : {})});
     if (current !== generation) return;
     turn.result = result;
   } catch (error) {
@@ -135,15 +171,61 @@ async function send(text: string): Promise<void> {
     }
   }
 }
+async function loadSkills(): Promise<void> {
+  const request = ++skillsRequest, current = generation, hash = location.hash;
+  skills = []; skillsError = ''; skillContext = assistantContextFromHash(hash); paint();
+  if (state !== 'ready' || !skillContext) return;
+  try {
+    const query = new URLSearchParams({...skillContext});
+    const result = await api<{context: AssistantContext | null; skills: AssistantSkill[]}>(`/assistant/skills?${query}`);
+    if (current !== generation || request !== skillsRequest || hash !== location.hash) return;
+    skills = result.skills; skillContext = result.context;
+  } catch (error) {
+    if (current !== generation || request !== skillsRequest) return;
+    skillsError = error instanceof Error ? error.message : 'Could not load skills. Reopen the assistant to retry.';
+  }
+  paint();
+}
+async function runSkill(id: string, source?: AssistantTurn, accepted?: string[]): Promise<void> {
+  if (busy || state !== 'ready') return;
+  const skill = skills.find(s => s.id === id), context = source?.context ?? skillContext;
+  if (!context || (!source && (!skill || JSON.stringify(context) !== JSON.stringify(assistantContextFromHash(location.hash))))) return;
+  const current = generation;
+  const turn: AssistantTurn = {text: source ? 'Apply selected changes' : skill!.name, skill: id, context};
+  turns.push(turn); busy = true; paint();
+  try {
+    const result = await api<Reply & {applied?: string[]}>(`/assistant/skills/${source ? 'apply' : 'run'}`, 'POST', {skill: id, ...context, ...(source ? {accepted} : {})});
+    if (current !== generation) return;
+    turn.result = result;
+    if (source) source.applied = true;
+  } catch (error) {
+    if (current !== generation) return;
+    const next = chatErrorState(error as ApiError); if (next) state = next;
+    turn.error = error instanceof Error ? error.message : 'Could not complete this skill. Reopen the skill to review current data.';
+  } finally {
+    if (current === generation) { busy = false; paint(); await refreshPool(); }
+  }
+}
+async function openTray(skillId?: string): Promise<void> {
+  if (!root?.isConnected) return;
+  const current = generation, hash = location.hash;
+  skills = []; skillsError = ''; skillContext = assistantContextFromHash(hash);
+  open = true; paint(true); await refreshPool();
+  if (current !== generation || hash !== location.hash) return;
+  await loadSkills();
+  if (skillId && open && current === generation && hash === location.hash) await runSkill(skillId);
+}
+export function openAssistantSkill(skillId: string): void { void openTray(skillId); }
 export function mountAssistant(container: HTMLElement, request: Api, identity: string): void {
   if (owner !== identity) { resetAssistant(); owner = identity; }
+  skillsRequest++; skills = []; skillsError = ''; skillContext = null;
   api = request;
   root = document.createElement('div'); root.className = 'assistant-shell';
   root.innerHTML = '<button type="button" id="assistant-trigger" aria-controls="assistant-tray" aria-expanded="false"></button><dialog id="assistant-tray" aria-labelledby="assistant-title"></dialog>';
   container.append(root);
-  root.querySelector('#assistant-trigger')!.addEventListener('click', () => { open = true; paint(true); void refreshPool(); });
+  root.querySelector('#assistant-trigger')!.addEventListener('click', () => { void openTray(); });
   const dialog = root.querySelector('dialog')!;
   dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
   dialog.addEventListener('click', event => { if (event.target === dialog && (event.clientX < dialog.getBoundingClientRect().left || event.clientY > dialog.getBoundingClientRect().bottom)) close(); });
-  paint(open); void refreshPool();
+  paint(open); void refreshPool().then(() => { if (open) void loadSkills(); });
 }

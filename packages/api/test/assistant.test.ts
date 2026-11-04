@@ -163,3 +163,11 @@ test('local test double uses the shared inventory tool and identifies itself', a
   assert.deepEqual(result.transcript, [{tool: 'search_vehicles', ok: true}]); assert.match(result.reply, /Local test double: Found 1 vehicle/);
   assert.match(result.reply, /STOCK-98/);
 });
+
+test('local test double keeps context metadata out of keyword matching for the offline tour', async () => {
+  const s = await setup(new LocalAssistantProvider());
+  await s.handle({method: 'POST', path: '/vehicles', claims, body: JSON.stringify(vehicle)});
+  const chat = async (text: string) => JSON.parse((await s.chat({messages: [{role: 'user', text}], context: {surface: 'vehicles'}})).body).data;
+  assert.deepEqual((await chat('Hello')).transcript, []);
+  assert.deepEqual((await chat('Find stock STOCK-98')).transcript, [{tool: 'search_vehicles', ok: true}]);
+});
