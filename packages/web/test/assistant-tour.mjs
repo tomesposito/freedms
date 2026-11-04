@@ -104,9 +104,19 @@ try {
   assert.equal(await page.locator('.assistant-user').count(),0);
   await page.setViewportSize({width:1440,height:1000});
   for(const state of ['paywall','disabled','exhausted','unconfigured']) {
-    await setup(state); await goto(); await open();
+    await setup(state); await goto();
+    if(state==='disabled') {
+      // Since the #100 follow-up (184b71b) a disabled assistant is absent entirely:
+      // no trigger, no tray. The admin surface (assistant-admin-tour) is where it is turned back on.
+      await page.waitForTimeout(500);
+      assert.equal(await page.locator('#assistant-trigger').isVisible(),false);
+      assert.equal(await page.locator('#assistant-tray').isVisible(),false);
+      await shot(state);
+      continue;
+    }
+    await open();
     if(state==='unconfigured') {await input.fill('Hello');await input.press('Enter');}
-    const text={paywall:'The assistant is a paid add-on.',disabled:'The assistant is turned off.',exhausted:'You are out of credits.',unconfigured:"The AI assistant isn't set up."}[state];
+    const text={paywall:'The assistant is a paid add-on.',exhausted:'You are out of credits.',unconfigured:"The AI assistant isn't set up."}[state];
     await page.getByRole('heading',{name:text,exact:true}).waitFor();
     assert.equal(await input.isDisabled(),true);
     if(state==='paywall') assert.equal(await page.locator('.assistant-balance').count(),0);
@@ -133,8 +143,9 @@ try {
   const plan=await repo.assistantPlan();
   await repo.saveAssistantPlan({...plan,disabled:true,version:plan.version+1},plan.version,{id:'disable-after-open',tenantId:'mobile-demo',actorId:'admin',aggregateId:plan.id,aggregateVersion:plan.version+1,type:'assistant-plan.updated',occurredAt:now.toISOString(),deliveryStatus:'pending'});
   await input.fill('One more question'); await input.press('Enter');
-  await page.getByRole('heading',{name:'The assistant is turned off.',exact:true}).waitFor();
-  assert.equal(await input.isDisabled(),true);
+  // Since 184b71b the disabled state removes the assistant entirely instead of showing a locked tray.
+  await page.locator('#assistant-trigger').waitFor({state:'hidden'});
+  assert.equal(await page.locator('#assistant-tray').isVisible(),false);
   assert.equal(await page.locator('.assistant-receipt').count(),1);
   await setup('ready');
   const balance=await call('/assistant/pool'), cycle=await repo.assistantCycle(balance.cycleStart);
