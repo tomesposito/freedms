@@ -50,6 +50,17 @@ Real captures from the local app on the current build — the same screens the
 verification tours use. The sample dealership data is local-only; the app itself
 always starts empty.
 
+**AI assistant**
+
+The slide-in assistant shows tool results, replies, and per-turn credit receipts.
+This is a local test-double tour capture, using the real handler and credit ledger;
+it is not a live model response.
+
+![AI assistant conversation and credit receipt](docs/screenshots/ai-assistant.png)
+
+Run `node --import tsx packages/web/test/assistant-tour.mjs` for the empty,
+conversation, paywall, disabled, exhausted, unconfigured, and mobile states.
+
 **AI connections**
 
 Members can see and revoke their own AI app connections. Administrators can also

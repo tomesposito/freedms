@@ -1,3 +1,4 @@
+import { mountAssistant, resetAssistant } from './assistant';
 import { aiConnectionsRoute } from './ai-connections';
 import { ideasRoute, ideasQueueRoute } from './ideas';
 import { fetchWithRetry } from './api-client';
@@ -50,7 +51,7 @@ async function apiEnvelope<T>(path: string, method = 'GET', body?: unknown, retr
     if (localMode) sessionStorage.removeItem('freedms-token'); else clearSession();
   }
   if ('error' in result) {
-    throw Object.assign(new Error(result.error.message), {status: response.status});
+    throw Object.assign(new Error(result.error.message), {status: response.status, code: result.error.code});
   }
   if (!response.ok) throw new Error('The request could not be completed.');
   return result;
@@ -83,6 +84,7 @@ function shell(content: string): void {
       <div class="sidebar-footer">${sidebarUserHtml(session?.user)}${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button type="button" id="sidebar-toggle" class="quiet" aria-expanded="${!slim}" aria-label="${slim ? 'Expand sidebar' : 'Collapse sidebar'}" title="${slim ? 'Expand sidebar' : 'Collapse sidebar'}">${sidebarToggleIcon(slim)}</button><button id="signout" class="quiet" title="Sign out" aria-label="Sign out">${icon('<path d="M9 3H3v18h6m6-14 5 5-5 5m-7-5h12"/>')}<span class="nav-text">Sign out</span></button></div>
     </div>
   </aside><main class="app-main"><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main>`;
+  mountAssistant(app, api, `${session?.principal.tenantId}:${session?.principal.userId}`);
   app.querySelectorAll<HTMLAnchorElement>('.sidebar nav a').forEach(anchor => {
     if (anchor.getAttribute('href') === `#/${active}`) anchor.setAttribute('aria-current', 'page');
   });
@@ -107,7 +109,7 @@ function shell(content: string): void {
   sidebar.addEventListener('keydown', event => {
     if (event.key === 'Escape') { setMenu(false); toggle.focus(); }
   });
-  document.querySelector('#signout')?.addEventListener('click', () => { clearDrafts(); signOut(); });
+  document.querySelector('#signout')?.addEventListener('click', () => { clearDrafts(); resetAssistant(); signOut(); });
 }
 function badge(value: string): string { return `<span class="badge ${value.replace(' ', '-')}">${e(value)}</span>`; }
 async function login(): Promise<void> {
