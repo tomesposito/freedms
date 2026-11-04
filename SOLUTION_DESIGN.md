@@ -672,6 +672,37 @@ No silent fallback: if Bedrock errors or the model is unavailable, the
 turn fails clean and uncharged rather than a cheaper model answering
 instead.
 
+### D-14 — Command bar and explicit search/ask routing (2026-11-04)
+
+Approved by Tom on November 4. A 42px navy (`#0B1F2C`) bar spans the content
+column, starting at the expanded or slim sidebar edge. The full-height sidebar
+owns the brand; the desktop bar has no logo. Its left control is the sole
+sidebar collapse toggle; the footer toggle and floating assistant pill are retired.
+The centered prompt opens a keyboard-accessible palette. On phones the search
+and assistant icons join the existing branded Menu header, with no second bar;
+the credit chip is hidden there and the balance is available in the tray header.
+
+Typing debounces authenticated, tenant-scoped `GET /search?q=` reads, grouped as
+Vehicles / People / Deals (five each). Vehicle matching reuses list search; CRM
+matching lives in the repository layer. People link to their lead or deal, or to
+the existing Leads route's customer query view when no linked record exists.
+Search has the same active-admin/staff visibility as those list routes, makes no
+mutations, spends no credits, and adds no MCP tools.
+
+Routing never guesses: selecting a record navigates; selecting a priced page
+skill uses the existing surface/record context and skill execution; selecting
+“Ask the assistant” opens the existing tray and sends the query. The ask action
+is last for a nonempty query, including no-match queries. Empty queries show
+page skills and one hint, with no recent-search storage. Arrows select rows,
+Enter activates, Escape closes and returns focus. Ctrl/Cmd+K excludes form
+fields and contenteditable regions, except the palette input itself.
+
+The assistant cluster retains existing pool-state behavior, credit charging,
+and page entry points. D-12 remains binding: dealership-disabled removes the
+assistant cluster and tray, while the bar and record search remain available.
+The administrative switch remains solely in Account → AI assistant.
+
+
 ## 9. AI direction — less dealer work (owner, 2026-10-19)
 
 **Shipped:** The in-app AI assistant is live behind configuration through

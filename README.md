@@ -56,10 +56,16 @@ The slide-in assistant shows tool results, replies, and per-turn credit receipts
 This is a local test-double tour capture, using the real handler and credit ledger;
 it is not a live model response.
 
-![AI assistant conversation and credit receipt](docs/screenshots/ai-assistant.png)
+The content column's command bar combines record search and the assistant. Click
+its prompt or press Ctrl/Cmd+K outside a form field. Records navigate directly;
+priced page skills and the final “Ask the assistant” row run only when selected.
+On phones, search and assistant icons share the branded Menu header.
+
+![Command bar with AI assistant conversation and credit receipt](docs/screenshots/ai-assistant.png)
 
 Run `node --import tsx packages/web/test/assistant-tour.mjs` for the empty,
-conversation, paywall, disabled, exhausted, unconfigured, and mobile states.
+conversation, paywall, disabled, exhausted, unconfigured, and mobile states,
+plus palette routing, keyboard guards, and 320px/390px shell layouts.
 
 The assistant also knows the page you are on. On a vehicle, lead, or contact
 page the tray offers that record's skills as chips with the credit cost shown
@@ -140,6 +146,11 @@ records each page's document width. The tour also refreshes these four phone cap
 captures, including the service day picker. Browser checks remain separate from `npm test`, whose offline
 Node harness does not install or launch Playwright.
 
+`node --import tsx packages/web/test/onboarding-shell-tour.mjs` checks the J01/J02
+first-visitor and empty-workspace shell expectations.
+`node --import tsx packages/web/test/readme-shell-tour.mjs` refreshes the stateful
+import, statement, quick-entry, and welcome captures with offline fixtures.
+
 **Sign in** — in-app Cognito login, shown against the offline hosted-mode fixture.
 
 ![freeDMS sign-in](docs/screenshots/login.png)
@@ -179,11 +190,11 @@ the record on the Users screen.
 
 **Inventory** — vehicles in pages of 100, with mileage, aging, cost, and status.
 
-![Inventory list](docs/screenshots/inventory-list.png)
+![Inventory list with unified search and assistant command bar](docs/screenshots/inventory-list.png)
 
 **Slim sidebar** — an icon rail leaves more room for the workspace.
 
-![Slim sidebar](docs/screenshots/sidebar-slim.png)
+![Slim sidebar with content-aligned command bar](docs/screenshots/sidebar-slim.png)
 
 **Leads** — the pipeline in pages of 100, with assignment, stage history, and follow-ups.
 
@@ -372,6 +383,8 @@ is shown honestly.
 **AI quick entry** — type a sentence, get a draft vehicle to review. Nothing
 saves without confirmation.
 
+The two draft captures use explicit offline extraction fixtures; no hosted model is called.
+
 ![AI quick entry draft](docs/screenshots/quick-entry-draft.png)
 
 **Photo intake** — a window-sticker or VIN-plate photo becomes the same kind
@@ -437,7 +450,7 @@ build.
 **Digital retailing — dealer side** — the worksheet's share panel with the
 buyer's responses on the deal; the link was revoked after they replied.
 
-![Share panel with buyer responses](docs/screenshots/deal-share.png)
+![Buyer share panel in the command-bar shell](docs/screenshots/deal-share.png)
 
 ## License
 

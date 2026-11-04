@@ -1,3 +1,4 @@
+import { mountCommandBar, commandBarHtml } from './command-bar';
 import { assistantAdminRoute } from './assistant-admin';
 import { mountAssistant, resetAssistant, openAssistantSkill } from './assistant';
 import { aiConnectionsRoute } from './ai-connections';
@@ -72,7 +73,7 @@ async function download(path: string, filename: string): Promise<void> {
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : 'Something went wrong. Please retry.'; }
 function flash(error: unknown): void { const el = document.querySelector<HTMLElement>('#message')!; el.textContent = errorMessage(error); el.hidden = false; el.focus(); }
 function shell(content: string): void {
-  const section = location.hash.replace(/^#\//, '').split('/')[0];
+  const section = location.hash.split('?')[0].replace(/^#\//, '').split('/')[0];
   const active = ['', 'new', 'import', 'vehicles'].includes(section) ? '' : section;
   const slim = readSidebarPreference();
   app.innerHTML = `<aside class="sidebar${slim ? ' is-slim' : ''}">
@@ -82,10 +83,11 @@ function shell(content: string): void {
       <nav aria-label="Main navigation">
         ${sidebarNavigation(session?.principal.role === 'admin', session?.canManagePilotRequests)}
       </nav>
-      <div class="sidebar-footer">${sidebarUserHtml(session?.user)}${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button type="button" id="sidebar-toggle" class="quiet" aria-expanded="${!slim}" aria-label="${slim ? 'Expand sidebar' : 'Collapse sidebar'}" title="${slim ? 'Expand sidebar' : 'Collapse sidebar'}">${sidebarToggleIcon(slim)}</button><button id="signout" class="quiet" title="Sign out" aria-label="Sign out">${icon('<path d="M9 3H3v18h6m6-14 5 5-5 5m-7-5h12"/>')}<span class="nav-text">Sign out</span></button></div>
+      <div class="sidebar-footer">${sidebarUserHtml(session?.user)}${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet" title="Sign out" aria-label="Sign out">${icon('<path d="M9 3H3v18h6m6-14 5 5-5 5m-7-5h12"/>')}<span class="nav-text">Sign out</span></button></div>
     </div>
-  </aside><main class="app-main"><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main>`;
-  mountAssistant(app, api, `${session?.principal.tenantId}:${session?.principal.userId}`);
+  </aside>${commandBarHtml(`<button type="button" id="sidebar-toggle" class="quiet" aria-expanded="${!slim}" aria-label="${slim ? 'Expand sidebar' : 'Collapse sidebar'}" title="${slim ? 'Expand sidebar' : 'Collapse sidebar'}">${sidebarToggleIcon(slim)}</button>`)}<main class="app-main"><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main>`;
+  mountCommandBar(app, api);
+  mountAssistant(app.querySelector<HTMLElement>('.command-assistant')!, api, `${session?.principal.tenantId}:${session?.principal.userId}`);
   app.querySelectorAll<HTMLAnchorElement>('.sidebar nav a').forEach(anchor => {
     if (anchor.getAttribute('href') === `#/${active}`) anchor.setAttribute('aria-current', 'page');
   });
@@ -255,7 +257,7 @@ async function route(): Promise<void> {
   if (location.hash.startsWith('#/share/')) { ++routeSequence; await buyerRoute(location.hash.slice(8)); return; }
   if (!session) { await start(); return; } const sequence = ++routeSequence;
   try {
-    const parts = location.hash.replace(/^#\//, '').split('/');
+    const parts = location.hash.split('?')[0].replace(/^#\//, '').split('/');
     if (parts[0] === 'welcome') {
       const {tenantId, userId, role} = session.principal;
       if (welcomeDismissed(localStorage, tenantId, userId)) { location.hash = '#/'; return; }

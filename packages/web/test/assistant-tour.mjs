@@ -65,8 +65,48 @@ try {
   const shot=async name=>{await page.evaluate(async()=>{await Promise.all(document.getAnimations().map(animation=>animation.finished.catch(()=>{})));});await page.screenshot({path:`${out}/${name}.png`,fullPage:false});};
   const input=page.locator('#assistant-input');
   await goto();
+  // D-14: expanded/slim geometry and guarded, explicit command routing.
+  const bar = page.locator('.command-bar'), prompt = page.locator('#command-prompt'), palette = page.locator('#command-palette');
+  assert.equal(await bar.evaluate(el => el.getBoundingClientRect().height), 42);
+  assert.equal(await bar.locator('img').count(), 0);
+  assert.equal(await page.locator('.sidebar-footer #sidebar-toggle').count(), 0);
+  const aligned = async () => assert.equal(await bar.evaluate(el => el.getBoundingClientRect().left), await page.locator('.sidebar').evaluate(el => el.getBoundingClientRect().right));
+  await aligned();
+  await page.locator('#sidebar-toggle').click(); await aligned(); await page.locator('#sidebar-toggle').click();
+  for (const selector of ['#filters input', '#filters select']) {
+    await page.locator(selector).focus(); await page.keyboard.press('Control+k'); assert.equal(await palette.isVisible(), false);
+  }
+  await page.evaluate(() => { const textarea=document.createElement('textarea'); textarea.id='guard-textarea'; document.querySelector('main').append(textarea); const editable=document.createElement('div'); editable.id='guard-editable'; editable.contentEditable='true'; editable.innerHTML='<span>Editing</span>'; document.querySelector('main').append(editable); });
+  for (const selector of ['#guard-textarea', '#guard-editable']) { await page.locator(selector).focus(); await page.keyboard.press('Meta+k'); assert.equal(await palette.isVisible(), false); }
+  await page.getByRole('link',{name:'Inventory',exact:true}).focus(); await page.keyboard.press('Control+k');
+  assert.equal(await palette.isVisible(),true); await page.keyboard.press('Escape');
+  await prompt.click(); assert.equal(await page.locator('#command-input').evaluate(el=>el===document.activeElement),true); await page.locator('#command-input').fill('STOCK-100');
+  await page.locator('#command-results [data-href]').waitFor();
+  await page.locator('#command-input').press('ArrowDown');
+  assert.equal(await page.locator('#command-results [aria-selected=true]').getAttribute('data-ask'),'');
+  await page.locator('#command-input').press('ArrowUp');
+  const beforeSearch = (await call('/assistant/pool')).balanceCredits;
+  await page.locator('#command-input').press('Enter'); await page.getByRole('link',{name:'Edit vehicle',exact:true}).waitFor();
+  assert.equal((await call('/assistant/pool')).balanceCredits, beforeSearch);
+  await page.locator('#command-prompt').focus();
+  await page.locator('#command-results [data-skill="vehicle_summary"]').waitFor();
+  assert.match(await page.locator('#command-results [data-skill="vehicle_summary"]').textContent(), /3 credits/);
+  await shot('palette');
+  await page.locator('#command-results [data-skill="vehicle_summary"]').click();
+  await page.locator('.assistant-receipt').waitFor();
+  await shot('skills'); await copyFile(`${out}/skills.png`, 'docs/screenshots/ai-assistant-skills.png');
+  await page.keyboard.press('Escape');
+  await page.locator('#command-prompt').click(); await page.locator('#command-input').fill('Find stock STOCK-100');
+  await page.locator('#command-results [data-ask]').click();
+  await page.locator('.assistant-user').filter({hasText:'Find stock STOCK-100'}).waitFor();
+  await page.locator('.assistant-receipt').nth(1).waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('#command-prompt').click(); await page.locator('#command-input').press('Escape');
+  assert.equal(await page.locator('#command-prompt').evaluate(el=>el===document.activeElement),true);
+  assert.equal(await page.locator('#command-palette').isVisible(),false);
+  await goto();
   const initial=(await call('/assistant/pool')).balanceCredits;
-  await page.locator('#assistant-trigger').filter({hasText:`${initial} credits`}).waitFor();
+  await page.locator('#assistant-credit').filter({hasText:`${initial} credits`}).waitFor();
   assert.equal(await page.locator('#assistant-tray').isVisible(),false);
   await shot('closed');
   await page.locator('#sidebar-toggle').click();
@@ -87,7 +127,7 @@ try {
   const used=initial-(await call('/assistant/pool')).balanceCredits;
   assert.ok(used>0);
   assert.equal(await page.locator('.assistant-receipt').textContent(),`This used ${used} ${used===1?'credit':'credits'}`);
-  await page.locator('#assistant-trigger').filter({hasText:`${initial-used} credits`}).waitFor({state:'attached'});
+  await page.locator('#assistant-credit').filter({hasText:`${initial-used} credits`}).waitFor({state:'attached'});
   await shot('conversation'); await copyFile(`${out}/conversation.png`,'docs/screenshots/ai-assistant.png');
   // A route render restores the open tray and its in-memory conversation.
   await page.evaluate(()=>{location.hash='#/leads';});
@@ -98,8 +138,19 @@ try {
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   assert.ok(Math.abs(await page.locator('#assistant-tray').evaluate(el=>el.getBoundingClientRect().width)-390)<1);
   await shot('mobile');
+  assert.equal(await page.locator('.sidebar-heading .command-bar').count(), 1);
+  assert.equal(await page.locator('.command-bar .assistant-balance').isVisible(), false);
   await page.keyboard.press('Escape');
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  assert.ok(await page.locator('.sidebar .brand-name').evaluate(el=>el.getBoundingClientRect().width>=100 && el.getBoundingClientRect().height>20));
+  await shot('mobile-closed');
+  await page.locator('#command-prompt').click();
+  assert.equal(await page.locator('#command-palette').evaluate(el=>el.getBoundingClientRect().width),390);
+  await page.locator('#command-input').fill('Honda'); await page.locator('#command-results [data-href]').first().waitFor();
+  await shot('mobile-palette'); await page.keyboard.press('Escape');
+  await page.setViewportSize({width:320,height:844});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await page.setViewportSize({width:390,height:844});
   await page.reload({waitUntil:'networkidle'}); await open();
   assert.equal(await page.locator('.assistant-user').count(),0);
   await page.setViewportSize({width:1440,height:1000});
@@ -111,6 +162,11 @@ try {
       await page.waitForTimeout(500);
       assert.equal(await page.locator('#assistant-trigger').isVisible(),false);
       assert.equal(await page.locator('#assistant-tray').isVisible(),false);
+      assert.equal(await page.locator('#command-prompt').isVisible(), true);
+      await page.locator('#command-prompt').click(); await page.locator('#command-input').fill('Honda');
+      await page.locator('#command-results [data-href]').first().waitFor();
+      assert.equal(await page.locator('#command-results [data-skill]').count(),0);
+      await page.keyboard.press('Escape');
       await shot(state);
       continue;
     }
@@ -154,6 +210,11 @@ try {
   await page.getByRole('heading',{name:'You are out of credits.',exact:true}).waitFor();
   assert.equal(await input.isDisabled(),true);
   assert.equal(await page.locator('.assistant-receipt').textContent(),'This used 1 credit');
+  await page.keyboard.press('Escape');
+  await page.evaluate(()=>{location.hash='#/join';});
+  await page.locator('#join').waitFor();
+  await page.setViewportSize({width:390,height:844});
+  await page.waitForTimeout(100);
   assert.deepEqual(errors,[]);
-  console.log('PASS: all eight captures, real tool/receipt/balance, locked states, provider retry, route memory, reload reset, focus, slim sidebar and 390px open/closed layout.');
+  console.log('PASS: command palette, all assistant captures, real tool/receipt/balance, locked states, provider retry, route memory, reload reset, focus, slim sidebar and 390px open/closed layout.');
 } finally {await browser?.close();vite.kill();}

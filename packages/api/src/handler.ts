@@ -1,3 +1,4 @@
+import { searchRecords } from './repository.js';
 import { assistantSkillsEndpoint } from './assistant-skills.js';
 import { billingAction, billingReturnUrl, stripeWebhook } from './assistant-stripe.js';
 import { UnconfiguredStripeBilling, type StripeBilling } from './stripe.js';
@@ -108,6 +109,10 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       }}) : repository;
 
       const execute = async (): Promise<ApiResponse> => {
+        if (path === '/search' && method === 'GET') {
+          onlyKeys(request.query ?? {}, ['q']);
+          return response(200, {data: await searchRecords(repository, text(request.query?.q ?? '', 'Search', 200, true))});
+        }
         const billing = new AssistantBilling(repository, now, options.assistantSeedLocalPlan === true && !options.hosted);
         if (/^\/assistant\/admin\/billing\/(checkout|topup|portal)$/.test(path) && method === 'POST') {
           if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can manage billing.');

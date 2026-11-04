@@ -91,3 +91,6 @@ import '../packages/web/test/assistant-admin.test.js';
 
 import '../packages/api/test/stripe.test.js';
 import '../packages/api/test/assistant-skills.test.js';
+
+import '../packages/api/test/search.test.js';
+import '../packages/web/test/command-bar.test.js';

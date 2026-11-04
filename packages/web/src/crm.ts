@@ -32,6 +32,13 @@ let filters = {search: '', stage: '', assignee: ''}; let warning = ''; let board
 export async function crmRoute(parts: string[], ui: UI): Promise<void> {
   ui.shell('<p>Loading leads…</p>');
   const users = await ui.api<User[]>('/users'); if (!ui.current()) return;
+  const customerId = new URLSearchParams(location.hash.split('?')[1]).get('customerId');
+  if (!parts[1] && customerId) {
+    const customer = await ui.api<Customer>(`/customers/${encodeURIComponent(customerId)}`); if (!ui.current()) return;
+    ui.shell(`<a class="back" href="#/leads">← Leads</a><h1>${e(customer.name)}</h1><form id="customer-edit"><section class="card"><h2>Customer</h2>${customerFields(customer)}</section><button type="submit">Save customer</button></form>`);
+    bind(ui, 'customer-edit', async data => { await ui.api(`/customers/${encodeURIComponent(customerId)}`, 'PUT', {...customerData(data), version: customer.version}); if (ui.current()) ui.refresh(); });
+    return;
+  }
   if (parts[1] === 'equity') { await equityMining(ui); return; }
   if (parts[1] === 'new') {
     const [customers, vehicles] = await Promise.all([ui.api<Customer[]>('/customers'), fetchAllVehicles<VehicleView>(ui.api)]); if (!ui.current()) return;

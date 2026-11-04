@@ -4,7 +4,10 @@ export interface AssistantContext {surface: 'vehicle' | 'contact' | 'lead' | 'de
 export function assistantContextFromHash(hash: string): AssistantContext | null {
   const path = hash.split('?')[0].replace(/\/$/, '');
   if (['#', '#/vehicles'].includes(path)) return {surface: 'vehicles'};
-  if (path === '#/leads') return {surface: 'leads'};
+  if (path === '#/leads') {
+    const id = new URLSearchParams(hash.split('?')[1]).get('customerId');
+    return id ? {surface: 'contact', id} : {surface: 'leads'};
+  }
   const match = /^#\/(vehicles|leads|deals)\/([^/]+)$/.exec(path);
   if (!match || ['new', 'settings', 'equity', 'reports'].includes(match[2])) return null;
   return {surface: {vehicles: 'vehicle', leads: 'lead', deals: 'deal'}[match[1]] as AssistantContext['surface'], id: match[2]};
@@ -75,14 +78,14 @@ function stateBody(state: AssistantState, pool?: AssistantPool): string {
 export function trayHtml(state: AssistantState, turns: AssistantTurn[] = [], pool?: AssistantPool, busy = false, draft = '', skills: AssistantSkill[] = []): string {
   // Disabled means absent: the shell hides entirely (see paint), and there is no tray to render.
   if (state === 'disabled') return '';
-  return `<header class="assistant-header"><div><h2 id="assistant-title">AI assistant${state === 'exhausted' ? '' : `<span>${(state === 'paywall' || state === 'past-due') ? 'PAID' : 'BEDROCK'}</span>`}</h2><button type="button" id="assistant-close" aria-label="Close AI assistant">✕</button></div><p>Works in this workspace as you · ${(state === 'paywall' || state === 'past-due') ? 'billed to the dealership' : 'every action is recorded as yours'}</p></header><div class="assistant-body" aria-live="polite">${state === 'ready' ? skillChipsHtml(skills, busy) : ''}${turns.map((turn, i) => `<div class="assistant-user">${e(turn.text)}</div>${turn.result ? `${turn.result.transcript.map(row => `<div class="assistant-tool ${row.ok ? 'done' : 'failed'}"><i aria-hidden="true"></i>${e(toolLabel(row.tool))}<small>${row.ok ? 'done' : 'failed'}</small></div>`).join('')}<div class="assistant-reply">${e(turn.result.reply)}</div><div class="assistant-receipt">${e(receipt(turn.result.creditsUsed))}</div>${turn.result.proposals ? proposalsHtml(turn.result.proposals, i, busy || state !== 'ready' || !!turn.applied) : ''}` : ''}${turn.error ? `<div class="assistant-error" role="alert">${e(turn.error)}${state === 'ready' && !busy && !turn.skill ? `<button type="button" data-assistant-retry="${e(i)}">Retry</button>` : ''}</div>` : ''}`).join('')}${busy ? '<div class="assistant-working" role="status">● ● ● <span>Working…</span></div>' : ''}${state !== 'ready' || !turns.length ? stateBody(state, pool) : ''}</div><form class="assistant-composer"><textarea id="assistant-input" aria-label="Message AI assistant" rows="2" maxlength="16000" placeholder="${e(locked[state])}" ${state !== 'ready' || busy ? 'disabled' : ''}>${e(draft)}</textarea><button class="primary" type="submit" ${state !== 'ready' || busy ? 'disabled' : ''}>Send</button></form>`;
+  return `<header class="assistant-header"><div><h2 id="assistant-title">AI assistant${state === 'exhausted' ? '' : `<span>${(state === 'paywall' || state === 'past-due') ? 'PAID' : 'BEDROCK'}</span>`}</h2><button type="button" id="assistant-close" aria-label="Close AI assistant">✕</button></div><p>Works in this workspace as you · ${(state === 'paywall' || state === 'past-due') ? 'billed to the dealership' : 'every action is recorded as yours'}</p>${pool ? `<p class="assistant-header-balance">${e(pool.balanceCredits.toLocaleString('en-US'))} credits</p>` : ''}</header><div class="assistant-body" aria-live="polite">${state === 'ready' ? skillChipsHtml(skills, busy) : ''}${turns.map((turn, i) => `<div class="assistant-user">${e(turn.text)}</div>${turn.result ? `${turn.result.transcript.map(row => `<div class="assistant-tool ${row.ok ? 'done' : 'failed'}"><i aria-hidden="true"></i>${e(toolLabel(row.tool))}<small>${row.ok ? 'done' : 'failed'}</small></div>`).join('')}<div class="assistant-reply">${e(turn.result.reply)}</div><div class="assistant-receipt">${e(receipt(turn.result.creditsUsed))}</div>${turn.result.proposals ? proposalsHtml(turn.result.proposals, i, busy || state !== 'ready' || !!turn.applied) : ''}` : ''}${turn.error ? `<div class="assistant-error" role="alert">${e(turn.error)}${state === 'ready' && !busy && !turn.skill ? `<button type="button" data-assistant-retry="${e(i)}">Retry</button>` : ''}</div>` : ''}`).join('')}${busy ? '<div class="assistant-working" role="status">● ● ● <span>Working…</span></div>' : ''}${state !== 'ready' || !turns.length ? stateBody(state, pool) : ''}</div><form class="assistant-composer"><textarea id="assistant-input" aria-label="Message AI assistant" rows="2" maxlength="16000" placeholder="${e(locked[state])}" ${state !== 'ready' || busy ? 'disabled' : ''}>${e(draft)}</textarea><button class="primary" type="submit" ${state !== 'ready' || busy ? 'disabled' : ''}>Send</button></form>`;
 }
 
 type Api = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
 // Memory only: neither messages nor drafts are written to browser storage or logs.
 let owner = '', open = false, turns: AssistantTurn[] = [], pool: AssistantPool | undefined;
 let state: AssistantState = 'loading', unconfigured = false, busy = false, draft = '', generation = 0, poolRequest = 0;
-let root: HTMLElement, api: Api;
+let root: HTMLElement, cluster: HTMLElement, trigger: HTMLButtonElement, api: Api;
 let skills: AssistantSkill[] = [], skillContext: AssistantContext | null = null, skillsRequest = 0, skillsError = '';
 export function resetAssistant(): void {
   generation++; poolRequest++; skillsRequest++; skills = []; skillContext = null; skillsError = ''; owner = ''; open = false; turns = []; pool = undefined;
@@ -95,11 +98,11 @@ function paint(focus = false): void {
   const hadFocus = document.activeElement === input;
   const selection = input?.selectionStart;
   const dialog = root.querySelector<HTMLDialogElement>('dialog')!;
-  const trigger = root.querySelector<HTMLButtonElement>('#assistant-trigger')!;
-  if (state === 'disabled') { open = false; if (dialog.open) dialog.close(); root.style.display = 'none'; return; }
-  root.style.display = '';
+  if (state === 'disabled') { open = false; if (dialog.open) dialog.close(); root.style.display = 'none'; cluster.style.display = 'none'; return; }
+  root.style.display = ''; cluster.style.display = '';
   trigger.setAttribute('aria-expanded', String(open));
-  trigger.innerHTML = `<span class="assistant-spark" aria-hidden="true">✦</span>AI assistant${pool ? `<span class="assistant-balance">${e(pool.balanceCredits.toLocaleString('en-US'))} credits</span>` : ''}`;
+  trigger.innerHTML = '<span class="assistant-spark" aria-hidden="true">✦</span><span class="assistant-label">AI assistant</span>';
+  cluster.querySelector('#assistant-credit')!.innerHTML = pool ? `<span class="assistant-balance">${e(pool.balanceCredits.toLocaleString('en-US'))} credits</span>` : '';
   dialog.innerHTML = trayHtml(state, turns, pool, busy, draft, skills);
   if (skillsError) { const note = document.createElement('p'); note.className = 'assistant-error'; note.textContent = skillsError; dialog.querySelector('.assistant-body')?.prepend(note); }
   if (open && !dialog.open) dialog.showModal();
@@ -130,7 +133,7 @@ function paint(focus = false): void {
   });
   if (busy || turns.length) { const body = dialog.querySelector('.assistant-body')!; body.scrollTop = body.scrollHeight; }
 }
-function close(): void { open = false; paint(); root.querySelector<HTMLButtonElement>('#assistant-trigger')?.focus(); }
+function close(): void { open = false; paint(); trigger?.focus(); }
 async function refreshPool(): Promise<void> {
   const request = ++poolRequest, current = generation;
   const focusComposer = open && state === 'loading';
@@ -215,15 +218,29 @@ async function openTray(skillId?: string): Promise<void> {
   await loadSkills();
   if (skillId && open && current === generation && hash === location.hash) await runSkill(skillId);
 }
+export async function askAssistant(text: string): Promise<void> {
+  const current = generation, hash = location.hash;
+  await openTray();
+  if (current === generation && hash === location.hash && open) { draft = text; await send(text); paint(true); }
+}
+export async function commandSkills(): Promise<AssistantSkill[]> {
+  await refreshPool();
+  await loadSkills();
+  return state === 'ready' ? skills : [];
+}
 export function openAssistantSkill(skillId: string): void { void openTray(skillId); }
 export function mountAssistant(container: HTMLElement, request: Api, identity: string): void {
   if (owner !== identity) { resetAssistant(); owner = identity; }
   skillsRequest++; skills = []; skillsError = ''; skillContext = null;
   api = request;
   root = document.createElement('div'); root.className = 'assistant-shell';
-  root.innerHTML = '<button type="button" id="assistant-trigger" aria-controls="assistant-tray" aria-expanded="false"></button><dialog id="assistant-tray" aria-labelledby="assistant-title"></dialog>';
-  container.append(root);
-  root.querySelector('#assistant-trigger')!.addEventListener('click', () => { void openTray(); });
+  root.innerHTML = '<dialog id="assistant-tray" aria-labelledby="assistant-title"></dialog>';
+  // Keep the modal outside responsive chrome: moving an open dialog exits the top layer.
+  cluster = container;
+  cluster.innerHTML = '<span id="assistant-credit"></span><button type="button" id="assistant-trigger" aria-label="AI assistant" aria-controls="assistant-tray" aria-expanded="false"></button>';
+  (container.closest('#app') ?? container).append(root);
+  trigger = cluster.querySelector<HTMLButtonElement>('#assistant-trigger')!;
+  trigger.addEventListener('click', () => { if (open) close(); else void openTray(); });
   const dialog = root.querySelector('dialog')!;
   dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
   dialog.addEventListener('click', event => { if (event.target === dialog && (event.clientX < dialog.getBoundingClientRect().left || event.clientY > dialog.getBoundingClientRect().bottom)) close(); });

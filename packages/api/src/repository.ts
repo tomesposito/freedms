@@ -422,3 +422,28 @@ export function assertBillingLink(tenantId: string, record: AssistantBillingLink
   assertEvent('assistant-billing', 1, event, 'assistant-billing.updated');
   if (record.version !== 1 || !/^[a-zA-Z0-9_-]{1,128}$/.test(record.customerId)) throw new Error('Invalid billing link');
 }
+
+/** Read-only command search, using the same tenant repository as list routes. */
+export async function searchRecords(repo: TenantRepository, query: string) {
+  const empty = {vehicles: [], people: [], deals: []};
+  const search = query.trim().toLowerCase();
+  if (!search) return empty;
+  const [vehicles, customers, leads, deals, stock] = await Promise.all([
+    repo.listPage({search, limit: 5, offset: 0}), repo.crmList('customer'),
+    repo.crmList('lead'), repo.crmList('deal'), repo.list({}),
+  ]);
+  const people = customers.filter(c => [c.name, c.phone, c.email].join(' ').toLowerCase().includes(search));
+  const customerMap = new Map(customers.map(c => [c.id, c]));
+  const vehicleMap = new Map(stock.map(v => [v.id, v]));
+  return {
+    vehicles: vehicles.vehicles.map(v => ({id: v.id, title: `${v.year} ${v.make} ${v.model}`, meta: `Stock ${v.stockNumber} · ${v.status}`, href: `#/vehicles/${v.id}`})),
+    people: people.slice(0, 5).map(c => {
+      const lead = leads.find(l => l.customerId === c.id);
+      const deal = deals.find(d => d.customerId === c.id);
+      return {id: c.id, title: c.name, meta: [c.phone, c.email].filter(Boolean).join(' · '),
+        href: lead ? `#/leads/${lead.id}` : deal ? `#/deals/${deal.id}` : `#/leads?customerId=${encodeURIComponent(c.id)}`};
+    }),
+    deals: deals.filter(d => [customerMap.get(d.customerId)?.name, vehicleMap.get(d.vehicleId)?.stockNumber].join(' ').toLowerCase().includes(search)).slice(0, 5)
+      .map(d => ({id: d.id, title: customerMap.get(d.customerId)?.name ?? 'Customer unavailable', meta: `${vehicleMap.get(d.vehicleId)?.stockNumber ?? 'Vehicle unavailable'} · ${d.status}`, href: `#/deals/${d.id}`})),
+  };
+}
