@@ -648,9 +648,12 @@ start, and works only when all of these hold: the deployment has a model
 configured (D-13); the organization has an active plan with credits
 remaining or admin-enabled overage (D-7); the workspace admin has not
 disabled it. A workspace admin setting disables the assistant for the
-whole dealership, immediately, stopping usage and charging there. Each
-unavailable state has its own plain tray message: not set up, no plan
-(paywall), out of credits, turned off by your admin. Disabling is not
+whole dealership, immediately, stopping usage and charging there. Not
+set up, no plan (paywall), and out of credits each have their own plain
+tray message. Turned off is different (owner refinement, 2026-11-03):
+when an admin disables the assistant, the trigger and tray do not
+appear at all — the switch lives only in the admin surface
+(Account → AI assistant). Disabling is not
 cancelling: the subscription runs to the end of the paid period, and
 credits do not refund mid-cycle (Terms §4.5).
 

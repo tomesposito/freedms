@@ -9,8 +9,8 @@ type ApiError = {code?: string; status?: number};
 export function poolState(pool?: AssistantPool, error?: ApiError): AssistantState {
   if (error) return error.code === 'ASSISTANT_PLAN_REQUIRED' || error.status === 402 ? 'paywall' : 'unavailable';
   if (!pool) return 'loading';
-  if (pool.status !== 'active') return 'paywall';
   if (pool.disabled) return 'disabled';
+  if (pool.status !== 'active') return 'paywall';
   if (pool.balanceCredits <= 0 && !pool.overageEnabled) return 'exhausted';
   return 'ready';
 }
@@ -36,18 +36,19 @@ const locked: Record<AssistantState, string> = {
 function stateBody(state: AssistantState, pool?: AssistantPool): string {
   switch (state) {
     case 'ready': return `<section><h2>What do you need done?</h2><p>Ask about anything in the store, or hand it a job. It uses the same tools as the AI connections your dealers already run — as you, with your permissions.</p><ul class="assistant-capabilities"><li>Find cars, leads, deals, and repair orders</li><li>Add and update records — stock a vehicle, move a lead, post a note</li><li>Run the numbers on a pencil or a report</li></ul><div class="assistant-note"><b>It cannot, ever:</b> capture a signature, attest a compliance check, accept terms, handle MFA, or make a credit decision. Those have no tools. They stay with a person.</div></section>`;
-    case 'paywall': return `<section><h2>The assistant is a paid add-on.</h2><p>freeDMS itself is free. The assistant is not — it runs on a frontier model and works the store as you do. It is priced in credits: a lookup costs 1, a change costs 2, and the pool is shared by the whole dealership.</p>${[['Assistant', 75, 15], ['Assistant Pro', 175, 29], ['Assistant Heavy', 350, 49]].map(([name, credits, price]) => `<div class="assistant-tier"><div><b>${e(name)}</b><small>${e(credits)} credits per user</small></div><strong>$${e(price)} / user / mo</strong></div>`).join('')}<div class="assistant-note"><b>No free trial.</b> The first credit a dealership uses is a paid one. Failed actions never charge, and the pool stops hard at zero — nobody gets a surprise bill.</div><div class="assistant-callout">Ask your admin to turn it on</div><p class="assistant-small">Admins subscribe under Account → AI assistant. Your usage is recorded under your name, like everything else you do in the store.</p></section>`;
+    case 'paywall': return `<section><h2>The assistant is a paid add-on.</h2><p>freeDMS itself is free. The assistant is not — it runs on a frontier model and works the store as you do. It is priced in credits: a lookup costs 1, a change costs 2, and the pool is shared by the whole dealership.</p>${[['Assistant', 75, 15], ['Assistant Pro', 175, 29], ['Assistant Heavy', 350, 49]].map(([name, credits, price]) => `<div class="assistant-tier"><div><b>${e(name)}</b><small>${e(credits)} credits per user</small></div><strong>$${e(price)} / user / mo</strong></div>`).join('')}<div class="assistant-note">Failed actions never charge, and the pool stops hard at zero — nobody gets a surprise bill.</div><div class="assistant-callout">Ask your admin to turn it on</div><p class="assistant-small">Admins subscribe under Account → AI assistant. Your usage is recorded under your name, like everything else you do in the store.</p></section>`;
     case 'exhausted': {
       const date = pool?.cycleEnd ? new Date(pool.cycleEnd) : undefined;
       const reset = date && Number.isFinite(date.getTime()) ? date.toLocaleDateString('en-US', {month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC'}) : 'the next cycle date';
       return `<section><div class="assistant-stop"><h2>You are out of credits.</h2><p>The dealership pool is used up for this cycle. The assistant stops here by design so the bill cannot run past the plan. Work you did this cycle is all still in the product, under the names of the people who asked for it.</p></div><div class="assistant-note"><b>To keep going:</b> an admin can buy a top-up (25¢ a credit) or turn on overage under Account → AI assistant. Otherwise the pool refills on ${e(reset)}.</div></section>`;
     }
-    case 'disabled': return `<section><div class="assistant-stop"><h2>The assistant is turned off.</h2><p>The assistant is turned off for this dealership by an admin. No credits are charged while it is off.</p></div><div class="assistant-note">Turning it back on is an admin action under Account → AI assistant.</div></section>`;
     case 'unconfigured': return `<section class="assistant-unconfigured"><h2>The AI assistant isn't set up.</h2><p>This workspace's deployment has no assistant model configured, so there is nothing to talk to yet. Nothing here is simulated — when the operator enables it, this tray is where it will live.</p><div class="assistant-note"><b>Operator note:</b> set the stack's AssistantModelId parameter to a Bedrock model the account can invoke, and redeploy. The tray enables itself; no other setting changes.</div></section>`;
     default: return `<p role="status">${e(locked[state])}</p>`;
   }
 }
 export function trayHtml(state: AssistantState, turns: AssistantTurn[] = [], pool?: AssistantPool, busy = false, draft = ''): string {
+  // Disabled means absent: the shell hides entirely (see paint), and there is no tray to render.
+  if (state === 'disabled') return '';
   return `<header class="assistant-header"><div><h2 id="assistant-title">AI assistant${state === 'exhausted' || state === 'disabled' ? '' : `<span>${state === 'paywall' ? 'PAID' : 'BEDROCK'}</span>`}</h2><button type="button" id="assistant-close" aria-label="Close AI assistant">✕</button></div><p>Works in this workspace as you · ${state === 'paywall' ? 'billed to the dealership' : 'every action is recorded as yours'}</p></header><div class="assistant-body" aria-live="polite">${turns.map((turn, i) => `<div class="assistant-user">${e(turn.text)}</div>${turn.result ? `${turn.result.transcript.map(row => `<div class="assistant-tool ${row.ok ? 'done' : 'failed'}"><i aria-hidden="true"></i>${e(toolLabel(row.tool))}<small>${row.ok ? 'done' : 'failed'}</small></div>`).join('')}<div class="assistant-reply">${e(turn.result.reply)}</div><div class="assistant-receipt">${e(receipt(turn.result.creditsUsed))}</div>` : ''}${turn.error ? `<div class="assistant-error" role="alert">${e(turn.error)}${state === 'ready' && !busy ? `<button type="button" data-assistant-retry="${e(i)}">Retry</button>` : ''}</div>` : ''}`).join('')}${busy ? '<div class="assistant-working" role="status">● ● ● <span>Working…</span></div>' : ''}${state !== 'ready' || !turns.length ? stateBody(state, pool) : ''}</div><form class="assistant-composer"><textarea id="assistant-input" aria-label="Message AI assistant" rows="2" maxlength="16000" placeholder="${e(locked[state])}" ${state !== 'ready' || busy ? 'disabled' : ''}>${e(draft)}</textarea><button class="primary" type="submit" ${state !== 'ready' || busy ? 'disabled' : ''}>Send</button></form>`;
 }
 
@@ -68,6 +69,8 @@ function paint(focus = false): void {
   const selection = input?.selectionStart;
   const dialog = root.querySelector<HTMLDialogElement>('dialog')!;
   const trigger = root.querySelector<HTMLButtonElement>('#assistant-trigger')!;
+  if (state === 'disabled') { open = false; if (dialog.open) dialog.close(); root.style.display = 'none'; return; }
+  root.style.display = '';
   trigger.setAttribute('aria-expanded', String(open));
   trigger.innerHTML = `<span class="assistant-spark" aria-hidden="true">✦</span>AI assistant${pool ? `<span class="assistant-balance">${e(pool.balanceCredits.toLocaleString('en-US'))} credits</span>` : ''}`;
   dialog.innerHTML = trayHtml(state, turns, pool, busy, draft);
