@@ -491,7 +491,7 @@ Resources:
       FunctionCode: !Sub |
         function handler(event) {
           var request = event.request;
-          var marketingFile = /^\/(robots\.txt|sitemap\.xml|llms\.txt|dms-cost\.html|free-dealer-management-software\.html|bhph\.html|compare\.html|paperwork\.html|recon\.html|states\.html)$/.test(request.uri);
+          var marketingFile = /^\/(robots\.txt|sitemap\.xml|llms\.txt|dms-cost\.html|free-dealer-management-software\.html)$/.test(request.uri);
           if (request.headers.host.value === '${RootDomain}') {
             if (request.uri === '/api/access-requests' && request.method === 'POST') {
               request.uri = '/access-requests';
