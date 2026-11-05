@@ -88,6 +88,11 @@ Resources:
                   - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/llms.txt'
                   - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/dms-cost.html'
                   - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/free-dealer-management-software.html'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/bhph.html'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/compare.html'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/paperwork.html'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/recon.html'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/states.html'
 Outputs:
   OperationsBucket: {Value: !Ref Operations}
   DeployRoleArn: {Value: !GetAtt DeployRole.Arn}

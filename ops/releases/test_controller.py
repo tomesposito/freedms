@@ -25,7 +25,8 @@ def package(directory):
     with zipfile.ZipFile(code, 'w') as archive:
         archive.writestr('lambda.cjs', 'exports.handler = async () => 1;')
     files = {'index.html': b'<html>test</html>', 'assets/main-12345678.js': b'console.log(1)', 'assets/logo-12345678.svg': b'<svg/>', 'marketing/index.html': b'<html>marketing</html>', 'marketing/assets/hero-12345678.png': b'image'}
-    files.update({f'marketing/{name}': b'marketing content' for name in ['robots.txt', 'sitemap.xml', 'llms.txt', 'dms-cost.html', 'free-dealer-management-software.html', 'assets/og-image-12345678.jpg']})
+    files.update({path: b'marketing content' for path in c.MARKETING_DOCUMENTS})
+    files['marketing/assets/og-image-12345678.jpg'] = b'marketing content'
     web = io.BytesIO()
     with tarfile.open(fileobj=web, mode='w:gz') as archive:
         for name, content in files.items():
@@ -62,7 +63,7 @@ class PackageTests(unittest.TestCase):
             c.frontend_files(b'', entries)
 
     def test_unlisted_marketing_files_and_app_copies_are_rejected(self):
-        for path in ['robots.txt', 'sitemap.xml', 'llms.txt', 'dms-cost.html', 'free-dealer-management-software.html', 'marketing/unknown.html', 'marketing/assets/image.gif']:
+        for path in ['robots.txt', 'sitemap.xml', 'llms.txt', 'dms-cost.html', 'free-dealer-management-software.html', 'bhph.html', 'compare.html', 'paperwork.html', 'recon.html', 'states.html', 'marketing/unknown.html', 'marketing/assets/image.gif']:
             with self.subTest(path=path), self.assertRaisesRegex(RuntimeError, 'Unsafe frontend path'):
                 c.frontend_files(b'', [{'path': name, 'size': 1, 'sha256': c.digest(b'x')} for name in ['index.html', path]])
 
@@ -208,9 +209,9 @@ class PromotionTests(unittest.TestCase):
         with patch.object(aws, 'put', wraps=aws.put) as put, patch.object(aws, 'asset', wraps=aws.asset) as asset:
             self.run_release(aws)
         self.assertEqual(aws.get('marketing/robots.txt', 'frontend')[0], b'marketing content')
-        for name, content_type in [('robots.txt', 'text/plain'), ('sitemap.xml', 'application/xml'), ('llms.txt', 'text/plain'), ('dms-cost.html', 'text/html'), ('free-dealer-management-software.html', 'text/html')]:
-            put.assert_any_call('marketing/' + name, b'marketing content', bucket='frontend', etag=etags['marketing/' + name], content_type=content_type)
-            self.assertFalse(any(call.args[0] == 'marketing/' + name for call in asset.call_args_list))
+        for path, content_type in c.MARKETING_DOCUMENTS.items():
+            put.assert_any_call(path, b'marketing content', bucket='frontend', etag=etags[path], content_type=content_type)
+            self.assertFalse(any(call.args[0] == path for call in asset.call_args_list))
         asset.assert_any_call('marketing/assets/og-image-12345678.jpg', b'marketing content', 'frontend', 'image/jpeg')
 
     def test_smoke_failure_restores_application_and_consumes_approval(self):
