@@ -1,6 +1,10 @@
+import { stripeBillingFromEnv } from './stripe.js';
+import { LocalAssistantProvider } from './local-assistant.js';
+import { assistantProviderFromEnv } from './assistant-provider.js';
 import { turnstileVerifierFromEnv } from './turnstile.js';
 import { localAuth } from './local-auth.js';
 import { localSession } from './local-session.js';
+import { localOperatorResolver } from './local-operator.js';
 import { analyticsFromEnv } from './analytics.js';
 import { bodyLimit } from './quick-entry.js';
 import { providerFromEnv } from './ai-provider.js';
@@ -15,7 +19,10 @@ import { NhtsaVinDecoder } from './vin.js';
 if (process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NODE_ENV === 'production') throw new Error('Local auth must never run in production');
 const repositories = new MemoryRepositories();
 const tokens = new LocalTokens(randomBytes(48).toString('hex'));
-const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv(), undefined, {pilotOperator: {userId: process.env.PILOT_OPERATOR_SUBJECT ?? '', tenantId: process.env.PILOT_OPERATOR_TENANT_ID ?? ''}, turnstile: turnstileVerifierFromEnv()});
+const pilotOperator = {userId: process.env.PILOT_OPERATOR_SUBJECT ?? '', tenantId: process.env.PILOT_OPERATOR_TENANT_ID ?? ''};
+const resolveOperator = localOperatorResolver(repositories, tokens, pilotOperator,
+  process.env.LOCAL_PILOT_OPERATOR === '1' && process.env.PILOT_OPERATOR_SUBJECT === undefined && process.env.PILOT_OPERATOR_TENANT_ID === undefined);
+const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv(), undefined, {stripe: stripeBillingFromEnv(), appBaseUrl: process.env.FREEDMS_APP_BASE_URL, assistantProvider: process.env.FREEDMS_ASSISTANT_STUB === '1' ? new LocalAssistantProvider() : assistantProviderFromEnv(), assistantSeedLocalPlan: process.env.FREEDMS_ASSISTANT_STUB === '1', pilotOperator, turnstile: turnstileVerifierFromEnv()});
 const server = createServer(async (req, res) => {
   let result;
   try {
@@ -35,7 +42,9 @@ const server = createServer(async (req, res) => {
       result = await localSession(body, repositories, tokens);
     } else {
       const token = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
-      result = await handle({sourceIp: req.socket.remoteAddress, method: req.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body, acceptEncoding: req.headers['accept-encoding'], ...localAuth(url.pathname, isIntake, token, tokens)});
+      const credentials = localAuth(url.pathname, isIntake, token, tokens);
+      if ('claims' in credentials) await resolveOperator(token);
+      result = await handle({stripeSignature: typeof req.headers['stripe-signature'] === 'string' ? req.headers['stripe-signature'] : undefined, origin: req.headers.origin, sourceIp: req.socket.remoteAddress, method: req.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body, acceptEncoding: req.headers['accept-encoding'], ...credentials});
     }
   } catch (error) { result = errorResponse(error); }
   res.writeHead(result.statusCode, result.headers); res.end(result.isBase64Encoded ? Buffer.from(result.body, 'base64') : result.body);

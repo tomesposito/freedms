@@ -62,6 +62,36 @@ uses the displayed record version so a newer submission cannot be silently
 overwritten. It does not send email, create an account, or issue an invitation.
 The existing operator CLI remains available for reviewing and handling requests.
 
+## AI assistant
+
+The assistant is off by default. With `AssistantModelId` empty, the stack behaves
+exactly as today. To enable it, set `AssistantModelId` to a Bedrock Sonnet 5.5
+inference profile ID the account can invoke in the stack region (`us-east-1`)
+and redeploy. The parameter supplies `FREEDMS_ASSISTANT_MODEL` to the API Lambda.
+The template adds only `bedrock:InvokeModel` on its role, scoped to the configured
+inference-profile and foundation-model resources; it grants nothing broader.
+
+With no model configured, a signed-in user with an eligible active plan sees
+"The AI assistant isn't set up" in the tray after a chat request returns HTTP 503
+`ASSISTANT_UNAVAILABLE`. Nothing is simulated. After configuration, the tray can
+answer requests; reload a browser session that already reached the unconfigured
+state. Availability also requires the D-12 gates: an active plan with credits
+(or admin-enabled overage within its cap), and an assistant that is not
+admin-disabled.
+
+Set up Stripe first: set `StripeSecretKey` and `StripeWebhookSecret`, create the
+Stripe products/prices, and set `StripePriceAssistant`, `StripePriceAssistantPro`,
+`StripePriceAssistantHeavy`, and `StripePriceTopup` to their price IDs. See
+[AI assistant documentation](assistant.md) for price shapes and webhook setup.
+Then admins can buy plans under Account → AI assistant. Per Terms §4.2, nothing
+sells before metering and hard caps exist; the shipped ledger (#99), caps/admin
+controls (#101), and billing (#102) provide them. There is no free trial.
+Without billing configuration, the admin page says "Billing isn't set up yet"
+and purchases are unavailable; settings and existing plans still work.
+
+See [AI assistant documentation](assistant.md) for endpoint behavior and local
+stub testing.
+
 ## Access-request CAPTCHA
 
 Create a Cloudflare Turnstile widget in Tom's Cloudflare account for `freedms.co`.

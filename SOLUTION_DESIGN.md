@@ -8,7 +8,7 @@
 > - **License today:** MIT, as recorded in LICENSE; alternatives remain draft D-1.
 > - **Decision process:** IDDs D-1 onward record context, options, and a recommendation.
 >   D-1, D-3, and D-4 were **DECIDED by the owner on 2026-10-19** (recorded in each
->   IDD below). D-2 and D-5–D-7 remain **DRAFT — awaiting the owner's pick**; D-8 has an accepted MCP-specific decision; D-9 was decided 2026-10-31 and D-10 on 2026-11-01.
+>   IDD below). D-2, D-5 and D-6 remain **DRAFT — awaiting the owner's pick**; D-8 was decided for the MCP connector 2026-10-30 and for the in-app assistant 2026-11-03; D-9 was decided 2026-10-31, D-10 on 2026-11-01, and D-7, D-11, D-12 and D-13 on 2026-11-03 (the AI assistant and its pricing).
 
 ## 1. Vision & positioning
 
@@ -487,7 +487,9 @@ derived artifacts, and transition behavior explicitly in the ToS.
 
 ### D-7 — AI consumption unit and budget controls
 
-**Status: DRAFT — awaiting the owner's pick.**
+**Status: DECIDED — owner, 2026-11-03: published action credits for the
+in-app AI assistant (D-13), priced below; full plan in the marketing
+goal files (ai-assistant-pricing-plan.md).**
 
 **Context:** consumption pricing is fixed, but raw inference usage and a completed
 agent task can differ because of retries, tool calls, and provider failures.
@@ -498,6 +500,29 @@ backed by documented usage categories.
 **Recommendation:** published task credits with a pre-run estimate, usage receipts,
 hard dealer-set spending limits, and a defined failure/retry policy. Set actual rates
 only after measuring representative workflows and margins; no invented price here.
+
+**Decision (2026-11-03):** the unit is the action credit — one credit per
+executed assistant action (one tool call, or one no-tool answer), charged on
+execution and metered from the tool-call transcript with token counts
+recorded per action. Action prices: read 1 credit; write 2 credits; photo
+action 3 credits (when image input ships). Failed actions and failed turns
+are never charged. Tiers are priced per user per month and pooled per
+organization (users x credits, one pool, no rollover in v1): Assistant
+$15/user with 75 credits per user; Assistant Pro $29/user with 175;
+Assistant Heavy $49/user with 350. Top-ups and admin-enabled overage bill
+at $0.25/credit. The pool hard-stops at zero. User count = accounts not
+deactivated at cycle start; mid-cycle adds pro-rate, removals take effect
+next cycle. Per-request protection: 10 tool rounds max per message plus an
+admin-set per-request credit cap (default 25). There is NO free trial —
+the owner ruled the paywall hard from the start (no budget to give away
+usage). Rates were set from measured Bedrock cost (Sonnet 5.5, D-13:
+~$0.02 blended per action) with a margin guardrail: if blended cost per
+action sustains above $0.035, re-pricing returns to the owner with the
+ledger data; increases follow the Terms (30 days' notice, admin acceptance
+before work runs at a higher rate). The assistant's margin is what pays
+for the free hosting service. This decides D-7 for assistant actions;
+metering for any future non-assistant AI work follows the same unit
+unless a later decision says otherwise.
 
 ### D-8 — Initial agent authority
 
@@ -510,6 +535,17 @@ credit certifications. Phase 1 supplies all specified reads and inventory writes
 through the existing operation layer. There are no PATs/agent API tokens.
 Write events identify the agent and the user; UI confirmation requirements apply.
 This settles only the MCP portion of D-8 and does not reopen D-2/D-5/D-6/D-7.
+
+**Addendum (2026-11-03): the in-product portion is now decided too.** The
+in-app AI assistant (Bedrock, D-13; slide-in tray) executes the same MCP
+tool surface in-process under the logged-in user's session — same tenant
+binding, role checks, and audit attribution — and acts with that user's
+full authority, reads and writes alike. The tray's per-action transcript
+and the audit trail are the control; there is no per-write confirmation
+gate (owner ruling, 2026-11-03). Human-only exclusions are unchanged and
+absolute. Drafted outbound communications (§9 follow-up grind) keep their
+own human-approval rule; this addendum governs the assistant's in-product
+actions, not sending on a dealer's behalf.
 
 **Context:** first-class agents need useful tools, but a suggested reply and an
 executed financing submission have very different consequences.
@@ -589,7 +625,90 @@ pure discovery is constrained because the authorization-server metadata lives
 on Cognito's domain — consumers that accept a registration address directly
 are unaffected; a metadata facade is a later option.
 
+### D-11 — Billing rail for paid AI
+
+**Status: DECIDED — owner, 2026-11-03: Stripe Billing.**
+
+**Decision:** paid AI (D-7) bills through Stripe Billing — one rail across
+the owner's products (OpenSight D-81). The subscription belongs to the
+organization (tenant) and is managed by a workspace admin. Products and
+prices live in Stripe as configuration, never hard-coded in the app;
+entitlement (tier, cycle, pool state) is the app's own record, updated by
+signature-verified webhooks. Nothing is sold until the D-7 metering and
+hard caps are operational (Terms §4.2 requires that order). The Stripe
+account for the freeDMS entity is the owner's setup step (same open item
+as the Terms notice address).
+
+### D-12 — AI assistant availability, paywall, and the admin switch
+
+**Status: DECIDED — owner, 2026-11-03.**
+
+**Decision:** the assistant is available to every signed-in user from the
+start, and works only when all of these hold: the deployment has a model
+configured (D-13); the organization has an active plan with credits
+remaining or admin-enabled overage (D-7); the workspace admin has not
+disabled it. A workspace admin setting disables the assistant for the
+whole dealership, immediately, stopping usage and charging there. Not
+set up, no plan (paywall), and out of credits each have their own plain
+tray message. Turned off is different (owner refinement, 2026-11-03):
+when an admin disables the assistant, the trigger and tray do not
+appear at all — the switch lives only in the admin surface
+(Account → AI assistant). Disabling is not
+cancelling: the subscription runs to the end of the paid period, and
+credits do not refund mid-cycle (Terms §4.5).
+
+### D-13 — Assistant model and provider behavior
+
+**Status: DECIDED — owner, 2026-11-03.**
+
+**Decision:** the in-app assistant runs on Amazon Bedrock (Converse API)
+with Claude Sonnet 5.5 as the launch model (global inference profile;
+$2/$10 per 1M tokens in/out, cache reads $0.10 — checked 2026-11-03).
+The model ID is a stack parameter: a swap is configuration, not code,
+and a swap that changes the cost basis triggers the D-7 repricing review
+before it ships. Prompt caching of the tool-spec/system prefix is a
+launch requirement, with cache-hit rate visible in the credit ledger.
+No silent fallback: if Bedrock errors or the model is unavailable, the
+turn fails clean and uncharged rather than a cheaper model answering
+instead.
+
+### D-14 — Command bar and explicit search/ask routing (2026-11-04)
+
+Approved by Tom on November 4. A 42px navy (`#0B1F2C`) bar spans the content
+column, starting at the expanded or slim sidebar edge. The full-height sidebar
+owns the brand; the desktop bar has no logo. Its left control is the sole
+sidebar collapse toggle; the footer toggle and floating assistant pill are retired.
+The centered prompt opens a keyboard-accessible palette. On phones the search
+and assistant icons join the existing branded Menu header, with no second bar;
+the credit chip is hidden there and the balance is available in the tray header.
+
+Typing debounces authenticated, tenant-scoped `GET /search?q=` reads, grouped as
+Vehicles / People / Deals (five each). Vehicle matching reuses list search; CRM
+matching lives in the repository layer. People link to their lead or deal, or to
+the existing Leads route's customer query view when no linked record exists.
+Search has the same active-admin/staff visibility as those list routes, makes no
+mutations, spends no credits, and adds no MCP tools.
+
+Routing never guesses: selecting a record navigates; selecting a priced page
+skill uses the existing surface/record context and skill execution; selecting
+“Ask the assistant” opens the existing tray and sends the query. The ask action
+is last for a nonempty query, including no-match queries. Empty queries show
+page skills and one hint, with no recent-search storage. Arrows select rows,
+Enter activates, Escape closes and returns focus. Ctrl/Cmd+K excludes form
+fields and contenteditable regions, except the palette input itself.
+
+The assistant cluster retains existing pool-state behavior, credit charging,
+and page entry points. D-12 remains binding: dealership-disabled removes the
+assistant cluster and tray, while the bar and record search remain available.
+The administrative switch remains solely in Account → AI assistant.
+
+
 ## 9. AI direction — less dealer work (owner, 2026-10-19)
+
+**Shipped:** The in-app AI assistant is live behind configuration through
+`AssistantModelId` / `FREEDMS_ASSISTANT_MODEL`, and off when unset. It runs on
+Bedrock per D-13, bills action credits per D-7 through Stripe per D-11, and is
+gated by the availability rules in D-12.
 
 The point of AI in freeDMS is not AI features. It is less work for the dealer:
 less typing, fewer clicks, follow-up that happens without someone remembering.

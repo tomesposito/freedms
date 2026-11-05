@@ -1,3 +1,6 @@
+import { mountCommandBar, commandBarHtml } from './command-bar';
+import { assistantAdminRoute } from './assistant-admin';
+import { mountAssistant, resetAssistant, openAssistantSkill } from './assistant';
 import { aiConnectionsRoute } from './ai-connections';
 import { ideasRoute, ideasQueueRoute } from './ideas';
 import { fetchWithRetry } from './api-client';
@@ -50,7 +53,7 @@ async function apiEnvelope<T>(path: string, method = 'GET', body?: unknown, retr
     if (localMode) sessionStorage.removeItem('freedms-token'); else clearSession();
   }
   if ('error' in result) {
-    throw Object.assign(new Error(result.error.message), {status: response.status});
+    throw Object.assign(new Error(result.error.message), {status: response.status, code: result.error.code});
   }
   if (!response.ok) throw new Error('The request could not be completed.');
   return result;
@@ -70,7 +73,7 @@ async function download(path: string, filename: string): Promise<void> {
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : 'Something went wrong. Please retry.'; }
 function flash(error: unknown): void { const el = document.querySelector<HTMLElement>('#message')!; el.textContent = errorMessage(error); el.hidden = false; el.focus(); }
 function shell(content: string): void {
-  const section = location.hash.replace(/^#\//, '').split('/')[0];
+  const section = location.hash.split('?')[0].replace(/^#\//, '').split('/')[0];
   const active = ['', 'new', 'import', 'vehicles'].includes(section) ? '' : section;
   const slim = readSidebarPreference();
   app.innerHTML = `<aside class="sidebar${slim ? ' is-slim' : ''}">
@@ -80,9 +83,11 @@ function shell(content: string): void {
       <nav aria-label="Main navigation">
         ${sidebarNavigation(session?.principal.role === 'admin', session?.canManagePilotRequests)}
       </nav>
-      <div class="sidebar-footer">${sidebarUserHtml(session?.user)}${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button type="button" id="sidebar-toggle" class="quiet" aria-expanded="${!slim}" aria-label="${slim ? 'Expand sidebar' : 'Collapse sidebar'}" title="${slim ? 'Expand sidebar' : 'Collapse sidebar'}">${sidebarToggleIcon(slim)}</button><button id="signout" class="quiet" title="Sign out" aria-label="Sign out">${icon('<path d="M9 3H3v18h6m6-14 5 5-5 5m-7-5h12"/>')}<span class="nav-text">Sign out</span></button></div>
+      <div class="sidebar-footer">${sidebarUserHtml(session?.user)}${localMode ? '<span class="local-label">Local workspace</span>' : ''}<button id="signout" class="quiet" title="Sign out" aria-label="Sign out">${icon('<path d="M9 3H3v18h6m6-14 5 5-5 5m-7-5h12"/>')}<span class="nav-text">Sign out</span></button></div>
     </div>
-  </aside><main class="app-main"><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main>`;
+  </aside>${commandBarHtml(`<button type="button" id="sidebar-toggle" class="quiet" aria-expanded="${!slim}" aria-label="${slim ? 'Expand sidebar' : 'Collapse sidebar'}" title="${slim ? 'Expand sidebar' : 'Collapse sidebar'}">${sidebarToggleIcon(slim)}</button>`)}<main class="app-main"><div id="message" class="error" role="alert" tabindex="-1" hidden></div>${content}</main>`;
+  mountCommandBar(app, api);
+  mountAssistant(app.querySelector<HTMLElement>('.command-assistant')!, api, `${session?.principal.tenantId}:${session?.principal.userId}`);
   app.querySelectorAll<HTMLAnchorElement>('.sidebar nav a').forEach(anchor => {
     if (anchor.getAttribute('href') === `#/${active}`) anchor.setAttribute('aria-current', 'page');
   });
@@ -107,7 +112,7 @@ function shell(content: string): void {
   sidebar.addEventListener('keydown', event => {
     if (event.key === 'Escape') { setMenu(false); toggle.focus(); }
   });
-  document.querySelector('#signout')?.addEventListener('click', () => { clearDrafts(); signOut(); });
+  document.querySelector('#signout')?.addEventListener('click', () => { clearDrafts(); resetAssistant(); signOut(); });
 }
 function badge(value: string): string { return `<span class="badge ${value.replace(' ', '-')}">${e(value)}</span>`; }
 async function login(): Promise<void> {
@@ -150,7 +155,8 @@ async function list(sequence: number): Promise<void> {
 async function detail(id: string, sequence: number): Promise<void> {
   shell('<p>Loading vehicle…</p>'); const v = await api<VehicleView>(`/vehicles/${encodeURIComponent(id)}`); if (sequence !== routeSequence) return;
   const serviceHistory = await api<RepairOrderView[]>(`/service/repair-orders?vehicleId=${encodeURIComponent(id)}`); if (sequence !== routeSequence) return;
-  shell(`<a class="back" href="#/">← Inventory</a><div class="heading"><div><p class="eyebrow">STOCK ${e(v.stockNumber)}</p><h1>${e(`${v.year} ${v.make} ${v.model}`)}</h1><p class="muted">${e(v.trim)} · <span class="mono">${e(v.vin)}</span></p></div><div class="form-actions">${v.status !== 'sold' ? `<a class="button primary" href="#/deals/new/vehicle/${v.id}">Start deal</a>` : ''}<a class="button" href="#/vehicles/${v.id}/edit">Edit vehicle</a></div></div><div class="metrics"><div><span>Status</span>${badge(v.status)}</div><div><span>List price</span><strong>${currency(v.listPrice)}</strong></div><div><span>Acquisition cost</span><strong>${currency(v.cost)}</strong></div><div><span>Time on lot</span><strong>${v.agingDays} days</strong></div></div><div class="detail-grid"><section class="card"><h2>Vehicle details</h2><dl><dt>Mileage</dt><dd>${v.mileage == null ? 'Not set' : v.mileage.toLocaleString('en-US')}</dd><dt>Date stocked</dt><dd>${e(v.dateStocked)}</dd><dt>Location</dt><dd>${e(v.location) || 'Not set'}</dd><dt>Notes</dt><dd class="notes">${e(v.notes) || 'No notes added.'}</dd></dl></section><section class="card"><h2>Reconditioning</h2>${v.reconCosts.length ? `<ul class="recon-summary">${v.reconCosts.map(item => `<li><span>${e(item.description)}</span><strong>${currency(item.amount)}</strong></li>`).join('')}</ul>` : '<p class="muted">No recon costs added.</p>'}<div class="total"><span>Recon total</span><strong>${currency(v.reconTotal)}</strong></div><div class="total"><span>Cost + recon</span><strong>${currency(v.cost + v.reconTotal)}</strong></div></section></div><section class="card"><h2>Service history</h2>${serviceHistoryHtml(serviceHistory)}</section>${session.principal.role === 'admin' ? '<div class="danger-zone"><button id="delete" class="danger">Delete vehicle</button><p class="muted">Removes the vehicle from inventory. The audit event is retained.</p></div>' : ''}`);
+  shell(`<a class="back" href="#/">← Inventory</a><div class="heading"><div><p class="eyebrow">STOCK ${e(v.stockNumber)}</p><h1>${e(`${v.year} ${v.make} ${v.model}`)}</h1><p class="muted">${e(v.trim)} · <span class="mono">${e(v.vin)}</span></p></div><div class="form-actions">${v.status !== 'sold' ? `<a class="button primary" href="#/deals/new/vehicle/${v.id}">Start deal</a>` : ''}<button type="button" id="assistant-summary">Assistant: Summarize</button><a class="button" href="#/vehicles/${v.id}/edit">Edit vehicle</a></div></div><div class="metrics"><div><span>Status</span>${badge(v.status)}</div><div><span>List price</span><strong>${currency(v.listPrice)}</strong></div><div><span>Acquisition cost</span><strong>${currency(v.cost)}</strong></div><div><span>Time on lot</span><strong>${v.agingDays} days</strong></div></div><div class="detail-grid"><section class="card"><h2>Vehicle details</h2><dl><dt>Mileage</dt><dd>${v.mileage == null ? 'Not set' : v.mileage.toLocaleString('en-US')}</dd><dt>Date stocked</dt><dd>${e(v.dateStocked)}</dd><dt>Location</dt><dd>${e(v.location) || 'Not set'}</dd><dt>Notes</dt><dd class="notes">${e(v.notes) || 'No notes added.'}</dd></dl></section><section class="card"><h2>Reconditioning</h2>${v.reconCosts.length ? `<ul class="recon-summary">${v.reconCosts.map(item => `<li><span>${e(item.description)}</span><strong>${currency(item.amount)}</strong></li>`).join('')}</ul>` : '<p class="muted">No recon costs added.</p>'}<div class="total"><span>Recon total</span><strong>${currency(v.reconTotal)}</strong></div><div class="total"><span>Cost + recon</span><strong>${currency(v.cost + v.reconTotal)}</strong></div></section></div><section class="card"><h2>Service history</h2>${serviceHistoryHtml(serviceHistory)}</section>${session.principal.role === 'admin' ? '<div class="danger-zone"><button id="delete" class="danger">Delete vehicle</button><p class="muted">Removes the vehicle from inventory. The audit event is retained.</p></div>' : ''}`);
+  document.querySelector('#assistant-summary')?.addEventListener('click', () => openAssistantSkill('vehicle_summary'));
   document.querySelector<HTMLButtonElement>('#delete')?.addEventListener('click', async event => {
     if (!confirm(`Delete stock ${v.stockNumber}? This cannot be undone.`)) return;
     const button = event.currentTarget as HTMLButtonElement; button.disabled = true;
@@ -251,7 +257,7 @@ async function route(): Promise<void> {
   if (location.hash.startsWith('#/share/')) { ++routeSequence; await buyerRoute(location.hash.slice(8)); return; }
   if (!session) { await start(); return; } const sequence = ++routeSequence;
   try {
-    const parts = location.hash.replace(/^#\//, '').split('/');
+    const parts = location.hash.split('?')[0].replace(/^#\//, '').split('/');
     if (parts[0] === 'welcome') {
       const {tenantId, userId, role} = session.principal;
       if (welcomeDismissed(localStorage, tenantId, userId)) { location.hash = '#/'; return; }
@@ -277,6 +283,7 @@ async function route(): Promise<void> {
     else if (parts[0] === 'ideas-review') await ideasQueueRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, session.canManagePilotRequests === true);
     else if (parts[0] === 'users') await usersRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void start(); }, admin: session.principal.role === 'admin'}, session.principal.tenantId, !localMode);
     else if (parts[0] === 'webhooks') await webhooksRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
+    else if (parts[0] === 'account' && parts[1] === 'assistant') await assistantAdminRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'account') await accountRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'}, {}, !localMode, cognito);
     else if (parts[0] === 'feeds') await feedRoute({api, download, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'accounting') await accountingRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});

@@ -1,3 +1,4 @@
+import { assistantAccountCard } from './assistant-admin';
 import type { Session } from '@freedms/shared';
 import qrcode from 'qrcode-generator';
 import { getAccessToken, getToken } from './auth';
@@ -36,7 +37,7 @@ export async function hostedAccountRoute(ui: UI, client?: Cognito): Promise<void
   const user = userResult.status === 'fulfilled' ? userResult.value : undefined;
   const profile = profileValues(session, user, getToken());
   const available = Boolean(client && access && user);
-  ui.shell(`<h1>Account security</h1>${profileHtml(profile)}${available ? passwordHtml() + authenticatorHtml(user!.enabled) : `<section class="card"><h2>Authenticator required</h2><p>${client && access ? 'Account settings could not be loaded. Try reopening Account or contact the pilot operator.' : 'Password and authenticator changes are not available in this sign-in mode. Contact the pilot operator for help.'}</p>${operatorNote}</section>`}`);
+  ui.shell(`<h1>Account security</h1>${ui.admin ? assistantAccountCard : ''}${profileHtml(profile)}${available ? passwordHtml() + authenticatorHtml(user!.enabled) : `<section class="card"><h2>Authenticator required</h2><p>${client && access ? 'Account settings could not be loaded. Try reopening Account or contact the pilot operator.' : 'Password and authenticator changes are not available in this sign-in mode. Contact the pilot operator for help.'}</p>${operatorNote}</section>`}`);
   if (sessionResult.status === 'rejected') ui.flash(sessionResult.reason);
   if (!available || !client || !access) return;
   const passwordForm = document.querySelector<HTMLFormElement>('#account-password')!;

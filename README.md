@@ -50,6 +50,40 @@ Real captures from the local app on the current build — the same screens the
 verification tours use. The sample dealership data is local-only; the app itself
 always starts empty.
 
+**AI assistant**
+
+The slide-in assistant shows tool results, replies, and per-turn credit receipts.
+This is a local test-double tour capture, using the real handler and credit ledger;
+it is not a live model response.
+
+The content column's command bar combines record search and the assistant. Click
+its prompt or press Ctrl/Cmd+K outside a form field. Records navigate directly;
+priced page skills and the final “Ask the assistant” row run only when selected.
+On phones, search and assistant icons share the branded Menu header.
+
+![Command bar with AI assistant conversation and credit receipt](docs/screenshots/ai-assistant.png)
+
+Run `node --import tsx packages/web/test/assistant-tour.mjs` for the empty,
+conversation, paywall, disabled, exhausted, unconfigured, and mobile states,
+plus palette routing, keyboard guards, and 320px/390px shell layouts.
+
+The assistant also knows the page you are on. On a vehicle, lead, or contact
+page the tray offers that record's skills as chips with the credit cost shown
+before anything runs: summaries of the record, and cleanup that proposes each
+change first — nothing writes until you accept it, and merge proposals are
+flagged for a person, never run.
+
+![AI assistant vehicle summary skill with cost chip and receipt](docs/screenshots/ai-assistant-skills.png)
+
+**AI assistant admin**
+
+Admins manage the plan, credits, usage, and dealership switch. Billing uses Stripe
+when configured. This local capture shows billing isn't set up yet.
+
+![AI assistant admin plan, pool, usage, and controls](docs/screenshots/ai-assistant-admin.png)
+
+Run `node --import tsx packages/web/test/assistant-admin-tour.mjs` to verify the controls.
+
 **AI connections**
 
 Members can see and revoke their own AI app connections. Administrators can also
@@ -112,6 +146,11 @@ records each page's document width. The tour also refreshes these four phone cap
 captures, including the service day picker. Browser checks remain separate from `npm test`, whose offline
 Node harness does not install or launch Playwright.
 
+`node --import tsx packages/web/test/onboarding-shell-tour.mjs` checks the J01/J02
+first-visitor and empty-workspace shell expectations.
+`node --import tsx packages/web/test/readme-shell-tour.mjs` refreshes the stateful
+import, statement, quick-entry, and welcome captures with offline fixtures.
+
 **Sign in** — in-app Cognito login, shown against the offline hosted-mode fixture.
 
 ![freeDMS sign-in](docs/screenshots/login.png)
@@ -151,11 +190,11 @@ the record on the Users screen.
 
 **Inventory** — vehicles in pages of 100, with mileage, aging, cost, and status.
 
-![Inventory list](docs/screenshots/inventory-list.png)
+![Inventory list with unified search and assistant command bar](docs/screenshots/inventory-list.png)
 
 **Slim sidebar** — an icon rail leaves more room for the workspace.
 
-![Slim sidebar](docs/screenshots/sidebar-slim.png)
+![Slim sidebar with content-aligned command bar](docs/screenshots/sidebar-slim.png)
 
 **Leads** — the pipeline in pages of 100, with assignment, stage history, and follow-ups.
 
@@ -344,6 +383,8 @@ is shown honestly.
 **AI quick entry** — type a sentence, get a draft vehicle to review. Nothing
 saves without confirmation.
 
+The two draft captures use explicit offline extraction fixtures; no hosted model is called.
+
 ![AI quick entry draft](docs/screenshots/quick-entry-draft.png)
 
 **Photo intake** — a window-sticker or VIN-plate photo becomes the same kind
@@ -409,7 +450,7 @@ build.
 **Digital retailing — dealer side** — the worksheet's share panel with the
 buyer's responses on the deal; the link was revoked after they replied.
 
-![Share panel with buyer responses](docs/screenshots/deal-share.png)
+![Buyer share panel in the command-bar shell](docs/screenshots/deal-share.png)
 
 ## License
 
@@ -435,6 +476,15 @@ creates a real, user-entered dealership and admin membership, never demo vehicle
 Local tokens are signed, expire in one hour, and use the same identity claims as
 Cognito (`sub`, `custom:tenant_id`, `iss`, `aud`, `exp`, `token_use`). This is a
 loopback-only development shim, **not production account authentication**.
+
+To exercise Ideas review and pilot requests locally, start the stack with
+`LOCAL_PILOT_OPERATOR=1 npm run dev`. Each signed-in local user with an active
+admin membership acts as the pilot operator for their request, including when
+switching between workspaces. Staff users never become operators. Either static
+`PILOT_OPERATOR_SUBJECT` or `PILOT_OPERATOR_TENANT_ID` setting takes precedence
+and disables this dynamic selection. Unset the flag (or use any value other than
+`1`) for the default behavior. This setting is local-stack only and has no effect
+on hosted deployments.
 
 Storage and the signing key are in memory. API restart clears all records and
 invalidates tokens. Signing out or losing the tab session loses access to that

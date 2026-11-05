@@ -21,6 +21,32 @@ test('Sidebar renders all destinations in order with distinct inline icons and a
   assert.match(main, /sidebarNavigation\(session\?\.principal.role === 'admin', session\?\.canManagePilotRequests\)/);
   assert.match(main, /anchor.setAttribute\('aria-current', 'page'\)/);
 });
+test('Sidebar pilot operator navigation places exactly two Pilot links between Connect and Workspace', () => {
+  const html = sidebarNavigation(true, true);
+  const labels = [...html.matchAll(/<p class="nav-label">([^<]+)<\/p>/g)].map(group => group[1]);
+  assert.deepEqual(labels, ['Sales', 'Operations', 'Back office', 'Connect', 'Pilot', 'Workspace']);
+  const groups = [...html.matchAll(/<div class="nav-group"><p class="nav-label">([^<]+)<\/p>(.*?)<\/div>/g)];
+  const links = groups.slice(3).map(group => [...group[2].matchAll(/<a href="([^"]+)"[^>]*>.*?<span class="nav-text">([^<]+)<\/span><\/a>/g)].map(link => [link[2], link[1]]));
+  assert.deepEqual(links, [
+    [['Feeds', '#/feeds'], ['Webhooks', '#/webhooks']],
+    [['Ideas review', '#/ideas-review'], ['Pilot requests', '#/pilot-requests']],
+    [['Ideas', '#/ideas'], ['AI connections', '#/ai-connections'], ['Account', '#/account'], ['Users', '#/users']],
+  ]);
+  assert.equal([...html.matchAll(/<a\b/g)].length, 18);
+});
+test('Sidebar hides Pilot navigation for non-admins even with the pilot operator flag', () => {
+  const html = sidebarNavigation(false, true);
+  const labels = [...html.matchAll(/<p class="nav-label">([^<]+)<\/p>/g)].map(group => group[1]);
+  assert.deepEqual(labels, ['Sales', 'Operations', 'Back office', 'Connect', 'Workspace']);
+  assert.doesNotMatch(html, /#\/ideas-review|#\/pilot-requests|Ideas review|Pilot requests/);
+});
+test('Sidebar admin navigation keeps the base five groups with the pilot operator flag false or omitted', () => {
+  for (const html of [sidebarNavigation(true, false), sidebarNavigation(true)]) {
+    const labels = [...html.matchAll(/<p class="nav-label">([^<]+)<\/p>/g)].map(group => group[1]);
+    assert.deepEqual(labels, ['Sales', 'Operations', 'Back office', 'Connect', 'Workspace']);
+    assert.doesNotMatch(html, /#\/ideas-review|#\/pilot-requests|Ideas review|Pilot requests/);
+  }
+});
 test('Sidebar preference defaults expanded, persists both choices and tolerates blocked storage', () => {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   const values = new Map<string, string>();

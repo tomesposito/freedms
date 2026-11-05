@@ -1,3 +1,4 @@
+import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
 import type { McpGrant, Idea } from '@freedms/shared';
 import type { AccessRequest } from '@freedms/shared';
@@ -13,8 +14,22 @@ export interface VehicleQuery { status?: VehicleStatus; search?: string }
 export interface LeadQuery { search?: string; stage?: Lead['stage']; assignee?: string | null; limit: number; offset: number }
 export interface LeadPage { leads: Lead[]; customers: Customer[]; total: number }
 export const OPERATOR_TENANT_ID = 'operator';
+export interface AssistantBillingLink {tenantId: string; customerId: string; version: number}
+export interface StripeCommit {eventId: string; paymentId?: string; plan: AssistantPlan; cycle?: AssistantCycle; event: OutboxEvent}
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
+  assistantBillingLink(): Promise<AssistantBillingLink | undefined>;
+  saveAssistantBillingLink(record: AssistantBillingLink, event: OutboxEvent): Promise<void>;
+  stripeEventProcessed(id: string): Promise<boolean>;
+  commitStripeEvent(commit: StripeCommit): Promise<void>;
+  assistantPlan(): Promise<AssistantPlan | undefined>;
+  saveAssistantPlan(record: AssistantPlan, expectedVersion: number, event: OutboxEvent): Promise<void>;
+  assistantCycle(cycleStart: string): Promise<AssistantCycle | undefined>;
+  saveAssistantCycle(record: AssistantCycle, expectedVersion: number): Promise<void>;
+  /** Atomically publish a completed turn and advance the cycle version; stale snapshots fail closed. */
+  commitAssistantLedger(entries: AssistantLedgerEntry[], cycle: AssistantCycle, planVersion: number): Promise<void>;
+  appendAssistantLedger(entry: AssistantLedgerEntry): Promise<void>;
+  assistantLedger(cycleStart: string): Promise<AssistantLedgerEntry[]>;
   mcpRegistration(clientId: string): Promise<McpRegistration | undefined>;
   mcpRegistrations(): Promise<McpRegistration[]>;
   saveMcpRegistration(record: McpRegistration): Promise<void>;
@@ -75,7 +90,7 @@ export interface TenantRepository {
   delete(id: string, expectedVersion: number, event: OutboxEvent): Promise<void>;
   provision(tenant: Tenant, user: User, membership: Membership, event: OutboxEvent, acceptance?: CrmWrite): Promise<void>;
 }
-export interface RepositoryFactory { ideasQueue?(): Promise<Idea[]>; tenantForSubject?(subject: string): Promise<string | undefined>; forTenant(tenantId: string): TenantRepository }
+export interface RepositoryFactory { tenantForStripeCustomer?(customerId: string): Promise<string | undefined>; ideasQueue?(): Promise<Idea[]>; tenantForSubject?(subject: string): Promise<string | undefined>; forTenant(tenantId: string): TenantRepository }
 export function matches(vehicle: Vehicle, query: VehicleQuery): boolean {
   return (!query.status || vehicle.status === query.status) && (!query.search ||
     [vehicle.stockNumber, vehicle.vin, vehicle.make, vehicle.model, vehicle.trim, vehicle.location]
@@ -365,4 +380,70 @@ export function assertMcpGrant(tenantId: string, record: McpGrant, expectedVersi
   if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid grant version');
   if ((!expectedVersion || record.revokedAt) && !event) throw new Error('Grant changes require an outbox event');
   if (event) assertEvent(record.id, record.version, event, expectedVersion ? 'mcp-grant.revoked' : 'mcp-grant.recorded');
+}
+
+function assertAssistantVersion(record: {version: number}, expected: number) {
+  if (!Number.isSafeInteger(expected) || expected < 0 || record.version !== expected + 1) throw new Error('Invalid assistant version');
+}
+export function assertAssistantPlan(tenantId: string, record: AssistantPlan, expected: number, event: OutboxEvent) {
+  assertScope(tenantId, record, event); assertAssistantVersion(record, expected);
+  assertEvent(record.id, record.version, event, 'assistant-plan.updated');
+  if ([record.stripeCustomerId, record.stripeSubscriptionId].some(v => v !== undefined && (typeof v !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(v))) ||
+      (record.accessUntil !== undefined && !Number.isFinite(Date.parse(record.accessUntil))) || record.id !== 'assistant-plan' || !['assistant', 'assistant-pro', 'assistant-heavy'].includes(record.tier) ||
+      !['active', 'past_due', 'cancelled'].includes(record.status) || !Number.isFinite(Date.parse(record.cycleAnchor)) ||
+      typeof record.disabled !== 'boolean' || typeof record.overageEnabled !== 'boolean' ||
+      (record.overageCapCredits !== undefined && (!Number.isSafeInteger(record.overageCapCredits) || record.overageCapCredits < 0)) ||
+      !Number.isSafeInteger(record.perRequestCreditCap) || record.perRequestCreditCap < 1) throw new Error('Invalid assistant plan');
+}
+export function assertAssistantCycle(tenantId: string, record: AssistantCycle, expected: number) {
+  assertScope(tenantId, record); assertAssistantVersion(record, expected);
+  if (record.id !== record.cycleStart || !Number.isFinite(Date.parse(record.cycleStart)) || !(record.cycleEnd > record.cycleStart) ||
+      [record.billedUserCount, record.allotmentCredits, record.topUpCredits].some(n => !Number.isSafeInteger(n) || n < 0)) throw new Error('Invalid assistant cycle');
+}
+export function assertAssistantLedger(tenantId: string, record: AssistantLedgerEntry) {
+  assertScope(tenantId, record);
+  const prices = {read: 1, write: 2, photo: 3, answer: 1};
+  if (prices[record.actionClass] !== record.credits || !record.action || !record.actorId ||
+      !Number.isFinite(Date.parse(record.cycleStart)) || !Number.isFinite(Date.parse(record.createdAt)) ||
+      [record.inputTokens, record.outputTokens, record.cacheReadTokens, record.cacheWriteTokens].some(n => !Number.isSafeInteger(n) || n < 0)) throw new Error('Invalid assistant ledger');
+}
+
+export function assertAssistantCommit(tenantId: string, entries: AssistantLedgerEntry[], cycle: AssistantCycle) {
+  assertScope(tenantId, cycle);
+  if (!entries.length || entries.length > 201 || new Set(entries.map(row => row.id)).size !== entries.length) throw new Error('Invalid assistant turn');
+  for (const entry of entries) {
+    assertAssistantLedger(tenantId, entry);
+    if (entry.cycleStart !== cycle.cycleStart) throw new Error('Invalid assistant turn cycle');
+  }
+}
+
+export function assertBillingLink(tenantId: string, record: AssistantBillingLink, event: OutboxEvent) {
+  assertScope(tenantId, record, event);
+  assertEvent('assistant-billing', 1, event, 'assistant-billing.updated');
+  if (record.version !== 1 || !/^[a-zA-Z0-9_-]{1,128}$/.test(record.customerId)) throw new Error('Invalid billing link');
+}
+
+/** Read-only command search, using the same tenant repository as list routes. */
+export async function searchRecords(repo: TenantRepository, query: string) {
+  const empty = {vehicles: [], people: [], deals: []};
+  const search = query.trim().toLowerCase();
+  if (!search) return empty;
+  const [vehicles, customers, leads, deals, stock] = await Promise.all([
+    repo.listPage({search, limit: 5, offset: 0}), repo.crmList('customer'),
+    repo.crmList('lead'), repo.crmList('deal'), repo.list({}),
+  ]);
+  const people = customers.filter(c => [c.name, c.phone, c.email].join(' ').toLowerCase().includes(search));
+  const customerMap = new Map(customers.map(c => [c.id, c]));
+  const vehicleMap = new Map(stock.map(v => [v.id, v]));
+  return {
+    vehicles: vehicles.vehicles.map(v => ({id: v.id, title: `${v.year} ${v.make} ${v.model}`, meta: `Stock ${v.stockNumber} · ${v.status}`, href: `#/vehicles/${v.id}`})),
+    people: people.slice(0, 5).map(c => {
+      const lead = leads.find(l => l.customerId === c.id);
+      const deal = deals.find(d => d.customerId === c.id);
+      return {id: c.id, title: c.name, meta: [c.phone, c.email].filter(Boolean).join(' · '),
+        href: lead ? `#/leads/${lead.id}` : deal ? `#/deals/${deal.id}` : `#/leads?customerId=${encodeURIComponent(c.id)}`};
+    }),
+    deals: deals.filter(d => [customerMap.get(d.customerId)?.name, vehicleMap.get(d.vehicleId)?.stockNumber].join(' ').toLowerCase().includes(search)).slice(0, 5)
+      .map(d => ({id: d.id, title: customerMap.get(d.customerId)?.name ?? 'Customer unavailable', meta: `${vehicleMap.get(d.vehicleId)?.stockNumber ?? 'Vehicle unavailable'} · ${d.status}`, href: `#/deals/${d.id}`})),
+  };
 }

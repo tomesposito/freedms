@@ -21,12 +21,12 @@ export function gatewayHandler(handle: (request: ApiRequest) => Promise<ApiRespo
       const intake = path === '/intake/adf' && method === 'POST';
       const publicLink = (method === 'GET' && /^\/(share|invite)\/[^/]+$/.test(path)) ||
         (method === 'POST' && /^\/share\/[^/]+\/(respond|documents)$/.test(path)) ||
-        (method === 'POST' && path === '/access-requests');
+        (method === 'POST' && ['/access-requests', '/assistant/billing/webhook'].includes(path));
       // Only API Gateway's verified claims are trusted. Invite acceptance requires Cognito.
       if (!intake && !publicLink && !isMcpPath(path)) validateClaims(claims, issuer, audience);
       const authorization = Object.entries(event.headers ?? {}).find(([key]) => key.toLowerCase() === 'authorization')?.[1] ?? '';
       const acceptEncoding = Object.entries(event.headers ?? {}).find(([key]) => key.toLowerCase() === 'accept-encoding')?.[1];
-      return await handle({method, path, sourceIp: event.requestContext.http.sourceIp, authorization, acceptEncoding, query: event.queryStringParameters,
+      return await handle({stripeSignature: Object.entries(event.headers ?? {}).find(([key]) => key.toLowerCase() === 'stripe-signature')?.[1], method, path, sourceIp: event.requestContext.http.sourceIp, authorization, acceptEncoding, query: event.queryStringParameters,
         body: event.isBase64Encoded && event.body ? Buffer.from(event.body, 'base64').toString('utf8') : event.body,
         ...(intake ? {intakeToken: authorization.replace(/^Bearer /, '')} : publicLink ? {} : {claims: claims as unknown as AuthClaims})});
     } catch (error) { return errorResponse(error); }

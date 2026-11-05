@@ -36,19 +36,19 @@
     "offenders": []
   },
   {
-    "path": "/leads/028f0b61-b017-432e-9f37-873bedd5284f",
+    "path": "/leads/0b680604-1062-4221-ad91-45e1892bb467",
     "width": 390,
-    "heading": "Casey Sample",
+    "heading": "Jordan Example",
     "offenders": []
   },
   {
-    "path": "/vehicles/35e4efb4-4dbc-4bbe-8674-ec788d8bbdaf",
+    "path": "/vehicles/57f384e5-3a5c-4f19-bfd6-d02162c10947",
     "width": 390,
-    "heading": "2020 Ford F-150",
+    "heading": "2023 Mazda CX-5",
     "offenders": []
   },
   {
-    "path": "/vehicles/35e4efb4-4dbc-4bbe-8674-ec788d8bbdaf/edit",
+    "path": "/vehicles/57f384e5-3a5c-4f19-bfd6-d02162c10947/edit",
     "width": 390,
     "heading": "Edit vehicle",
     "offenders": []
@@ -72,37 +72,37 @@
     "offenders": []
   },
   {
-    "path": "/deals/new/lead/028f0b61-b017-432e-9f37-873bedd5284f",
+    "path": "/deals/new/lead/0b680604-1062-4221-ad91-45e1892bb467",
     "width": 390,
     "heading": "Start deal",
     "offenders": []
   },
   {
-    "path": "/deals/new/vehicle/35e4efb4-4dbc-4bbe-8674-ec788d8bbdaf",
+    "path": "/deals/new/vehicle/57f384e5-3a5c-4f19-bfd6-d02162c10947",
     "width": 390,
     "heading": "Start deal",
     "offenders": []
   },
   {
-    "path": "/deals/0cf18207-93fd-4d5e-83c1-4b7b60f0d276",
+    "path": "/deals/849187a4-b198-4533-9890-87789f6b9420",
     "width": 390,
-    "heading": "Alex Demo",
+    "heading": "Jordan Example",
     "offenders": []
   },
   {
-    "path": "/deals/0cf18207-93fd-4d5e-83c1-4b7b60f0d276/credit",
+    "path": "/deals/849187a4-b198-4533-9890-87789f6b9420/credit",
     "width": 390,
     "heading": "Credit application",
     "offenders": []
   },
   {
-    "path": "/deals/0cf18207-93fd-4d5e-83c1-4b7b60f0d276/compliance",
+    "path": "/deals/849187a4-b198-4533-9890-87789f6b9420/compliance",
     "width": 390,
     "heading": "Compliance",
     "offenders": []
   },
   {
-    "path": "/deals/3cbba086-8923-4a4b-8eae-8127a7650389/jacket",
+    "path": "/deals/a0fb8c25-24c8-4915-a0c4-b49300c6cf9a/jacket",
     "width": 390,
     "heading": "Deal jacket",
     "offenders": []
@@ -132,31 +132,31 @@
     "offenders": []
   },
   {
-    "path": "/service/appointments/4946f98e-bf36-4ea8-8c07-317b9eee5680",
+    "path": "/service/appointments/9cad8eea-78f0-4d02-a99c-bb77fb94dd14",
     "width": 390,
     "heading": "Edit service appointment",
     "offenders": []
   },
   {
-    "path": "/service/repair-orders/af3a2a33-a2fd-4f1f-92e3-b3131d2b7a3a",
+    "path": "/service/repair-orders/fe461024-3f0c-4de9-82d2-d14bb7e7c9ae",
     "width": 390,
     "heading": "Edit repair order",
     "offenders": []
   },
   {
-    "path": "/service/repair-orders/new/4946f98e-bf36-4ea8-8c07-317b9eee5680",
+    "path": "/service/repair-orders/new/9cad8eea-78f0-4d02-a99c-bb77fb94dd14",
     "width": 390,
     "heading": "New repair order",
     "offenders": []
   },
   {
-    "path": "/service/history/vehicle/35e4efb4-4dbc-4bbe-8674-ec788d8bbdaf",
+    "path": "/service/history/vehicle/57f384e5-3a5c-4f19-bfd6-d02162c10947",
     "width": 390,
     "heading": "Service history",
     "offenders": []
   },
   {
-    "path": "/service/history/customer/bb863a3e-8f99-4991-8d4f-531e4e23a7c0",
+    "path": "/service/history/customer/2a63a6bb-c6d7-4b65-979d-ffd34936e398",
     "width": 390,
     "heading": "Service history",
     "offenders": []
@@ -174,7 +174,7 @@
     "offenders": []
   },
   {
-    "path": "/parts/9e7a15f5-1e1e-4d95-b7b8-5693cb18ee1d",
+    "path": "/parts/e736a564-abe2-4fdb-bb68-7d6d1a2efb82",
     "width": 390,
     "heading": "Edit part",
     "offenders": []
@@ -216,13 +216,13 @@
     "offenders": []
   },
   {
-    "path": "/accounting/reconciliations/e70b79b6-e8bc-44ab-bc4a-7d5403480ce8",
+    "path": "/accounting/reconciliations/78ca3661-0172-443c-b3ee-4175b1a637d4",
     "width": 390,
-    "heading": "Statement · 2026-10-28 – 2026-10-28",
+    "heading": "Statement · 2026-11-03 – 2026-11-03",
     "offenders": []
   },
   {
-    "path": "/accounting/deals/0cf18207-93fd-4d5e-83c1-4b7b60f0d276",
+    "path": "/accounting/deals/849187a4-b198-4533-9890-87789f6b9420",
     "width": 390,
     "heading": "Deal accounting pack",
     "offenders": []
@@ -306,7 +306,7 @@
     "offenders": []
   },
   {
-    "path": "/share/mobile-demo.88dac04579f7a1e35e34e9e27c261720b7678bf53126ad878f0ac6b73b2a6b9d",
+    "path": "/share/mobile-demo.5de82f22930d715612576329d98f8ace212c0f23120d988de8745ab34d0f3a26",
     "width": 390,
     "heading": "Demo Motors",
     "offenders": []

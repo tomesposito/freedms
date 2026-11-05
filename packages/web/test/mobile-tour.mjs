@@ -140,6 +140,7 @@ try {
     });
     assert.deepEqual(layoutErrors,[],path);
     if(await page.locator('.menu-toggle').count()){
+      assert.ok(await page.locator('.sidebar .brand-name').evaluate(el=>el.getBoundingClientRect().width>=100 && el.getBoundingClientRect().height>20), `${path}: mobile brand visible`);
       await page.locator('.menu-toggle').click();
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=390),`${path}: open menu`);
       await page.locator('.menu-toggle').click();
@@ -160,7 +161,32 @@ try {
     assert.ok(await page.evaluate(()=>getComputedStyle(document.querySelector('.sidebar')).position==='fixed' && document.documentElement.scrollWidth<=innerWidth),`${path}: slim sidebar`);
     await page.locator('#sidebar-toggle').click();
     await page.screenshot({path:`${out}/desktop-${path.slice(1)||'inventory'}.png`,fullPage:true});
-    if(['/leads','/reports','/accounting','/parts','/service'].includes(path)) await page.screenshot({path:`docs/screenshots/${({'/leads':'leads-list','/parts':'parts-catalog','/service':'service-board'})[path] || path.slice(1)}.png`,fullPage:true});
+    if(['/leads','/reports','/accounting','/service'].includes(path)) await page.screenshot({path:`docs/screenshots/${({'/leads':'leads-list','/service':'service-board'})[path] || path.slice(1)}.png`,fullPage:true});
   }
+  // Refresh the README shell captures from the same real offline fixtures.
+  // Parts and worksheet/share section captures belong to readme-shell-tour.mjs.
+  const captures = {
+    'inventory-list': '/', 'leads-list': '/leads', 'equity-mining': '/leads/equity',
+    'credit-application': `/deals/${deal.id}/credit`,
+    'compliance': `/deals/${deal.id}/compliance`, 'deal-jacket': `/deals/${deals.find(d=>d.status==='sold').id}/jacket`,
+    'service-board': '/service', 'service-settings': '/service/settings', 'repair-order': `/service/repair-orders/${ros[0].id}`,
+    'accounting': '/accounting', 'accounts-payable': '/accounting/ap', 'accounts-receivable': '/accounting/ar',
+    'cash-register': `/accounting/cash/${bank.id}`, 'bank-reconciliation': `/accounting/reconciliations/${period.id}`,
+    'deal-pack': `/accounting/deals/${deal.id}`, 'reports': '/reports', 'documents': '/documents',
+    'compliance-log': '/compliance', 'privacy-requests': '/compliance/privacy', 'audit-log': '/compliance/audit',
+    'fi-products': '/fi-products', 'listing-feeds': '/feeds', 'webhooks': '/webhooks', 'account-mfa': '/account',
+    'user-management': '/users',
+  };
+  for (const [name, path] of Object.entries(captures)) {
+    await page.goto(`http://127.0.0.1:5198/?capture=${name}#${path}`, {waitUntil:'networkidle'});
+    assert.equal(await page.locator('#retry-load, #message:visible').count(), 0, name);
+    await page.screenshot({path:`docs/screenshots/${name}.png`,fullPage:true});
+    if (name === 'inventory-list') {
+      await page.locator('#sidebar-toggle').click();
+      await page.screenshot({path:'docs/screenshots/sidebar-slim.png',fullPage:true});
+      await page.locator('#sidebar-toggle').click();
+    }
+  }
+  assert.deepEqual(errors,[]);
   console.log(`PASS: ${routes.length} routes at 390px plus desktop checks. Evidence: ${out}`);
 } finally {await browser?.close();vite.kill();}

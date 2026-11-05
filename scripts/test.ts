@@ -33,6 +33,7 @@ import '../packages/web/test/users.test.js';
 import '../packages/api/test/retail.test.js';
 import '../packages/web/test/retail.test.js';
 import '../packages/api/test/local.test.js';
+import '../packages/api/test/local-operator.test.js';
 
 import '../packages/api/test/equity.test.js';
 import '../packages/api/test/reports-p2.test.js';
@@ -79,3 +80,17 @@ import '../packages/web/test/ideas.test.js';
 import '../packages/api/test/mcp-registration.test.js';
 import '../packages/api/test/mcp-grants.test.js';
 import '../packages/web/test/ai-connections.test.js';
+
+import '../packages/api/test/assistant.test.js';
+
+import "../packages/api/test/assistant-billing.test.js";
+
+import "../packages/web/test/assistant.test.js";
+
+import '../packages/web/test/assistant-admin.test.js';
+
+import '../packages/api/test/stripe.test.js';
+import '../packages/api/test/assistant-skills.test.js';
+
+import '../packages/api/test/search.test.js';
+import '../packages/web/test/command-bar.test.js';

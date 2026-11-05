@@ -1,12 +1,13 @@
+import { executeTool } from './execute.js';
 import { grantRevoked } from './grants.js';
-import type { AuthClaims, DealView } from '@freedms/shared';
+import type { AuthClaims } from '@freedms/shared';
 import { authorize } from '../auth.js';
-import { ApiError, missing, requireId } from '../errors.js';
+import { ApiError } from '../errors.js';
 import { response, errorResponse, type ApiRequest, type ApiResponse } from '../handler.js';
 import type { RepositoryFactory } from '../repository.js';
-import { invalid, object, onlyKeys } from '../validation.js';
+import { object, onlyKeys } from '../validation.js';
 import { accessVerifier, type McpConfig } from './auth.js';
-import { tools, vehicleFields } from './tools.js';
+import { tools } from './tools.js';
 export const isMcpPath = (path: string) => ['/mcp', '/mcp/register', '/.well-known/oauth-protected-resource'].includes(path.replace(/\/$/, ''));
 export function createMcpHandler(repositories: RepositoryFactory, execute: (request: ApiRequest) => Promise<ApiResponse>, config: McpConfig) {
   const verify = accessVerifier(config);
@@ -57,71 +58,7 @@ export function createMcpHandler(repositories: RepositoryFactory, execute: (requ
       const params = object(message.params); onlyKeys(params, ['name', 'arguments']);
       const tool = available.find(t => t.name === params.name);
       if (!tool) return fail(id, -32602, 'Tool unavailable.');
-      const args = object(params.arguments ?? {}); onlyKeys(args, Object.keys(tool.inputSchema.properties));
-      if (tool.inputSchema.required.some(key => args[key] === undefined)) throw invalid('Required tool arguments are missing.');
-      const {id: entityId, taskId, documentId, pencilId, ...fields} = args;
-      let path = tool.path.includes(':id') ? tool.path.replace(':id', requireId(entityId)) : tool.path;
-      if ('taskId' in tool.inputSchema.properties) path = path.replace(':taskId', requireId(taskId));
-      if ('documentId' in tool.inputSchema.properties) path = path.replace(':documentId', requireId(documentId));
-      const internal: ApiRequest = {method: tool.method, path, claims, agent: true};
-      if (tool.method === 'GET') {
-        internal.query = {};
-        for (const [key, value] of Object.entries(fields)) {
-          if (typeof value !== 'string' && !(typeof value === 'number' && Number.isSafeInteger(value))) throw invalid('Invalid query argument.');
-          internal.query[key] = String(value);
-        }
-      } else {
-        // The inventory UI only confirms deletion, which is deliberately not exposed.
-        if (tool.name === 'deactivate_user' || tool.name === 'revoke_invite') {
-          if (fields.confirm !== true) throw invalid('Explicit confirmation is required.');
-          const {confirm: _confirm, ...body} = fields;
-          internal.body = JSON.stringify(body);
-        } else if (tool.name === 'set_vehicle_status') {
-          const existing = await execute({method: 'GET', path, claims});
-          if (existing.statusCode !== 200) return rpc(id, {isError: true, content: [{type: 'text', text: existing.body}]});
-          const vehicle = JSON.parse(existing.body).data;
-          internal.body = JSON.stringify({...Object.fromEntries(Object.keys(vehicleFields).map(k => [k, vehicle[k]])), ...fields});
-        } else if (tool.name === 'update_technician' || tool.name === 'update_labor_rate') {
-          // Catalog PUTs require full forms, unlike appointment/RO/part PUTs.
-          const existing = await execute({method: 'GET', path, claims});
-          if (existing.statusCode !== 200) return rpc(id, {isError: true, content: [{type: 'text', text: existing.body}]});
-          const record = JSON.parse(existing.body).data;
-          const keys = tool.name === 'update_technician' ? ['name', 'skills'] : ['skill', 'laborRateCents'];
-          internal.body = JSON.stringify({...Object.fromEntries(keys.map(key => [key, record[key]])), ...fields});
-        } else if (tool.name === 'set_lead_stage' || tool.name === 'assign_lead') {
-          const existing = await execute({method: 'GET', path, claims});
-          if (existing.statusCode !== 200) return rpc(id, {isError: true, content: [{type: 'text', text: existing.body}]});
-          const lead = JSON.parse(existing.body).data;
-          internal.body = JSON.stringify({version: fields.version, stage: fields.stage ?? lead.stage,
-            assigneeId: 'assigneeId' in fields ? fields.assigneeId : lead.assigneeId, vehicleId: lead.vehicleId});
-        } else if (tool.name === 'set_working_pencil') {
-          internal.body = JSON.stringify({version: fields.version, workingPencilId: requireId(pencilId)});
-        } else if (tool.name === 'create_pencil' || tool.name === 'update_pencil') {
-          const existing = await execute({method: 'GET', path, claims});
-          if (existing.statusCode !== 200) return rpc(id, {isError: true, content: [{type: 'text', text: existing.body}]});
-          const deal: DealView = JSON.parse(existing.body).data;
-          const pencils = deal.pencils.map(({id, type, name, price, down, term, aprBps, lease, fiSelections}) => ({
-            id, type, name, price, down, term, aprBps,
-            // Stored leases contain both residual values; REST accepts exactly one driver.
-            lease: lease ? {msrp: lease.msrp, residualAmount: lease.residualAmount, moneyFactorMicro: lease.moneyFactorMicro,
-              acquisitionFee: lease.acquisitionFee, securityDeposit: lease.securityDeposit, milesPerYear: lease.milesPerYear} : null,
-            fiSelections: fiSelections.map(({productId, status}) => ({productId, status})),
-          }));
-          const key = requireId(pencilId), saved = pencils.find(p => p.id === key);
-          const create = tool.name === 'create_pencil';
-          if (create && saved) throw invalid('Pencil IDs must be unique.');
-          if (!create && !saved) throw missing();
-          const {version, ...input} = fields;
-          const pencil = {id: key, fiSelections: create ? [] : saved!.fiSelections, ...input};
-          internal.body = JSON.stringify({version, pencils: create ? [...pencils, pencil] : pencils.map(p => p.id === key ? pencil : p)});
-        } else internal.body = JSON.stringify(fields);
-      }
-      // Direct in-process REST operation dispatch: no HTTP self-call. Reads are not audited
-      // by REST. Writes retain its atomic outbox and add actorType=agent with the real user ID.
-      const result = await execute(internal);
-      let structuredContent: unknown;
-      try { structuredContent = JSON.parse(result.body); } catch { /* CSV downloads retain their exact text. */ }
-      return rpc(id, {isError: result.statusCode >= 400, content: [{type: 'text', text: result.body}], structuredContent});
+      return rpc(id, await executeTool(tool, params.arguments, claims!, execute));
     } catch (error) {
       const sanitized = JSON.parse(errorResponse(error).body);
       return rpc(id, {isError: true, content: [{type: 'text', text: JSON.stringify(sanitized)}]});
