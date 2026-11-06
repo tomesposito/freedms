@@ -1,11 +1,15 @@
 import {createHash} from 'node:crypto';
 import {lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync} from 'node:fs';
 
+export const marketingPages = ['index.html', 'dms-cost.html', 'free-dealer-management-software.html',
+  'bhph.html', 'compare.html', 'paperwork.html', 'recon.html', 'states.html'];
+export const marketingDocuments = ['robots.txt', 'sitemap.xml', 'llms.txt', ...marketingPages.filter(page => page !== 'index.html')];
+
 // Content-addressed assets let CloudFront cache screenshots without serving an old
 // screenshot under a new page. Previous assets remain usable during rollback.
 export function buildMarketing(source, destination, env = process.env) {
   mkdirSync(`${destination}/assets`, {recursive: true});
-  const pages = ['index.html', 'dms-cost.html', 'free-dealer-management-software.html'];
+  const pages = marketingPages;
   const html = Object.fromEntries(pages.map(name => [name, readFileSync(`${source}/${name}`, 'utf8')]));
   const siteKey = env.TURNSTILE_SITE_KEY?.trim();
   if (siteKey) {

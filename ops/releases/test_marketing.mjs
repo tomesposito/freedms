@@ -19,10 +19,13 @@ test('marketing image references match immutable packaged assets and pilot links
     }
     assert.equal(readdirSync(`${destination}/assets`).length, readdirSync('site/assets').length);
     assert.ok(readdirSync(`${destination}/assets`).some(name => /^og-image-[a-f0-9]{20}\.jpg$/.test(name)));
-    for (const page of ['index.html', 'dms-cost.html', 'free-dealer-management-software.html']) {
+    // Discover source pages independently so a new guide cannot silently miss a release.
+    const pages = readdirSync('site').filter(name => name.endsWith('.html'));
+    assert.deepEqual(readdirSync(destination).filter(name => name.endsWith('.html')).sort(), pages.sort());
+    for (const page of pages) {
       const content = readFileSync(`${destination}/${page}`, 'utf8');
       const assets = [...content.matchAll(/(?:src|data-src|href|content)="(?:https:\/\/freedms\.co\/)?(assets\/[^"]+)"/g)].map(match => match[1]);
-      assert.ok(assets.length >= 5);
+      assert.ok(assets.length >= 3);
       for (const path of assets) {
         const hash = createHash('sha256').update(readFileSync(`${destination}/${path}`)).digest('hex').slice(0, 20);
         assert.ok(path.endsWith(`-${hash}.${path.slice(path.lastIndexOf('.') + 1)}`));
@@ -35,6 +38,11 @@ test('marketing image references match immutable packaged assets and pilot links
     }
     for (const name of ['robots.txt', 'sitemap.xml', 'llms.txt']) {
       assert.deepEqual(readFileSync(`${destination}/${name}`), readFileSync(`site/${name}`));
+    }
+    for (const match of readFileSync(`${destination}/sitemap.xml`, 'utf8').matchAll(/<loc>([^<]+)<\/loc>/g)) {
+      const url = new URL(match[1]);
+      assert.equal(url.origin, 'https://freedms.co');
+      assert.ok(readFileSync(`${destination}/${url.pathname === '/' ? 'index.html' : url.pathname.slice(1)}`).length, match[1]);
     }
     assert.ok(html.includes('https://app.freedms.co/'));
     assert.ok(html.includes('invite-only'));
@@ -54,7 +62,7 @@ test('apex routes to marketing objects without sharing the app asset cache keys'
   for (const path of ['/', '/index.html']) assert.equal(route('freedms.co', path).uri, '/marketing/index.html');
   assert.equal(route('freedms.co', '/assets/hero-abc.png').uri, '/marketing/assets/hero-abc.png');
   assert.equal(route('freedms.co', '/assets/og-image-abc.jpg').uri, '/marketing/assets/og-image-abc.jpg');
-  for (const path of ['/robots.txt', '/sitemap.xml', '/llms.txt', '/dms-cost.html', '/free-dealer-management-software.html']) {
+  for (const path of ['/robots.txt', '/sitemap.xml', '/llms.txt', ...readdirSync('site').filter(name => name.endsWith('.html') && name !== 'index.html').map(name => `/${name}`)]) {
     assert.equal(route('freedms.co', path).uri, `/marketing${path}`);
     assert.equal(route('app.freedms.co', path).statusCode, 404);
   }

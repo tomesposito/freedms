@@ -3,7 +3,7 @@ import {readFileSync, readdirSync, mkdirSync, statSync, writeFileSync, rmSync, c
 import {execFileSync} from 'node:child_process';
 import {resolve} from 'node:path';
 import {tmpdir} from 'node:os';
-import {buildMarketing} from './marketing.mjs';
+import {buildMarketing, marketingDocuments} from './marketing.mjs';
 import {releaseConfiguration} from './configuration.mjs';
 
 const source = process.env.GITHUB_SHA;
@@ -17,7 +17,7 @@ function walk(dir, prefix = '') {
     const path = prefix + name;
     if (statSync(`${dir}/${name}`).isDirectory()) walk(`${dir}/${name}`, `${path}/`);
     else {
-      if (!(/^(marketing\/)?index\.html$/.test(path) || /^marketing\/(robots\.txt|sitemap\.xml|llms\.txt|dms-cost\.html|free-dealer-management-software\.html)$/.test(path) || /^(marketing\/)?assets\/[A-Za-z0-9_-]+\.(js|css|woff2|png|svg|jpg)$/.test(path))) throw Error('Unexpected frontend file');
+      if (!(/^(marketing\/)?index\.html$/.test(path) || marketingDocuments.some(name => path === `marketing/${name}`) || /^(marketing\/)?assets\/[A-Za-z0-9_-]+\.(js|css|woff2|png|svg|jpg)$/.test(path))) throw Error('Unexpected frontend file');
       files.push({path, sha256: hash(readFileSync(`${dir}/${name}`)), size: statSync(`${dir}/${name}`).size});
     }
   }
