@@ -106,12 +106,17 @@ async function paidCycle(repo: TenantRepository, old: AssistantPlan | undefined,
   return {cycle: {id: start, tenantId, cycleStart: start, cycleEnd: end, billedUserCount: sub.quantity!, paidCapacity: capacity,
     allotmentCredits: capacity, topUpCredits: carry, version: 1}, ...(previous ? {previousCycle: {id: previous.id, version: previous.version}} : {})};
 }
-export async function stripeWebhook(repositories: RepositoryFactory, stripe: StripeBilling, raw: string, signature: string | undefined, now: Date) {
+export async function stripeWebhook(repositories: RepositoryFactory, stripe: StripeBilling, raw: string, signature: string | undefined, now: Date, sandboxOwner?: Pick<Principal, 'userId' | 'tenantId'> | null) {
   const event = await stripe.verifyEvent(raw, signature);
   if (!event.customerId) return;
   const tenantId = await repositories.tenantForStripeCustomer?.(event.customerId);
   if (!tenantId) return;
   const repo = repositories.forTenant(tenantId), link = await repo.assistantBillingLink();
+  if (sandboxOwner !== undefined) {
+    if (!sandboxOwner?.userId || tenantId !== sandboxOwner.tenantId) return;
+    const member = await repo.membership(sandboxOwner.userId);
+    if (!member?.active || member.role !== 'admin') return;
+  }
   if (link?.customerId !== event.customerId || await repo.stripeEventProcessed(event.id)) return;
   const old = await repo.assistantPlan();
   let plan: AssistantPlan | undefined, cycle: AssistantCycle | undefined, previousCycle: {id: string; version: number} | undefined;
@@ -138,7 +143,7 @@ export async function stripeWebhook(repositories: RepositoryFactory, stripe: Str
       const requested = newSubscription ? link.purchase?.userIds ?? link.userIds ?? [] : change?.userIds ?? old?.licensedUserIds ?? [];
       if (newSubscription) { delete plan.appliedSeatChangeId; if (link.purchase) plan.checkoutPurchaseId = link.purchase.id; }
       if (change) plan.appliedSeatChangeId = change.id;
-      plan.licensedUserIds = requested.slice(0, sub.quantity);
+      plan.licensedUserIds = requested.filter(userId => !sandboxOwner || userId === sandboxOwner.userId).slice(0, sub.quantity);
       plan.paidSeats = sub.quantity; plan.paidPeriodStart = sub.periodStart; plan.paidPeriodEnd = sub.periodEnd; plan.paidInvoiceId = sub.invoiceId;
       const grant = await paidCycle(repo, old, sub, tenantId, now); cycle = grant.cycle; previousCycle = grant.previousCycle;
     }

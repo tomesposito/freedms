@@ -65,6 +65,9 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
 }
 export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {stripe?: StripeBilling; appBaseUrl?: string; assistantSeedLocalPlan?: boolean; assistantProvider?: AssistantProvider; assistantEntitlement?: AssistantEntitlement; registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
   const sender = options.hosted ? guardHostedWebhookSender(webhookSender ?? hostedWebhookSender()) : webhookSender ?? fetchWebhookSender;
+  // A failed secret load must not reopen test entitlements to other users.
+  const sandboxRestricted = options.hosted === true && options.stripe?.testMode !== false;
+  const sandboxDenied = () => new ApiError(403, 'ASSISTANT_SANDBOX_RESTRICTED', 'Paid AI plans are not available yet. Join the waiting list in Account → AI assistant.');
   const handle = async (request: ApiRequest): Promise<ApiResponse> => {
     if (request.path.replace(/\/$/, '') === '/mcp/register') return registerMcpClient(request, repositories, now(), options.registration);
     if (isMcpPath(request.path)) return mcp(request);
@@ -87,12 +90,15 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       if (request.path.startsWith('/invite/')) return compressResponse(await publicInvite(request, repositories, now(), options.hosted), request.acceptEncoding);
       if (request.path.replace(/\/$/, '') === '/access-requests') return compressResponse(await submitAccessRequest(request, repositories, now(), options.mail, options.turnstile), request.acceptEncoding);
       if (request.path.replace(/\/$/, '') === '/assistant/billing/webhook' && request.method.toUpperCase() === 'POST') {
-        await stripeWebhook(repositories, options.stripe ?? new UnconfiguredStripeBilling(), request.body ?? '', request.stripeSignature, now());
+        await stripeWebhook(repositories, options.stripe ?? new UnconfiguredStripeBilling(), request.body ?? '', request.stripeSignature, now(), sandboxRestricted ? options.pilotOperator ?? null : undefined);
         return response(200, {received: true});
       }
       if (!request.claims) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in to continue.');
       const {principal, repository} = await authorize(request.claims, repositories);
       const method = request.method.toUpperCase(); const path = request.path.replace(/\/$/, '');
+      const sandboxAllowed = !sandboxRestricted || canManageAccessRequests(principal, options.pilotOperator);
+      const billingConfigured = sandboxAllowed && (options.stripe?.configured ?? false) && (options.assistantProvider?.configured ?? false);
+      const billingTestMode = sandboxAllowed && (options.stripe?.testMode ?? false);
       // Attribute atomic writes from MCP to the connecting user without changing REST events.
       const agentEvent = (event: OutboxEvent): OutboxEvent => ({...event, actorType: 'agent'});
       const agentWrites: Pick<TenantRepository, 'crmWrite' | 'saveMember' | 'saveWebhookEndpoint' | 'saveFeedConfig' | 'appendFeedRun'> = {
@@ -109,27 +115,39 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       }}) : repository;
 
       const execute = async (): Promise<ApiResponse> => {
+        if (!sandboxAllowed && path.startsWith('/assistant/') &&
+            !(path === '/assistant/admin' && method === 'GET') &&
+            !(path === '/assistant/admin/waitlist' && ['POST', 'DELETE'].includes(method))) throw sandboxDenied();
         if (path === '/search' && method === 'GET') {
           onlyKeys(request.query ?? {}, ['q']);
           return response(200, {data: await searchRecords(repository, text(request.query?.q ?? '', 'Search', 200, true))});
         }
         const billing = new AssistantBilling(repository, now, options.assistantSeedLocalPlan === true && !options.hosted);
+        const adminData = (data: Awaited<ReturnType<AssistantBilling['admin']>>) =>
+          ({...data, users: sandboxRestricted ? data.users.filter(user => user.userId === principal.userId) : data.users, billingConfigured, billingTestMode});
         if (/^\/assistant\/admin\/billing\/(checkout|topup|portal|seats)$/.test(path) && method === 'POST') {
           if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can manage billing.');
           if (path.endsWith('/checkout') && !options.assistantProvider?.configured) throw new ApiError(503, 'ASSISTANT_UNAVAILABLE', 'The AI assistant must be configured before purchasing access.');
-          return response(200, {data: await billingAction(repository, options.stripe ?? new UnconfiguredStripeBilling(), principal, path.split('/').at(-1)!,
-            request.body ? parseBody(request.body) : {}, billingReturnUrl(options.appBaseUrl, request.origin, options.hosted === true), now())});
+          const action = path.split('/').at(-1)!, input = request.body ? parseBody(request.body) : {};
+          if (sandboxRestricted && ['checkout', 'seats'].includes(action)) {
+            if (input.userIds !== undefined && (!Array.isArray(input.userIds) || input.userIds.length !== 1 || input.userIds[0] !== principal.userId))
+              throw new ApiError(403, 'ASSISTANT_SANDBOX_RESTRICTED', 'Sandbox AI access can only be assigned to the app super admin.');
+            input.userIds = [principal.userId];
+          }
+          return response(200, {data: await billingAction(repository, options.stripe ?? new UnconfiguredStripeBilling(), principal, action,
+            input, billingReturnUrl(options.appBaseUrl, request.origin, options.hosted === true), now())});
         }
         if (path === '/assistant/admin/waitlist' && (method === 'POST' || method === 'DELETE')) {
           if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can manage the AI assistant.');
-          const billingConfigured = (options.stripe?.configured ?? false) && (options.assistantProvider?.configured ?? false);
           if (method === 'POST' && billingConfigured) throw new ApiError(409, 'ASSISTANT_WAITLIST_UNAVAILABLE', 'Billing is set up. Subscribe to start a plan.');
-          const data = method === 'POST' ? await billing.joinWaitlist(principal, request.body ? parseBody(request.body) : {}) : await billing.leaveWaitlist(principal);
-          return response(200, {data: {...data, billingConfigured, billingTestMode: options.stripe?.testMode ?? false}});
+          const data = method === 'POST' ? await billing.joinWaitlist(principal, request.body ? parseBody(request.body) : {}, !sandboxAllowed)
+            : await billing.leaveWaitlist(principal, !sandboxAllowed);
+          return response(200, {data: adminData(data)});
         }
         if ((path === '/assistant/admin' && method === 'GET') || (path === '/assistant/admin/settings' && method === 'PUT')) {
           if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can manage the AI assistant.');
-          return response(200, {data: {...(method === 'GET' ? await billing.admin(principal) : await billing.updateSettings(principal, parseBody(request.body))), billingConfigured: (options.stripe?.configured ?? false) && (options.assistantProvider?.configured ?? false), billingTestMode: options.stripe?.testMode ?? false}});
+          const data = method === 'PUT' ? await billing.updateSettings(principal, parseBody(request.body)) : await billing.admin(principal, !sandboxAllowed);
+          return response(200, {data: adminData(data)});
         }
         if (path === '/assistant/pool' && method === 'GET') return response(200, {data: await billing.pool(principal)});
         if (path === '/assistant/usage' && method === 'GET') return response(200, {data: await billing.usage(principal)});

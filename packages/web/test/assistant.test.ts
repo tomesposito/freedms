@@ -2,6 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { poolState, chatErrorState, toolLabel, receipt, trayHtml, type AssistantPool, type AssistantState } from '../src/assistant.js';
 const pool: AssistantPool = {tier: 'assistant', status: 'active', disabled: false, overageEnabled: false, balanceCredits: 75, cycleEnd: '2026-12-04'};
+test('sandbox-restricted users see a waiting list with a locked composer', () => {
+  const error = {code: 'ASSISTANT_SANDBOX_RESTRICTED', status: 403};
+  assert.equal(poolState(undefined, error), 'waiting-list');
+  assert.equal(chatErrorState(error), 'waiting-list');
+  const html = trayHtml('waiting-list');
+  assert.match(html, /join the waiting list/); assert.match(html, /Account → AI assistant/);
+  assert.match(html, /<textarea[^>]*disabled/); assert.doesNotMatch(html, /Stripe|test payment|Subscribe/);
+});
 test('assistant pool state respects plan, disabled, zero and overage in order', () => {
   assert.equal(poolState(), 'loading'); assert.equal(poolState(pool), 'ready');
   for (const status of ['past_due', 'cancelled'] as const) {

@@ -113,6 +113,16 @@ pilot operator sees all waiting-list entries on the Pilot requests page. Once
 billing is configured, Subscribe buttons replace the waiting list. Settings and
 existing plans still work.
 
+In hosted Stripe test mode, sandbox billing and paid AI use are restricted to
+the app super admin: the exact active admin user and tenant configured by
+`PilotOperatorSubject` and `PilotOperatorTenantId`. Checkout and seat changes
+can assign only that user. Other dealership admins see the waiting list, even
+if an old test plan exists, and staff cannot use sandbox credits. The API
+enforces this for billing, chat, skills, usage, and signed payment webhooks;
+hiding checkout in the UI is not the access control. Missing operator settings
+or unavailable billing secrets do not reopen sandbox access. Explicit live
+mode retains normal assigned-user billing and access.
+
 Hosted billing loads a JSON secret from AWS Secrets Manager using `StripeSecretArn`.
 The Lambda role can read only that secret. Keys stay out of Lambda environment
 variables and release artifacts; the loader refreshes its cache every 60 seconds.
