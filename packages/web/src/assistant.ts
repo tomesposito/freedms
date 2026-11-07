@@ -28,9 +28,10 @@ export interface AssistantPool {
   tier: string; status: 'active' | 'past_due' | 'cancelled'; disabled: boolean;
   overageEnabled: boolean; balanceCredits: number; cycleEnd: string;
 }
-export type AssistantState = 'loading' | 'ready' | 'paywall' | 'past-due' | 'disabled' | 'exhausted' | 'unconfigured' | 'unavailable';
+export type AssistantState = 'loading' | 'ready' | 'paywall' | 'waiting-list' | 'past-due' | 'disabled' | 'exhausted' | 'unconfigured' | 'unavailable';
 type ApiError = {code?: string; status?: number};
 export function poolState(pool?: AssistantPool, error?: ApiError): AssistantState {
+  if (error?.code === 'ASSISTANT_SANDBOX_RESTRICTED') return 'waiting-list';
   if (error?.code === 'ASSISTANT_PAST_DUE') return 'past-due';
   if (error) return error.code === 'ASSISTANT_PLAN_REQUIRED' || error.status === 402 ? 'paywall' : 'unavailable';
   if (!pool) return 'loading';
@@ -41,6 +42,7 @@ export function poolState(pool?: AssistantPool, error?: ApiError): AssistantStat
   return 'ready';
 }
 export function chatErrorState(error: ApiError): AssistantState | undefined {
+  if (error.code === 'ASSISTANT_SANDBOX_RESTRICTED') return 'waiting-list';
   if (error.code === 'ASSISTANT_PAST_DUE') return 'past-due';
   if (error.code === 'ASSISTANT_UNAVAILABLE' || error.status === 503) return 'unconfigured';
   if (error.code === 'ASSISTANT_DISABLED') return 'disabled';
@@ -56,6 +58,7 @@ export function receipt(credits: number): string { return `This used ${credits} 
 interface Reply {reply: string; transcript: {tool: string; ok: boolean}[]; creditsUsed: number; proposals?: AssistantProposal[]}
 export interface AssistantTurn {text: string; result?: Reply; error?: string; skill?: string; context?: AssistantContext; applied?: boolean}
 const locked: Record<AssistantState, string> = {
+  'waiting-list': 'Paid AI plans are opening soon',
   ready: 'Ask, or tell it what to do…', loading: 'Checking assistant plan…', unavailable: 'Unable to check assistant plan — reopen to retry',
   'past-due': 'Locked — payment is past due',
   paywall: 'Locked — this store has no assistant plan', exhausted: 'Out of credits',
@@ -63,6 +66,7 @@ const locked: Record<AssistantState, string> = {
 };
 function stateBody(state: AssistantState, pool?: AssistantPool): string {
   switch (state) {
+    case 'waiting-list': return '<section><h2>Paid AI plans are opening soon.</h2><p>Ask a dealership admin to join the waiting list under Account → AI assistant. Joining does not start a subscription or charge anything.</p></section>';
     case 'ready': return `<section><h2>What do you need done?</h2><p>Ask about anything in the store, or hand it a job. It uses the same tools as the AI connections your dealers already run — as you, with your permissions.</p><ul class="assistant-capabilities"><li>Find cars, leads, deals, and repair orders</li><li>Add and update records — stock a vehicle, move a lead, post a note</li><li>Run the numbers on a pencil or a report</li></ul><div class="assistant-note"><b>It cannot, ever:</b> capture a signature, attest a compliance check, accept terms, handle MFA, or make a credit decision. Those have no tools. They stay with a person.</div></section>`;
     case 'past-due': return `<p role="status">Payment is past due. Ask an admin to update billing in Account → AI assistant.</p>${stateBody('paywall', pool)}`;
     case 'paywall': return `<section><h2>The assistant is a paid add-on.</h2><p>freeDMS itself is free. The assistant is not — it runs on a frontier model and works the store as you do. It is priced in credits: a lookup costs 1, a change costs 2, and the pool is shared by assigned AI users at the dealership.</p>${[['Assistant', 75, 15], ['Assistant Pro', 175, 29], ['Assistant Heavy', 350, 49]].map(([name, credits, price]) => `<div class="assistant-tier"><div><b>${e(name)}</b><small>${e(credits)} credits per AI user</small></div><strong>$${e(price)} / AI user / mo</strong></div>`).join('')}<div class="assistant-note">Failed actions never charge, and the pool stops hard at zero — nobody gets a surprise bill.</div><div class="assistant-callout">Ask your admin to turn it on</div><p class="assistant-small">Admins subscribe under Account → AI assistant. Your usage is recorded under your name, like everything else you do in the store.</p></section>`;

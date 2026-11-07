@@ -179,7 +179,8 @@ test('local stub seeds only with explicit local option and burns the entire seed
   assert.equal((await s.get('/assistant/pool')).data.balanceCredits, 0);
   assert.equal((await s.repo.assistantPlan())?.perRequestCreditCap, 25);
   for (const hosted of [false, true]) {
-    const off = await setup(new LocalAssistantProvider(), hosted, hosted); assert.equal((await off.chat()).status, 402); assert.equal(await off.repo.assistantPlan(), undefined);
+    const off = await setup(new LocalAssistantProvider(), hosted, hosted);
+    assert.equal((await off.chat()).status, hosted ? 403 : 402); assert.equal(await off.repo.assistantPlan(), undefined);
   }
 });
 

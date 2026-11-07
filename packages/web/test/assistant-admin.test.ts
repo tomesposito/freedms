@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assistantAdminHtml, assistantAdminRoute, pendingBilling, type AssistantAdminData } from '../src/assistant-admin.js';
+test('sandbox operator has labeled test checkout while other admins see only waiting-list actions', () => {
+  const owner = assistantAdminHtml({plan: null, billingConfigured: true, billingTestMode: true, users: [{userId: 'owner', name: 'Tom', assigned: false}]});
+  assert.match(owner, /available only to the app super admin/); assert.match(owner, /data-billing="checkout"/); assert.match(owner, /Tom/);
+  const other = assistantAdminHtml({plan: null, billingConfigured: false, billingTestMode: false, users: []});
+  assert.match(other, /Join the waiting list/); assert.doesNotMatch(other, /Stripe test mode|data-billing=|data-ai-user/);
+});
 const data: AssistantAdminData = {
   plan: {tier: 'assistant-pro', tierName: 'Assistant Pro', pricePerUserCents: 2900, creditsPerUser: 175, billedUserCount: 10, monthlyTotalCents: 29000, renewalDate: '2026-12-03', status: 'active'},
   pool: {allotmentCredits: 1750, topUpCredits: 0, usedCredits: 612, balanceCredits: 1138, cycleStart: '2026-11-03', cycleEnd: '2026-12-03'},
