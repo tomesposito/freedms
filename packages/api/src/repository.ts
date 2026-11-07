@@ -14,12 +14,17 @@ export interface VehicleQuery { status?: VehicleStatus; search?: string }
 export interface LeadQuery { search?: string; stage?: Lead['stage']; assignee?: string | null; limit: number; offset: number }
 export interface LeadPage { leads: Lead[]; customers: Customer[]; total: number }
 export const OPERATOR_TENANT_ID = 'operator';
-export interface AssistantBillingLink {tenantId: string; customerId: string; version: number}
-export interface StripeCommit {eventId: string; paymentId?: string; plan: AssistantPlan; cycle?: AssistantCycle; event: OutboxEvent}
+export interface AssistantBillingLink {
+  tenantId: string; customerId: string; version: number; userIds?: string[];
+  purchase?: {id: string; tier: AssistantPlan['tier']; userIds: string[]; expiresAt: number};
+  seatChange?: {id: string; userIds: string[]; tier?: AssistantPlan['tier']; requestedAt: string};
+}
+export interface StripeCommit {eventId: string; paymentId?: string; plan: AssistantPlan; cycle?: AssistantCycle; previousCycle?: {id: string; version: number}; event: OutboxEvent}
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
   assistantBillingLink(): Promise<AssistantBillingLink | undefined>;
   saveAssistantBillingLink(record: AssistantBillingLink, event: OutboxEvent): Promise<void>;
+  updateAssistantBillingLink(record: AssistantBillingLink, expectedVersion: number, event: OutboxEvent): Promise<void>;
   stripeEventProcessed(id: string): Promise<boolean>;
   commitStripeEvent(commit: StripeCommit): Promise<void>;
   assistantPlan(): Promise<AssistantPlan | undefined>;
@@ -388,7 +393,10 @@ function assertAssistantVersion(record: {version: number}, expected: number) {
 export function assertAssistantPlan(tenantId: string, record: AssistantPlan, expected: number, event: OutboxEvent) {
   assertScope(tenantId, record, event); assertAssistantVersion(record, expected);
   assertEvent(record.id, record.version, event, 'assistant-plan.updated');
-  if ([record.stripeCustomerId, record.stripeSubscriptionId].some(v => v !== undefined && (typeof v !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(v))) ||
+  if ((record.licensedUserIds !== undefined && (!Array.isArray(record.licensedUserIds) || new Set(record.licensedUserIds).size !== record.licensedUserIds.length || record.licensedUserIds.some(id => !/^[a-zA-Z0-9_-]{1,128}$/.test(id)))) ||
+      (record.paidSeats !== undefined && (!Number.isSafeInteger(record.paidSeats) || record.paidSeats < 1 || (record.licensedUserIds?.length ?? 0) > record.paidSeats)) ||
+      [record.paidPeriodStart, record.paidPeriodEnd].some(value => value !== undefined && !Number.isFinite(Date.parse(value))) ||
+      [record.stripeCustomerId, record.stripeSubscriptionId].some(v => v !== undefined && (typeof v !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(v))) ||
       (record.accessUntil !== undefined && !Number.isFinite(Date.parse(record.accessUntil))) || record.id !== 'assistant-plan' || !['assistant', 'assistant-pro', 'assistant-heavy'].includes(record.tier) ||
       !['active', 'past_due', 'cancelled'].includes(record.status) || !Number.isFinite(Date.parse(record.cycleAnchor)) ||
       typeof record.disabled !== 'boolean' || typeof record.overageEnabled !== 'boolean' ||
@@ -397,7 +405,7 @@ export function assertAssistantPlan(tenantId: string, record: AssistantPlan, exp
 }
 export function assertAssistantCycle(tenantId: string, record: AssistantCycle, expected: number) {
   assertScope(tenantId, record); assertAssistantVersion(record, expected);
-  if (record.id !== record.cycleStart || !Number.isFinite(Date.parse(record.cycleStart)) || !(record.cycleEnd > record.cycleStart) ||
+  if ((record.paidCapacity !== undefined && (!Number.isSafeInteger(record.paidCapacity) || record.paidCapacity < 0)) || record.id !== record.cycleStart || !Number.isFinite(Date.parse(record.cycleStart)) || !(record.cycleEnd > record.cycleStart) ||
       [record.billedUserCount, record.allotmentCredits, record.topUpCredits].some(n => !Number.isSafeInteger(n) || n < 0)) throw new Error('Invalid assistant cycle');
 }
 export function assertAssistantLedger(tenantId: string, record: AssistantLedgerEntry) {
@@ -419,8 +427,8 @@ export function assertAssistantCommit(tenantId: string, entries: AssistantLedger
 
 export function assertBillingLink(tenantId: string, record: AssistantBillingLink, event: OutboxEvent) {
   assertScope(tenantId, record, event);
-  assertEvent('assistant-billing', 1, event, 'assistant-billing.updated');
-  if (record.version !== 1 || !/^[a-zA-Z0-9_-]{1,128}$/.test(record.customerId)) throw new Error('Invalid billing link');
+  assertEvent('assistant-billing', record.version, event, 'assistant-billing.updated');
+  if (!Number.isSafeInteger(record.version) || record.version < 1 || !/^[a-zA-Z0-9_-]{1,128}$/.test(record.customerId)) throw new Error('Invalid billing link');
 }
 
 /** Read-only command search, using the same tenant repository as list routes. */

@@ -21,7 +21,7 @@ class FakeStripe implements StripeBilling {
   async portal(customer: string, url: string) { this.calls.push(['portal', customer, url]); return {url: 'https://billing.stripe.com/offline'}; }
   async verifyEvent(raw: string, header?: string) { verifyStripeSignature(raw, header, secret, time); const event = this.script.shift(); assert.ok(event); return event; }
 }
-const subscription = (patch: Partial<StripeSubscription> = {}): StripeSubscription => ({id: 'sub_A', customerId: 'cus_A', tier: 'assistant-pro', status: 'active', periodStart: '2026-01-01T00:00:00.000Z', periodEnd: '2026-02-01T00:00:00.000Z', cancelAtPeriodEnd: false, paid: true, ...patch});
+const subscription = (patch: Partial<StripeSubscription> = {}): StripeSubscription => ({id: 'sub_A', customerId: 'cus_A', tier: 'assistant-pro', status: 'active', periodStart: '2026-01-01T00:00:00.000Z', periodEnd: '2026-02-01T00:00:00.000Z', cancelAtPeriodEnd: false, paid: true, quantity: 2, invoiceId: 'in_A', ...patch});
 async function setup(stripe: StripeBilling = new FakeStripe()) {
   const repos = new MemoryRepositories(); let date = time;
   const event = (tenant: string, type: OutboxEvent['type'], aggregateId: string): OutboxEvent => ({id: randomUUID(), tenantId: tenant, actorId: `user-${tenant}`, type, aggregateId, aggregateVersion: 1, occurredAt: time.toISOString(), deliveryStatus: 'pending'});
@@ -41,7 +41,7 @@ async function setup(stripe: StripeBilling = new FakeStripe()) {
     return handle({path: '/assistant/billing/webhook', method: 'POST', body: raw, stripeSignature: signature(raw)});
   };
   const activate = async () => {
-    assert.equal((await call('/assistant/admin/billing/checkout', {tier: 'assistant-pro'})).status, 200);
+    assert.equal((await call('/assistant/admin/billing/checkout', {tier: 'assistant-pro', userIds: ['user-A', 'staff']})).status, 200);
     assert.equal((await deliver({id: 'evt_activate', customerId: 'cus_A', subscription: subscription()})).statusCode, 200);
   };
   return {repos, handle, stripe, call, deliver, activate, auth, setDate: (value: string) => {date = new Date(value);}};
@@ -70,11 +70,12 @@ test('Stripe subscribe is paid, idempotent and tenant bound; admin actions enfor
 });
 test('Stripe top-up credits current cycle once across concurrent delivery and distinct event IDs', async () => {
   const s = await setup(); await s.activate(); s.setDate('2026-02-05T00:00:00Z');
+  await s.deliver({id: 'evt_renewal', customerId: 'cus_A', subscription: subscription({periodStart: '2026-02-01T00:00:00.000Z', periodEnd: '2026-03-01T00:00:00.000Z', invoiceId: 'in_B'})});
   const event = {id: 'evt_topup', customerId: 'cus_A', payment: {id: 'cs_topup', credits: 40}};
   assert.equal((await s.deliver(event)).statusCode, 200);
   await Promise.all([s.deliver(event), s.deliver({...event, id: 'evt_async'})]);
   const pool = (await s.call('/assistant/pool')).data;
-  assert.equal(pool.cycleStart, '2026-02-01'); assert.equal(pool.topUpCredits, 40); assert.equal(pool.balanceCredits, 390);
+  assert.equal(pool.cycleStart, '2026-02-01T00:00:00.000Z'); assert.equal(pool.topUpCredits, 40); assert.equal(pool.balanceCredits, 390);
   assert.equal(await s.repos.forTenant('B').assistantCycle('2026-02-01'), undefined);
   assert.equal(await s.repos.forTenant('A').stripeEventProcessed('evt_topup'), true);
 });
@@ -96,7 +97,7 @@ test('Stripe past due pauses chat, paid restores it, cancellation ends at the pa
 });
 test('Stripe already-ended subscription stops immediately; unpaid and unknown customers never provision a plan', async () => {
   const s = await setup();
-  await s.call('/assistant/admin/billing/checkout', {tier: 'assistant'});
+  await s.call('/assistant/admin/billing/checkout', {tier: 'assistant-pro', userIds: ['user-A', 'staff']});
   for (const sub of [subscription({paid: false}), subscription({status: 'trialing'})]) await s.deliver({id: randomUUID(), customerId: 'cus_A', subscription: sub});
   assert.equal(await s.repos.forTenant('A').assistantPlan(), undefined);
   await s.deliver({id: 'evt_unknown', customerId: 'cus_unknown', subscription: subscription()});
@@ -143,8 +144,8 @@ test('gateway admits signature-authenticated webhook and preserves base64 raw by
 test('HTTP Stripe seam uses configured prices, quantities and signed paid payment normalization offline', async () => {
   const prices = {assistant: 'configured-basic', 'assistant-pro': 'configured-pro', 'assistant-heavy': 'configured-heavy', topup: 'configured-topup'};
   const requests: {url: string; fields: URLSearchParams; headers: Headers}[] = [];
-  const responses: unknown[] = [{id: 'cus_A'}, {url: 'https://checkout.stripe.com/test'}, {url: 'https://checkout.stripe.com/test'}, {url: 'https://billing.stripe.com/test'},
-    {id: 'cs_paid', customer: 'cus_A', mode: 'payment', payment_status: 'paid', currency: 'usd', amount_total: 1000, metadata: {credits: '40'}, line_items: {data: [{price: {id: prices.topup}, quantity: 40}]}}];
+  const responses: unknown[] = [{id: 'cus_A'}, {data: []}, {url: 'https://checkout.stripe.com/test'}, {url: 'https://checkout.stripe.com/test'}, {url: 'https://billing.stripe.com/test'},
+    {id: 'cs_paid', customer: 'cus_A', mode: 'payment', payment_status: 'paid', currency: 'usd', amount_total: 1100, amount_subtotal: 1000, metadata: {credits: '40'}, line_items: {data: [{price: {id: prices.topup}, quantity: 40}]}}];
   const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
     requests.push({url: String(url), fields: new URLSearchParams(init?.body as URLSearchParams), headers: new Headers(init?.headers)});
     assert.ok(responses.length); return new Response(JSON.stringify(responses.shift()), {status: 200});
@@ -153,16 +154,16 @@ test('HTTP Stripe seam uses configured prices, quantities and signed paid paymen
   await stripe.createCustomer('A'); await stripe.checkoutSubscription('cus_A', 'assistant-heavy', 3, 'https://app.test/#/account/assistant');
   await stripe.checkoutTopUp('cus_A', 40, 'https://app.test/#/account/assistant'); await stripe.portal('cus_A', 'https://app.test/#/account/assistant');
   assert.equal(requests[0].headers.get('idempotency-key'), 'freedms-customer-A');
-  assert.equal(requests[1].fields.get('line_items[0][price]'), prices['assistant-heavy']); assert.equal(requests[1].fields.get('line_items[0][quantity]'), '3');
-  assert.equal(requests[2].fields.get('line_items[0][price]'), prices.topup); assert.equal(requests[2].fields.get('metadata[credits]'), '40');
+  assert.equal(requests[2].fields.get('line_items[0][price]'), prices['assistant-heavy']); assert.equal(requests[2].fields.get('line_items[0][quantity]'), '3');
+  assert.equal(requests[3].fields.get('line_items[0][price]'), prices.topup); assert.equal(requests[3].fields.get('metadata[credits]'), '40');
   const raw = JSON.stringify({id: 'evt_paid', type: 'checkout.session.completed', data: {object: {id: 'cs_paid'}}});
   assert.deepEqual(await stripe.verifyEvent(raw, signature(raw)), {id: 'evt_paid', customerId: 'cus_A', payment: {id: 'cs_paid', credits: 40}});
   const unknown = JSON.stringify({id: 'evt_unknown', type: 'something.else', data: {object: {}}});
-  assert.deepEqual(await stripe.verifyEvent(unknown, signature(unknown)), {id: 'evt_unknown'}); assert.equal(requests.length, 5);
+  assert.deepEqual(await stripe.verifyEvent(unknown, signature(unknown)), {id: 'evt_unknown'}); assert.equal(requests.length, 6);
 });
 test('Stripe receipt, plan, cycle and outbox are atomic in both repositories with scope guards', async () => {
   const s = await setup(); await s.activate(); await s.call('/assistant/pool');
-  const repo = s.repos.forTenant('A'), old = (await repo.assistantPlan())!, cycle = (await repo.assistantCycle('2026-01-01'))!;
+  const repo = s.repos.forTenant('A'), old = (await repo.assistantPlan())!, cycle = (await repo.assistantCycle('2026-01-01T00:00:00.000Z'))!;
   const plan = {...old, version: old.version + 1};
   const event: OutboxEvent = {id: 'outbox-payment', tenantId: 'A', actorId: 'stripe', type: 'assistant-plan.updated', aggregateId: plan.id, aggregateVersion: plan.version, occurredAt: time.toISOString(), deliveryStatus: 'pending'};
   const commit = {eventId: 'evt_atomic', paymentId: 'cs_atomic', plan, cycle: {...cycle, topUpCredits: 5, version: cycle.version + 1}, event};
@@ -208,4 +209,112 @@ test('HTTP Stripe subscription reads current paid state and item periods; unpaid
   assert.equal(count, 3);
   const missingSecret = new HttpStripeBilling('offline', '', prices, (async () => {assert.fail('No fetch before signature authentication');}) as typeof fetch);
   await assert.rejects(missingSecret.verifyEvent(raw, signature(raw)), {status: 503});
+});
+
+test('only assigned AI users consume paid seats; ordinary members never grant credits', async () => {
+  const s = await setup();
+  assert.equal((await s.call('/assistant/admin/billing/checkout', {tier: 'assistant'})).status, 200);
+  assert.equal((s.stripe as FakeStripe).calls[1][3], 1);
+  await s.deliver({id: 'evt_one_seat', customerId: 'cus_A', subscription: subscription({tier: 'assistant', quantity: 1})});
+  assert.equal((await s.call('/assistant/pool')).data.allotmentCredits, 75);
+  assert.equal((await s.call('/assistant/chat', {messages: [{role: 'user', text: 'Hi'}]}, 'A', 'staff')).error.code, 'ASSISTANT_UNASSIGNED');
+  assert.equal((await s.call('/assistant/admin/settings', {overageEnabled: true})).status, 404); // Settings are PUT-only.
+  const billing = new AssistantBilling(s.repos.forTenant('A'), () => time);
+  await assert.rejects(billing.updateSettings({tenantId: 'A', userId: 'user-A', role: 'admin'}, {overageEnabled: true}), /Overage billing is unavailable/);
+  assert.equal((await s.call('/assistant/admin/billing/topup', {credits: 1})).status, 400);
+  assert.equal((await s.call('/assistant/admin/billing/checkout', {tier: 'assistant', userIds: ['user-B']})).status, 409);
+});
+
+test('concurrent checkout retries share one persisted purchase; another selection is rejected', async () => {
+  const s = await setup(); const attempts: string[] = [];
+  (s.stripe as FakeStripe).checkoutSubscription = async (_customer, _tier, _seats, _url, purchase?: {id: string; expiresAt: number}) => {
+    attempts.push(purchase!.id); return {url: 'https://checkout.stripe.com/offline'};
+  };
+  const result = await Promise.all([s.call('/assistant/admin/billing/checkout', {tier: 'assistant'}), s.call('/assistant/admin/billing/checkout', {tier: 'assistant'})]);
+  assert.ok(result.every(row => row.status === 200)); assert.equal(new Set(attempts).size, 1);
+  assert.equal((await s.call('/assistant/admin/billing/checkout', {tier: 'assistant-heavy'})).status, 409);
+});
+
+test('credits wait for the exact paid renewal and purchased credits carry forward once', async () => {
+  const s = await setup();
+  await s.call('/assistant/admin/billing/checkout', {tier: 'assistant', userIds: ['user-A']});
+  const sub = subscription({tier: 'assistant', quantity: 1, periodStart: '2026-01-01T12:00:00.000Z', periodEnd: '2026-02-01T12:00:00.000Z'});
+  await s.deliver({id: 'evt_start_exact', customerId: 'cus_A', subscription: sub});
+  await s.deliver({id: 'evt_topup_exact', customerId: 'cus_A', payment: {id: 'cs_exact', credits: 20}});
+  s.setDate('2026-02-01T11:59:59Z');
+  assert.equal((await s.call('/assistant/pool')).data.balanceCredits, 95);
+  s.setDate('2026-02-01T12:00:00Z');
+  assert.equal((await s.call('/assistant/chat', {messages: [{role: 'user', text: 'Hi'}]})).error.code, 'ASSISTANT_PAST_DUE');
+  assert.equal(await s.repos.forTenant('A').assistantCycle('2026-02-01T12:00:00.000Z'), undefined);
+  const renewal = {...sub, periodStart: sub.periodEnd, periodEnd: '2026-03-01T12:00:00.000Z', invoiceId: 'in_renewal'};
+  await s.deliver({id: 'evt_renew_exact', customerId: 'cus_A', subscription: renewal});
+  await s.deliver({id: 'evt_renew_repeat', customerId: 'cus_A', subscription: renewal});
+  const pool = (await s.call('/assistant/pool')).data;
+  assert.equal(pool.allotmentCredits, 75); assert.equal(pool.topUpCredits, 20); assert.equal(pool.balanceCredits, 95);
+});
+
+test('unpaid upgrades and delayed older periods cannot grant or rewind credits', async () => {
+  const s = await setup(); await s.activate();
+  const before = (await s.call('/assistant/pool')).data.allotmentCredits;
+  s.setDate('2026-01-16T12:00:00Z');
+  await s.deliver({id: 'evt_unpaid_upgrade', customerId: 'cus_A', subscription: subscription({tier: 'assistant-heavy', paid: false, pending: true})});
+  assert.equal((await s.call('/assistant/pool')).data.allotmentCredits, before);
+  await s.deliver({id: 'evt_paid_upgrade', customerId: 'cus_A', subscription: subscription({tier: 'assistant-heavy', invoiceId: 'in_upgrade', changedAt: '2026-01-16T12:00:00.000Z'})});
+  assert.equal((await s.call('/assistant/pool')).data.allotmentCredits, 525);
+  await s.deliver({id: 'evt_repeat_upgrade', customerId: 'cus_A', subscription: subscription({tier: 'assistant-heavy', invoiceId: 'in_upgrade'})});
+  assert.equal((await s.call('/assistant/pool')).data.allotmentCredits, 525);
+  await s.deliver({id: 'evt_next_period', customerId: 'cus_A', subscription: subscription({periodStart: '2026-02-01T00:00:00.000Z', periodEnd: '2026-03-01T00:00:00.000Z', invoiceId: 'in_next'})});
+  await s.deliver({id: 'evt_old_period', customerId: 'cus_A', subscription: subscription()});
+  assert.equal((await s.repos.forTenant('A').assistantPlan())!.paidInvoiceId, 'in_next');
+});
+
+test('seat changes do not enable users until Stripe confirms the paid quantity', async () => {
+  const s = await setup();
+  await s.call('/assistant/admin/billing/checkout', {tier: 'assistant'});
+  await s.deliver({id: 'evt_single', customerId: 'cus_A', subscription: subscription({tier: 'assistant', quantity: 1})});
+  const stripe = s.stripe as FakeStripe & {updateSubscription: NonNullable<StripeBilling['updateSubscription']>};
+  stripe.updateSubscription = async (_id, seats) => {assert.equal(seats, 2); return subscription({tier: 'assistant', quantity: 1, pending: true, paid: false});};
+  assert.equal((await s.call('/assistant/admin/billing/seats', {userIds: ['staff', 'user-A']})).status, 200);
+  assert.deepEqual((await s.repos.forTenant('A').assistantPlan())!.licensedUserIds, ['user-A']);
+  await s.deliver({id: 'evt_two_paid', customerId: 'cus_A', subscription: subscription({tier: 'assistant', quantity: 2, invoiceId: 'in_seats'})});
+  assert.deepEqual((await s.repos.forTenant('A').assistantPlan())!.licensedUserIds, ['staff', 'user-A']);
+  assert.equal((await s.call('/assistant/chat', {messages: [{role: 'user', text: 'Hi'}]}, 'A', 'staff')).status, 200);
+});
+
+test('refunds and disputes pause assistant access and ordinary subscription events do not clear review', async () => {
+  for (const hold of ['refund', 'dispute'] as const) {
+    const s = await setup(); await s.activate();
+    await s.deliver({id: `evt_${hold}`, customerId: 'cus_A', hold});
+    await s.deliver({id: `evt_paid_after_${hold}`, customerId: 'cus_A', subscription: subscription()});
+    assert.equal((await s.call('/assistant/chat', {messages: [{role: 'user', text: 'Hi'}]})).error.code, 'ASSISTANT_BILLING_REVIEW');
+    assert.equal((await s.call('/assistant/admin/billing/topup', {credits: 20})).status, 402);
+  }
+});
+
+test('secret loading caches and rotates credentials without exposing them or breaking core availability', async () => {
+  const {createBillingLoader} = await import('../src/billing-secrets.js');
+  let reads = 0, timeMs = 0;
+  const configuration = {FREEDMS_STRIPE_SECRET_KEY: 'sk_test_offline', FREEDMS_STRIPE_WEBHOOK_SECRET: 'whsec_offline',
+    FREEDMS_STRIPE_PRICE_ASSISTANT: 'a', FREEDMS_STRIPE_PRICE_ASSISTANT_PRO: 'b', FREEDMS_STRIPE_PRICE_ASSISTANT_HEAVY: 'c', FREEDMS_STRIPE_PRICE_TOPUP: 'd'};
+  const load = createBillingLoader({FREEDMS_STRIPE_SECRET_ARN: 'offline'}, async () => {reads++; return JSON.stringify(configuration);}, () => timeMs);
+  assert.equal((await load()).configured, true); assert.equal((await load()).testMode, true); assert.equal(reads, 1);
+  timeMs = 60001; await load(); assert.equal(reads, 2);
+  const broken = createBillingLoader({FREEDMS_STRIPE_SECRET_ARN: 'offline'}, async () => {throw new Error('private error');});
+  assert.equal((await broken()).configured, false);
+  const {FREEDMS_STRIPE_WEBHOOK_SECRET: _missing, ...incomplete} = configuration;
+  assert.equal(stripeBillingFromEnv(incomplete).configured, false);
+});
+
+test('a later subscription event cannot undo reassignment of already paid seats', async () => {
+  const s = await setup();
+  await s.call('/assistant/admin/billing/checkout', {tier: 'assistant'});
+  await s.deliver({id: 'evt_first_assignment', customerId: 'cus_A', subscription: subscription({tier: 'assistant', quantity: 1})});
+  const repo = s.repos.forTenant('A'), old = (await repo.assistantBillingLink())!;
+  const change = {...old, seatChange: {id: 'completed-change', userIds: ['user-A'], tier: 'assistant' as const, requestedAt: time.toISOString()}, version: old.version + 1};
+  await repo.updateAssistantBillingLink(change, old.version, {id: randomUUID(), tenantId: 'A', actorId: 'user-A', aggregateId: 'assistant-billing', aggregateVersion: change.version, type: 'assistant-billing.updated', occurredAt: time.toISOString(), deliveryStatus: 'pending'});
+  await s.deliver({id: 'evt_assignment_applied', customerId: 'cus_A', subscription: subscription({tier: 'assistant', quantity: 1})});
+  (s.stripe as FakeStripe & {updateSubscription: NonNullable<StripeBilling['updateSubscription']>}).updateSubscription = async () => {throw Error('Reassignment must not change Stripe');};
+  assert.equal((await s.call('/assistant/admin/billing/seats', {userIds: ['staff']})).status, 200);
+  await s.deliver({id: 'evt_later_subscription', customerId: 'cus_A', subscription: subscription({tier: 'assistant', quantity: 1})});
+  assert.deepEqual((await repo.assistantPlan())!.licensedUserIds, ['staff']);
 });

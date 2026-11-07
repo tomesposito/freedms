@@ -48,9 +48,14 @@ export class AssistantBilling implements AssistantEntitlement {
       await this.repository.saveAssistantPlan(plan, 0, {id: randomUUID(), tenantId: actor.tenantId, actorId: actor.userId,
         aggregateId: plan.id, aggregateVersion: 1, type: 'assistant-plan.updated', occurredAt: this.now().toISOString(), deliveryStatus: 'pending'});
     }
-    return plan ? {...plan, overageCapCredits: plan.overageCapCredits ?? DEFAULT_ASSISTANT_OVERAGE_CAP} : undefined;
+    return plan ? {...plan, ...(plan.stripeSubscriptionId ? {overageEnabled: false} : {}), overageCapCredits: plan.overageCapCredits ?? DEFAULT_ASSISTANT_OVERAGE_CAP} : undefined;
   }
   private async ensureCycle(plan: AssistantPlan): Promise<AssistantCycle> {
+    if (plan.stripeSubscriptionId) {
+      const paid = plan.paidPeriodStart ? await this.repository.assistantCycle(plan.paidPeriodStart) : undefined;
+      if (!paid) throw new ApiError(503, 'BILLING_PENDING', 'Waiting for payment confirmation.');
+      return paid;
+    }
     const date = this.now(), dates = assistantCycleDates(plan.cycleAnchor, date);
     const count = (await this.repository.workspaceUsers()).filter(row => row.membership.active).length;
     const credits = assistantTiers[plan.tier].creditsPerUser;
@@ -81,11 +86,14 @@ export class AssistantBilling implements AssistantEntitlement {
   private effectiveStatus(plan: AssistantPlan) {
     if (plan.accessUntil && this.now().getTime() >= Date.parse(plan.accessUntil)) return 'cancelled' as const;
     if (plan.status === 'cancelled' && plan.accessUntil && this.now().getTime() < Date.parse(plan.accessUntil)) return 'active' as const;
+    if (plan.stripeSubscriptionId && (!plan.paidPeriodEnd || this.now().getTime() >= Date.parse(plan.paidPeriodEnd))) return 'past_due' as const;
     return plan.status;
   }
   async status(actor: Actor) {
     const plan = await this.plan(actor);
     if (!plan) return {status: 'no-plan' as const, plan};
+    if (plan.billingHold) return {status: 'billing-review' as const, plan};
+    if (plan.stripeSubscriptionId && !(plan.licensedUserIds ?? []).includes(actor.userId)) return {status: 'unassigned' as const, plan};
     if (plan.disabled) return {status: 'disabled' as const, plan};
     if (this.effectiveStatus(plan) === 'past_due') return {status: 'past-due' as const, plan};
     if (this.effectiveStatus(plan) !== 'active') return {status: 'no-plan' as const, plan};
@@ -95,6 +103,8 @@ export class AssistantBilling implements AssistantEntitlement {
   async check(actor: Actor) { return (await this.status(actor)).status === 'ok'; }
   async requireEntitlement(actor: Actor) {
     const result = await this.status(actor);
+    if (result.status === 'unassigned') throw new ApiError(403, 'ASSISTANT_UNASSIGNED', 'Ask your administrator to assign you AI access.');
+    if (result.status === 'billing-review') throw new ApiError(402, 'ASSISTANT_BILLING_REVIEW', 'AI access is paused while a refund or dispute is reviewed. Contact support.');
     if (result.status === 'past-due') throw new ApiError(402, 'ASSISTANT_PAST_DUE', 'Payment is past due. Update billing in Account → AI assistant.');
     if (result.status === 'no-plan') throw new ApiError(402, 'ASSISTANT_PLAN_REQUIRED', 'An AI assistant plan is required.');
     if (result.status === 'disabled') throw new ApiError(403, 'ASSISTANT_DISABLED', 'The AI assistant is disabled for this workspace.');
@@ -124,12 +134,13 @@ export class AssistantBilling implements AssistantEntitlement {
   }
   async admin(actor: Actor) {
     const plan = await this.plan(actor);
-    if (!plan) return {plan: null};
+    const users = (await this.repository.workspaceUsers()).filter(row => row.membership.active).map(row => ({userId: row.user.id, name: row.user.name, assigned: (plan?.licensedUserIds ?? []).includes(row.user.id)}));
+    if (!plan) return {plan: null, users};
     const {cycle, pool} = await this.snapshot(actor);
     const tier = assistantTiers[plan.tier];
-    return {plan: {tier: plan.tier, tierName: tier.name, pricePerUserCents: tier.pricePerUserCents,
-      creditsPerUser: tier.creditsPerUser, billedUserCount: cycle.billedUserCount,
-      monthlyTotalCents: tier.pricePerUserCents * cycle.billedUserCount, renewalDate: cycle.cycleEnd, status: plan.status, accessUntil: plan.accessUntil},
+    return {users, billingHold: plan.billingHold, plan: {tier: plan.tier, tierName: tier.name, pricePerUserCents: tier.pricePerUserCents,
+      creditsPerUser: tier.creditsPerUser, billedUserCount: plan.paidSeats ?? cycle.billedUserCount,
+      monthlyTotalCents: tier.pricePerUserCents * (plan.paidSeats ?? cycle.billedUserCount), renewalDate: cycle.cycleEnd, status: this.effectiveStatus(plan), accessUntil: plan.accessUntil},
       pool, usage: (await this.usage(actor)).byUser,
       controls: {disabled: plan.disabled, overageEnabled: plan.overageEnabled,
         overageCapCredits: plan.overageCapCredits, perRequestCreditCap: plan.perRequestCreditCap}};
@@ -146,6 +157,7 @@ export class AssistantBilling implements AssistantEntitlement {
     }
     const plan = await this.plan(actor);
     if (!plan) throw new ApiError(402, 'ASSISTANT_PLAN_REQUIRED', 'An AI assistant plan is required.');
+    if (plan.stripeSubscriptionId && body.overageEnabled === true) throw invalid('Overage billing is unavailable. Purchase prepaid credits instead.');
     const updated = {...plan, ...body, version: plan.version + 1} as AssistantPlan;
     await this.repository.saveAssistantPlan(updated, plan.version, {id: randomUUID(), tenantId: actor.tenantId,
       actorId: actor.userId, aggregateId: plan.id, aggregateVersion: updated.version, type: 'assistant-plan.updated',

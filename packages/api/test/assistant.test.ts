@@ -33,7 +33,9 @@ test('Assistant template defaults off and scopes invocation to the configured mo
     '              Action: [bedrock:InvokeModel]',
     '              Resource:',
     "                - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${AssistantModelId}'",
-    "                - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/${AssistantModelId}'",
+    "                - !Sub 'arn:aws:bedrock:us-east-1::foundation-model/${AssistantFoundationModelId}'",
+    "                - !Sub 'arn:aws:bedrock:us-east-2::foundation-model/${AssistantFoundationModelId}'",
+    "                - !Sub 'arn:aws:bedrock:us-west-2::foundation-model/${AssistantFoundationModelId}'",
     '',
   ].join('\n'));
   assert.ok(!bedrock[0].includes('*'), 'no wildcard actions or resources');

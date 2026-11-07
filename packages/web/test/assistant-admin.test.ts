@@ -9,7 +9,7 @@ const data: AssistantAdminData = {
 };
 test('admin page renders plan, pool, usage, controls and honest billing', () => {
   const html = assistantAdminHtml(data);
-  for (const text of ['Assistant Pro', '$29 / user / mo', '10 users', '$290 / month', '1138 of 1750 credits left', '612 used', '<progress', '&lt;Owner&gt;', new Date(data.usage![0].lastUsedAt!).toLocaleString(), 'value="25"', 'value="500"', pendingBilling, 'Manage billing', 'Top up']) assert.ok(html.includes(text), text);
+  for (const text of ['Assistant Pro', '$29 / AI user / mo', '10 AI users', '$290 / month', '1138 of 1750 credits left', '612 used', '<progress', '&lt;Owner&gt;', new Date(data.usage![0].lastUsedAt!).toLocaleString(), 'value="25"', pendingBilling, 'Manage billing', 'Top up']) assert.ok(html.includes(text), text);
   assert.doesNotMatch(html, /<Owner>|href=/);
   assert.match(assistantAdminHtml({...data, usage: []}), /No assistant use yet this cycle/);
 });

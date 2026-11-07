@@ -109,29 +109,63 @@ buy top-ups at 25 cents per credit. The three prices come from shared tier data.
 Without billing configuration the page says "Billing isn't set up yet" and
 purchase actions are unavailable. Settings and existing plans still work.
 
-Configure `FREEDMS_STRIPE_SECRET_KEY`, `FREEDMS_STRIPE_WEBHOOK_SECRET`, and
+Hosted billing loads a JSON secret from AWS Secrets Manager using `StripeSecretArn`.
+The Lambda role can read only that secret. Keys stay out of Lambda environment
+variables and release artifacts; the loader refreshes its cache every 60 seconds.
+If loading fails, billing is unavailable while the free DMS continues working.
+The secret contains `FREEDMS_STRIPE_SECRET_KEY`, `FREEDMS_STRIPE_WEBHOOK_SECRET`,
 `FREEDMS_STRIPE_PRICE_ASSISTANT`, `FREEDMS_STRIPE_PRICE_ASSISTANT_PRO`,
-`FREEDMS_STRIPE_PRICE_ASSISTANT_HEAVY`, `FREEDMS_STRIPE_PRICE_TOPUP`.
-Prices are created in Stripe: USD monthly per-user prices and a USD 25-cent
-one-time per-credit price. Set `FREEDMS_APP_BASE_URL` to the app's absolute URL;
-the template uses the app domain, and local development uses its loopback origin.
-No trial or promotional credits are granted. Checkout uses the active user count.
+`FREEDMS_STRIPE_PRICE_ASSISTANT_HEAVY`, `FREEDMS_STRIPE_PRICE_TOPUP`, and optionally
+`FREEDMS_STRIPE_PORTAL_CONFIGURATION`. Local development can supply those names
+as environment variables. Hosted Checkout does not need a browser publishable key.
 
-The signature-authenticated webhook is `POST /assistant/billing/webhook`
-(hosted URL: `/api/assistant/billing/webhook`). Subscribe it to checkout completion
-and asynchronous payment success, subscription created/updated/deleted, and invoice
-paid/payment_failed/payment_action_required events. Requests use Stripe API version
-`2025-03-31.basil`; configure the webhook endpoint to the same version. The adapter
-reads subscription item periods and also accepts older subscription-level periods.
-Customer linkage is stored before checkout. Webhooks resolve the stored customer
-binding and commit receipts, plan changes, credit additions and outbox events
-atomically. Payment-session receipts prevent different events crediting one payment
-twice. Stripe retries optimistic conflicts; duplicate deliveries are acknowledged.
+Run `node --import tsx scripts/stripe-setup.ts <secret-arn>` to configure sandbox
+products, prices, the billing portal, and webhook, then save their configuration
+back to the secret. The operation reuses existing products and lookup keys and
+checks amounts before accepting existing prices. Live keys require `--live`;
+use a separate secret and catalog for live mode. Never put secret values in Git,
+CLI arguments, build variables, or logs. Test mode is visibly labeled in the UI.
 
-Past-due subscriptions pause use with `ASSISTANT_PAST_DUE` and a payment note.
-Cancellation shows its access-end date; access stops then, or immediately when
-Stripe reports an ended subscription. Disabled assistants remain hidden.
-Chat content is never persisted or logged.
+Admins explicitly select the active users who receive AI access. Only those
+users count toward the monthly subscription quantity and can use the assistant.
+The dealership selects one tier. Ordinary user creation grants no AI access or
+credits. Initial Checkout defaults to the requesting admin when no selection is
+provided. Concurrent retries share a persisted, one-hour Checkout purchase and
+Stripe idempotency key. A conflicting open purchase must finish or expire first.
+
+Seat increases and tier upgrades use Stripe pending updates and immediate
+proration invoices. Access and additional credits wait for confirmed payment;
+failed payments can be resolved in the portal. Seat reductions lower future
+charges without refunding this month's payment. Reassigning existing seats does
+not create new credits. Plan and seat changes belong in FreeDMS; the portal
+supports payment details, invoices, and cancellation at the paid period's end.
+
+Monthly allowances use Stripe's exact paid period timestamps and quantity.
+Payment webhooks create the next allowance atomically; reading the pool cannot
+renew it. Purchased credits carry forward after included credits are consumed.
+Renewal protects the previous cycle version so concurrent usage cannot duplicate
+carryover. Paid upgrades grant a prorated increase once, with a capacity high-water
+mark to prevent repeated upgrade/downgrade events creating credits. Top-ups cost
+25 cents per credit, require at least two credits, and create paid invoices.
+Payment validation checks the pre-tax subtotal, configured price, quantity,
+currency, and paid state. Automatic tax is not enabled by the setup script;
+configure the applicable collection policy before live activation.
+
+The webhook is `POST /assistant/billing/webhook` (hosted URL:
+`https://app.freedms.co/api/assistant/billing/webhook`). The SDK and webhook use
+Stripe API `2026-10-28.endive`. The setup script registers Checkout completion and
+async success, subscription changes and pending updates, invoice payment outcomes,
+refunds, and disputes. Customer mappings are server-owned and tenant-bound.
+Signature checks use raw bytes. Event/payment receipts, plan changes, credit
+changes, and outbox events commit atomically. Conflicts retry through Stripe.
+
+Past-due or expired paid periods pause use. Refunds/disputes place the paid
+assistant on a persistent billing-review hold, visible to admins; ordinary
+subscription webhooks cannot clear it. The operator must reconcile the payment
+and credits before clearing `billingHold` with an audited plan update. This hold
+does not cancel a subscription; use Stripe to resolve cancellation/refunds.
+Automatic overage is disabled for Stripe-backed plans. No unpaid usage is billed
+later. The free DMS remains available throughout billing interruptions.
 
 Offline verification: `npm test` and
 `node --import tsx packages/web/test/assistant-tour.mjs`. The tour constructs states

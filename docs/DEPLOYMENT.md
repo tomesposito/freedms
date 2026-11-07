@@ -65,11 +65,12 @@ The existing operator CLI remains available for reviewing and handling requests.
 ## AI assistant
 
 The assistant is off by default. With `AssistantModelId` empty, the stack behaves
-exactly as today. To enable it, set `AssistantModelId` to a Bedrock Sonnet 5.5
+exactly as today. To enable it, set `AssistantModelId` to a tested Bedrock
 inference profile ID the account can invoke in the stack region (`us-east-1`)
 and redeploy. The parameter supplies `FREEDMS_ASSISTANT_MODEL` to the API Lambda.
-The template adds only `bedrock:InvokeModel` on its role, scoped to the configured
-inference-profile and foundation-model resources; it grants nothing broader.
+Set `AssistantFoundationModelId` to the matching foundation-model ID. The template
+adds only `bedrock:InvokeModel`, scoped to the profile and that model in the three
+US routing regions; it grants nothing broader.
 
 With no model configured, a signed-in user with an eligible active plan sees
 "The AI assistant isn't set up" in the tray after a chat request returns HTTP 503
@@ -79,15 +80,20 @@ state. Availability also requires the D-12 gates: an active plan with credits
 (or admin-enabled overage within its cap), and an assistant that is not
 admin-disabled.
 
-Set up Stripe first: set `StripeSecretKey` and `StripeWebhookSecret`, create the
-Stripe products/prices, and set `StripePriceAssistant`, `StripePriceAssistantPro`,
-`StripePriceAssistantHeavy`, and `StripePriceTopup` to their price IDs. See
-[AI assistant documentation](assistant.md) for price shapes and webhook setup.
-Then admins can buy plans under Account → AI assistant. Per Terms §4.2, nothing
-sells before metering and hard caps exist; the shipped ledger (#99), caps/admin
-controls (#101), and billing (#102) provide them. There is no free trial.
-Without billing configuration, the admin page says "Billing isn't set up yet"
-and purchases are unavailable; settings and existing plans still work.
+Create a Secrets Manager JSON secret containing the Stripe credentials and set
+`StripeSecretArn` to its ARN. Run `node --import tsx scripts/stripe-setup.ts <arn>`
+to configure the sandbox catalog, portal, and webhook and store their IDs and
+signing secret. The API reads and caches this secret; secrets are not copied into
+Lambda environment variables. The legacy secret/price parameters remain for
+backward compatibility and should remain empty for this deployment.
+
+Configure and verify the assistant provider before enabling purchases. In this
+AWS account, `us.anthropic.claude-sonnet-4-6` was tested successfully; the documented
+Sonnet 5.5 profile returned AccessDenied. For 4.6, use foundation-model ID
+`anthropic.claude-sonnet-4-6`. Test keys enable clearly labeled sandbox checkout,
+not real payments. Live activation requires an activated Stripe account, a
+separate live secret/catalog/webhook, and an end-to-end live configuration check.
+The free dealership application does not depend on billing availability.
 
 See [AI assistant documentation](assistant.md) for endpoint behavior and local
 stub testing.
