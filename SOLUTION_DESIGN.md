@@ -639,6 +639,15 @@ hard caps are operational (Terms §4.2 requires that order). The Stripe
 account for the freeDMS entity is the owner's setup step (same open item
 as the Terms notice address).
 
+**Activation deferred (owner, 2026-11-07):** Stripe billing will not be
+finalized until the owner is fully incorporated. Until then, a workspace
+with no plan sees a waiting list on the AI assistant admin page instead of
+a dead end: it can join for a chosen tier, change tiers, or leave (#124).
+Joining grants nothing — no plan, no credits, no entitlement; entitlements
+still move only on signature-verified webhooks. The pilot operator sees
+every entry beside the pilot access requests. When billing configuration
+arrives, Subscribe replaces the waiting list automatically.
+
 ### D-12 — AI assistant availability, paywall, and the admin switch
 
 **Status: DECIDED — owner, 2026-11-03.**

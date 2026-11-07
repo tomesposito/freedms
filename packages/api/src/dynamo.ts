@@ -1,4 +1,4 @@
-import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry } from '@freedms/shared';
+import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry, AssistantWaitlistEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
 import type { McpGrant, Idea } from '@freedms/shared';
 import type { AccessRequest } from '@freedms/shared';
@@ -11,7 +11,7 @@ import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantWaitlist, assertAssistantWaitlistRemoved, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId, requireCycleStart } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   // In-process, warm-instance only; the consistent epoch Get validates across instances.
@@ -40,6 +40,18 @@ export class DynamoRepositories implements RepositoryFactory {
         ExpressionAttributeValues: {':pk': 'OPERATOR#IDEAS', ':prefix': 'IDEA#'},
         ConsistentRead: true, ExclusiveStartKey: cursor}));
       rows.push(...(result.Items ?? []).map(item => item.data as Idea)); cursor = result.LastEvaluatedKey;
+    } while (cursor);
+    return rows;
+  }
+  /** Materialized operator queue, atomically maintained with the tenant row and outbox. */
+  async assistantWaitlistQueue(): Promise<AssistantWaitlistEntry[]> {
+    const rows: AssistantWaitlistEntry[] = []; let cursor: Record<string, unknown> | undefined;
+    do {
+      const result = await this.client.send(new QueryCommand({TableName: this.table,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: {':pk': 'OPERATOR#ASSISTANTWAITLIST', ':prefix': 'WAITLIST#'},
+        ConsistentRead: true, ExclusiveStartKey: cursor}));
+      rows.push(...(result.Items ?? []).map(item => item.data as AssistantWaitlistEntry)); cursor = result.LastEvaluatedKey;
     } while (cursor);
     return rows;
   }
@@ -180,6 +192,24 @@ export class DynamoRepositories implements RepositoryFactory {
       saveAssistantPlan: async (record, expected, event) => {
         assertAssistantPlan(tenantId, record, expected, event);
         await transact([put('ASSISTANTPLAN', record, expected ? '#d.#v = :v' : 'attribute_not_exists(PK)', expected || undefined), eventPut(event)]);
+      },
+      assistantWaitlist: () => get<AssistantWaitlistEntry>('ASSISTANTWAITLIST'),
+      saveAssistantWaitlist: async (record, expectedVersion, event) => {
+        assertAssistantWaitlist(tenantId, record, expectedVersion, event);
+        await transact([
+          put('ASSISTANTWAITLIST', record, expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined),
+          eventPut(event),
+          {Put: {TableName: this.table, Item: {PK: 'OPERATOR#ASSISTANTWAITLIST', SK: `WAITLIST#${tenantId}`, data: record}}}
+        ]);
+      },
+      deleteAssistantWaitlist: async (expectedVersion, event) => {
+        assertAssistantWaitlistRemoved(tenantId, expectedVersion, event);
+        await transact([
+          {Delete: {TableName: this.table, Key: key('ASSISTANTWAITLIST'), ConditionExpression: '#d.#v = :v',
+            ExpressionAttributeNames: {'#d': 'data', '#v': 'version'}, ExpressionAttributeValues: {':v': expectedVersion}}},
+          eventPut(event),
+          {Delete: {TableName: this.table, Key: {PK: 'OPERATOR#ASSISTANTWAITLIST', SK: `WAITLIST#${tenantId}`}}}
+        ]);
       },
       assistantCycle: start => get<AssistantCycle>(`ASSISTANTCYCLE#${requireCycleStart(start)}`),
       saveAssistantCycle: async (record, expected) => {

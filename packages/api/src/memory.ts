@@ -1,4 +1,4 @@
-import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry } from '@freedms/shared';
+import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry, AssistantWaitlistEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
 import type { McpGrant, Idea } from '@freedms/shared';
 import type { AccessRequest } from '@freedms/shared';
@@ -10,10 +10,10 @@ import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import type { Customer, CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
-import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantWaitlist, assertAssistantWaitlistRemoved, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId, requireCycleStart } from './errors.js';
 const forecastKinds = new Set<CrmEntity['kind']>(['deal', 'service-appointment', 'part', 'parts-sale', 'repair-order']);
-interface State { billingLink?: AssistantBillingLink; stripeReceipts: Set<string>; assistantPlan?: AssistantPlan; assistantCycles: Map<string, AssistantCycle>; assistantLedger: Map<string, AssistantLedgerEntry>; mcpGrants: Map<string, McpGrant>; mcpRegistrations: Map<string, McpRegistration>; mcpAttempts: Map<string, {bucket: number; count: number}>; ideas: Map<string, Idea>; accessRequests: Map<string, AccessRequest>; leadPageEpoch: number; leadPageCache: Map<string, LeadPage>; accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
+interface State { billingLink?: AssistantBillingLink; stripeReceipts: Set<string>; assistantPlan?: AssistantPlan; assistantWaitlist?: AssistantWaitlistEntry; assistantCycles: Map<string, AssistantCycle>; assistantLedger: Map<string, AssistantLedgerEntry>; mcpGrants: Map<string, McpGrant>; mcpRegistrations: Map<string, McpRegistration>; mcpAttempts: Map<string, {bucket: number; count: number}>; ideas: Map<string, Idea>; accessRequests: Map<string, AccessRequest>; leadPageEpoch: number; leadPageCache: Map<string, LeadPage>; accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
   private states = new Map<string, State>();
   async tenantForStripeCustomer(customerId: string) {
@@ -21,6 +21,9 @@ export class MemoryRepositories implements RepositoryFactory {
   }
   async ideasQueue(): Promise<Idea[]> {
     return structuredClone([...this.states.values()].flatMap(state => [...state.ideas.values()]));
+  }
+  async assistantWaitlistQueue(): Promise<AssistantWaitlistEntry[]> {
+    return structuredClone([...this.states.values()].flatMap(state => state.assistantWaitlist ? [state.assistantWaitlist] : []));
   }
   async tenantForSubject(subject: string): Promise<string | undefined> {
     const matches = [...this.states].filter(([, state]) => state.memberships.has(subject));
@@ -87,6 +90,17 @@ export class MemoryRepositories implements RepositoryFactory {
         assertAssistantPlan(tenantId, record, expected, event); check(event);
         if ((s.assistantPlan?.version ?? 0) !== expected) throw conflict();
         s.assistantPlan = structuredClone(record); s.events.set(event.id, structuredClone(event));
+      },
+      assistantWaitlist: async () => structuredClone(s.assistantWaitlist),
+      saveAssistantWaitlist: async (record, expectedVersion, event) => {
+        assertAssistantWaitlist(tenantId, record, expectedVersion, event); check(event);
+        if ((s.assistantWaitlist?.version ?? 0) !== expectedVersion) throw conflict();
+        s.assistantWaitlist = structuredClone(record); s.events.set(event.id, structuredClone(event));
+      },
+      deleteAssistantWaitlist: async (expectedVersion, event) => {
+        assertAssistantWaitlistRemoved(tenantId, expectedVersion, event); check(event);
+        if ((s.assistantWaitlist?.version ?? 0) !== expectedVersion) throw conflict();
+        s.assistantWaitlist = undefined; s.events.set(event.id, structuredClone(event));
       },
       assistantCycle: async start => structuredClone(s.assistantCycles.get(requireCycleStart(start))),
       saveAssistantCycle: async (record, expected) => {

@@ -1,4 +1,4 @@
-import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry } from '@freedms/shared';
+import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry, AssistantWaitlistEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
 import type { McpGrant, Idea } from '@freedms/shared';
 import type { AccessRequest } from '@freedms/shared';
@@ -29,6 +29,9 @@ export interface TenantRepository {
   commitStripeEvent(commit: StripeCommit): Promise<void>;
   assistantPlan(): Promise<AssistantPlan | undefined>;
   saveAssistantPlan(record: AssistantPlan, expectedVersion: number, event: OutboxEvent): Promise<void>;
+  assistantWaitlist(): Promise<AssistantWaitlistEntry | undefined>;
+  saveAssistantWaitlist(record: AssistantWaitlistEntry, expectedVersion: number, event: OutboxEvent): Promise<void>;
+  deleteAssistantWaitlist(expectedVersion: number, event: OutboxEvent): Promise<void>;
   assistantCycle(cycleStart: string): Promise<AssistantCycle | undefined>;
   saveAssistantCycle(record: AssistantCycle, expectedVersion: number): Promise<void>;
   /** Atomically publish a completed turn and advance the cycle version; stale snapshots fail closed. */
@@ -95,7 +98,7 @@ export interface TenantRepository {
   delete(id: string, expectedVersion: number, event: OutboxEvent): Promise<void>;
   provision(tenant: Tenant, user: User, membership: Membership, event: OutboxEvent, acceptance?: CrmWrite): Promise<void>;
 }
-export interface RepositoryFactory { tenantForStripeCustomer?(customerId: string): Promise<string | undefined>; ideasQueue?(): Promise<Idea[]>; tenantForSubject?(subject: string): Promise<string | undefined>; forTenant(tenantId: string): TenantRepository }
+export interface RepositoryFactory { tenantForStripeCustomer?(customerId: string): Promise<string | undefined>; ideasQueue?(): Promise<Idea[]>; assistantWaitlistQueue?(): Promise<AssistantWaitlistEntry[]>; tenantForSubject?(subject: string): Promise<string | undefined>; forTenant(tenantId: string): TenantRepository }
 export function matches(vehicle: Vehicle, query: VehicleQuery): boolean {
   return (!query.status || vehicle.status === query.status) && (!query.search ||
     [vehicle.stockNumber, vehicle.vin, vehicle.make, vehicle.model, vehicle.trim, vehicle.location]
@@ -137,6 +140,17 @@ export function assertVehicleWrites(tenantId: string, writes: VehicleWrite[], cr
     if (record.version !== expectedVersion + 1 || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1 || ids.has(record.id) || events.has(event.id)) throw new Error('Invalid vehicle transaction');
     ids.add(record.id); events.add(event.id);
   }
+}
+
+export function assertAssistantWaitlist(tenantId: string, record: AssistantWaitlistEntry, expectedVersion: number, event: OutboxEvent): void {
+  assertScope(tenantId, record, event);
+  assertEvent(record.id, record.version, event, 'assistant-waitlist.updated');
+  if (record.id !== 'assistant-waitlist' || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid assistant waitlist version');
+}
+export function assertAssistantWaitlistRemoved(tenantId: string, expectedVersion: number, event: OutboxEvent): void {
+  assertScope(tenantId, event);
+  assertEvent('assistant-waitlist', expectedVersion + 1, event, 'assistant-waitlist.removed');
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) throw new Error('Invalid assistant waitlist version');
 }
 
 export function assertFeedConfig(tenantId: string, record: FeedConfig, expectedVersion: number, event: OutboxEvent): void {
