@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { assistantTiers, type AssistantPlan, type AssistantCycle, type AssistantLedgerEntry, type AssistantTokenUsage, type Principal } from '@freedms/shared';
+import { assistantTiers, type AssistantPlan, type AssistantCycle, type AssistantLedgerEntry, type AssistantTokenUsage, type AssistantWaitlistEntry, type Principal } from '@freedms/shared';
 import type { TenantRepository } from './repository.js';
 import type { AssistantEntitlement } from './assistant.js';
 import { tools } from './mcp/tools.js';
@@ -135,15 +135,44 @@ export class AssistantBilling implements AssistantEntitlement {
   async admin(actor: Actor) {
     const plan = await this.plan(actor);
     const users = (await this.repository.workspaceUsers()).filter(row => row.membership.active).map(row => ({userId: row.user.id, name: row.user.name, assigned: (plan?.licensedUserIds ?? []).includes(row.user.id)}));
-    if (!plan) return {plan: null, users};
+    if (!plan) {
+      const entry = await this.repository.assistantWaitlist();
+      const waitlist = entry ? {tier: entry.tier, tierName: assistantTiers[entry.tier].name,
+        pricePerUserCents: assistantTiers[entry.tier].pricePerUserCents, creditsPerUser: assistantTiers[entry.tier].creditsPerUser,
+        requestedAt: entry.requestedAt, requestedByName: entry.requestedByName} : null;
+      return {plan: null, users, waitlist};
+    }
     const {cycle, pool} = await this.snapshot(actor);
     const tier = assistantTiers[plan.tier];
-    return {users, billingHold: plan.billingHold, plan: {tier: plan.tier, tierName: tier.name, pricePerUserCents: tier.pricePerUserCents,
+    return {users, waitlist: null, billingHold: plan.billingHold, plan: {tier: plan.tier, tierName: tier.name, pricePerUserCents: tier.pricePerUserCents,
       creditsPerUser: tier.creditsPerUser, billedUserCount: plan.paidSeats ?? cycle.billedUserCount,
       monthlyTotalCents: tier.pricePerUserCents * (plan.paidSeats ?? cycle.billedUserCount), renewalDate: cycle.cycleEnd, status: this.effectiveStatus(plan), accessUntil: plan.accessUntil},
       pool, usage: (await this.usage(actor)).byUser,
       controls: {disabled: plan.disabled, overageEnabled: plan.overageEnabled,
         overageCapCredits: plan.overageCapCredits, perRequestCreditCap: plan.perRequestCreditCap}};
+  }
+  /** Joining the waiting list grants nothing: it records which plan the workspace wants for when paid plans open. */
+  async joinWaitlist(actor: Actor, input: unknown) {
+    const body = object(input);
+    onlyKeys(body, ['tier']);
+    if (typeof body.tier !== 'string' || !(body.tier in assistantTiers)) throw invalid('Choose a valid plan.');
+    if (await this.plan(actor)) throw new ApiError(409, 'ASSISTANT_WAITLIST_UNAVAILABLE', 'This workspace already has an AI assistant plan.');
+    const me = (await this.repository.workspaceUsers()).find(row => row.membership.userId === actor.userId);
+    const existing = await this.repository.assistantWaitlist();
+    const record: AssistantWaitlistEntry = {id: 'assistant-waitlist', tenantId: actor.tenantId, tier: body.tier as keyof typeof assistantTiers,
+      requestedById: actor.userId, requestedByName: me?.user.name ?? actor.userId, requestedByEmail: me?.user.email ?? '',
+      requestedAt: this.now().toISOString(), version: (existing?.version ?? 0) + 1};
+    await this.repository.saveAssistantWaitlist(record, existing?.version ?? 0, {id: randomUUID(), tenantId: actor.tenantId,
+      actorId: actor.userId, aggregateId: record.id, aggregateVersion: record.version, type: 'assistant-waitlist.updated',
+      occurredAt: this.now().toISOString(), deliveryStatus: 'pending'});
+    return this.admin(actor);
+  }
+  async leaveWaitlist(actor: Actor) {
+    const existing = await this.repository.assistantWaitlist();
+    if (existing) await this.repository.deleteAssistantWaitlist(existing.version, {id: randomUUID(), tenantId: actor.tenantId,
+      actorId: actor.userId, aggregateId: existing.id, aggregateVersion: existing.version + 1, type: 'assistant-waitlist.removed',
+      occurredAt: this.now().toISOString(), deliveryStatus: 'pending'});
+    return this.admin(actor);
   }
   async updateSettings(actor: Actor, input: unknown) {
     const body = object(input);

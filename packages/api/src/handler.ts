@@ -120,6 +120,13 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
           return response(200, {data: await billingAction(repository, options.stripe ?? new UnconfiguredStripeBilling(), principal, path.split('/').at(-1)!,
             request.body ? parseBody(request.body) : {}, billingReturnUrl(options.appBaseUrl, request.origin, options.hosted === true), now())});
         }
+        if (path === '/assistant/admin/waitlist' && (method === 'POST' || method === 'DELETE')) {
+          if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can manage the AI assistant.');
+          const billingConfigured = (options.stripe?.configured ?? false) && (options.assistantProvider?.configured ?? false);
+          if (method === 'POST' && billingConfigured) throw new ApiError(409, 'ASSISTANT_WAITLIST_UNAVAILABLE', 'Billing is set up. Subscribe to start a plan.');
+          const data = method === 'POST' ? await billing.joinWaitlist(principal, request.body ? parseBody(request.body) : {}) : await billing.leaveWaitlist(principal);
+          return response(200, {data: {...data, billingConfigured, billingTestMode: options.stripe?.testMode ?? false}});
+        }
         if ((path === '/assistant/admin' && method === 'GET') || (path === '/assistant/admin/settings' && method === 'PUT')) {
           if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can manage the AI assistant.');
           return response(200, {data: {...(method === 'GET' ? await billing.admin(principal) : await billing.updateSettings(principal, parseBody(request.body))), billingConfigured: (options.stripe?.configured ?? false) && (options.assistantProvider?.configured ?? false), billingTestMode: options.stripe?.testMode ?? false}});
@@ -140,6 +147,13 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
           return response(200, {data: {deleted: true}});
         }
         if (/^\/admin\/access-requests(\/|$)/.test(path)) return await manageAccessRequests(request, principal, repositories, now(), options.pilotOperator);
+        if (path === '/admin/assistant-waitlist' && method === 'GET') {
+          if (!canManageAccessRequests(principal, options.pilotOperator)) throw new ApiError(403, 'FORBIDDEN', 'Only the pilot operator can view the AI waiting list.');
+          if (!repositories.assistantWaitlistQueue) throw new ApiError(503, 'UNAVAILABLE', 'The AI waiting list is unavailable.');
+          const queue = await repositories.assistantWaitlistQueue();
+          const names = new Map(await Promise.all([...new Set(queue.map(entry => entry.tenantId))].map(async id => [id, (await repositories.forTenant(id).tenant())?.name ?? id] as const)));
+          return response(200, {data: queue.map(entry => ({...entry, tenantName: names.get(entry.tenantId)})).sort((a, b) => a.requestedAt.localeCompare(b.requestedAt))});
+        }
         if (options.hosted && ((path === '/admin/users' && method === 'POST') || /^\/(account|admin)\/mfa(\/|$)/.test(path)))
           throw new ApiError(403, 'HOSTED_ACCOUNT_MANAGEMENT', 'Pilot accounts and authenticator recovery are managed by the pilot operator.');
         if (/^\/deals\/[^/]+\/(buyers-order\/signatures|documents\/[^/]+\/(signatures|replace))$/.test(path) || /^\/service\/repair-orders\/[^/]+\/signatures$/.test(path)) return await signatures(request, principal, repository, now(), documents);

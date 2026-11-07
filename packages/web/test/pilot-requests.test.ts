@@ -32,15 +32,16 @@ test('pilot inbox sends displayed version, refreshes after success, and retains 
   const ui: UI = {admin: true, current: () => true, shell: () => {}, refresh: () => { refreshed++; }, flash: value => { error = value; }, api: async <T>(path: string, method?: string, body?: unknown) => {
     calls.push({path, method, body});
     if (method === 'POST' && fail) throw Error('Reload before saving.');
+    if (path === '/admin/assistant-waitlist') return [] as T;
     return [record] as T;
   }};
   try {
     await pilotRequestsRoute(ui, true);
     await click(); assert.equal(refreshed, 1); assert.equal(button.disabled, false);
-    assert.deepEqual(calls[1], {path: '/admin/access-requests/handled', method: 'POST', body: {email: record.email, version: 2}});
+    assert.deepEqual(calls.find(call => (call as {method?: string}).method === 'POST'), {path: '/admin/access-requests/handled', method: 'POST', body: {email: record.email, version: 2}});
     fail = true; await click(); assert.equal(refreshed, 1); assert.equal(button.disabled, false); assert.ok(error instanceof Error);
     let rendered = false; ui.current = () => false; ui.shell = html => { if (!html.includes('Loading')) rendered = true; };
     await pilotRequestsRoute(ui, true, 'handled'); assert.equal(rendered, false);
-    assert.deepEqual(calls.at(-1), {path: '/admin/access-requests?status=handled', method: undefined, body: undefined});
+    assert.deepEqual(calls.filter(call => (call as {path: string}).path.startsWith('/admin/access-requests?')).at(-1), {path: '/admin/access-requests?status=handled', method: undefined, body: undefined});
   } finally { if (original) Object.defineProperty(globalThis, 'document', original); else Reflect.deleteProperty(globalThis, 'document'); }
 });

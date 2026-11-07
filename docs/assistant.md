@@ -106,8 +106,12 @@ Neither chat content nor drafts are persisted or logged by the tray.
 
 Account → AI assistant lets admins subscribe, open Stripe's billing portal, and
 buy top-ups at 25 cents per credit. The three prices come from shared tier data.
-Without billing configuration the page says "Billing isn't set up yet" and
-purchase actions are unavailable. Settings and existing plans still work.
+Without billing configuration and with no plan, the page offers a waiting list
+instead: the admin picks a tier to be notified when paid plans open, and can
+change tiers or leave. Joining grants no plan, credits, or entitlement. The
+pilot operator sees all waiting-list entries on the Pilot requests page. Once
+billing is configured, Subscribe buttons replace the waiting list. Settings and
+existing plans still work.
 
 Hosted billing loads a JSON secret from AWS Secrets Manager using `StripeSecretArn`.
 The Lambda role can read only that secret. Keys stay out of Lambda environment

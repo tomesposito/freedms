@@ -12,6 +12,11 @@ export interface AssistantPlan {
   billingHold?: 'refund' | 'dispute';
   disabled: boolean; overageEnabled: boolean; overageCapCredits: number; perRequestCreditCap: number; version: number;
 }
+/** A workspace's request to be notified when paid AI plans open. Grants nothing: no plan, no credits, no entitlement. */
+export interface AssistantWaitlistEntry {
+  id: 'assistant-waitlist'; tenantId: string; tier: keyof typeof assistantTiers;
+  requestedById: string; requestedByName: string; requestedByEmail: string; requestedAt: string; version: number;
+}
 export interface AssistantCycle {
   id: string; tenantId: string; cycleStart: string; cycleEnd: string; billedUserCount: number;
   allotmentCredits: number; topUpCredits: number; version: number;

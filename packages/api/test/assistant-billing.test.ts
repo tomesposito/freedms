@@ -60,6 +60,30 @@ async function setup(provider: AssistantProvider = new Fake(), seed = false, hos
   };
   return {repositories, repo, billing, actor, plan, chat, get, balance, member, settings, date: (value: string) => {date = new Date(value);}};
 }
+test('assistant waiting list joins, changes, leaves, grants nothing, and stays tenant-scoped', async () => {
+  const s = await setup();
+  assert.equal((await s.billing.admin(s.actor)).waitlist, null);
+  const joined = await s.billing.joinWaitlist(s.actor, {tier: 'assistant-pro'});
+  assert.equal(joined.plan, null);
+  assert.equal(joined.waitlist?.tier, 'assistant-pro');
+  assert.equal(joined.waitlist?.tierName, 'Assistant Pro');
+  assert.equal(joined.waitlist?.requestedByName, 'Test');
+  assert.equal(await s.repo.assistantPlan(), undefined);
+  const changed = await s.billing.joinWaitlist(s.actor, {tier: 'assistant-heavy'});
+  assert.equal(changed.waitlist?.tier, 'assistant-heavy');
+  assert.equal((await s.repo.assistantWaitlist())?.version, 2);
+  await assert.rejects(() => s.billing.joinWaitlist(s.actor, {tier: 'deluxe'}), /Choose a valid plan/);
+  const queue = await s.repositories.assistantWaitlistQueue();
+  assert.equal(queue.length, 1); assert.equal(queue[0].tenantId, 'A'); assert.equal(queue[0].tier, 'assistant-heavy');
+  const billingB = new AssistantBilling(s.repositories.forTenant('B'), () => new Date());
+  assert.equal((await billingB.admin({tenantId: 'B', userId: 'user-B', role: 'admin'})).waitlist, null);
+  const left = await s.billing.leaveWaitlist(s.actor);
+  assert.equal(left.waitlist, null);
+  assert.equal(await s.repo.assistantWaitlist(), undefined);
+  assert.deepEqual(await s.repositories.assistantWaitlistQueue(), []);
+  await s.plan();
+  await assert.rejects(() => s.billing.joinWaitlist(s.actor, {tier: 'assistant'}), /already has an AI assistant plan/);
+});
 test('assistant billing prices derive from registry methods and reserve photo pricing', () => {
   for (const tool of tools) assert.deepEqual(priceForTool(tool.name), {actionClass: tool.method === 'GET' ? 'read' : 'write', credits: tool.method === 'GET' ? 1 : 2});
   assert.equal(priceForTool('unknown'), undefined); assert.deepEqual(PHOTO_PRICE, {actionClass: 'photo', credits: 3});
