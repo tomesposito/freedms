@@ -56,7 +56,7 @@ try {
   assert.equal(await page.getByRole('button',{name:'Manage billing',exact:true}).isDisabled(),true);
   await page.getByRole('status').filter({hasText:"Billing isn't set up yet."}).waitFor();
   await page.screenshot({path:`${out}/admin.png`,fullPage:true});
-  await copyFile(`${out}/admin.png`,'docs/screenshots/ai-assistant-admin.png');
+  if (process.env.UPDATE_SCREENSHOTS === '1') await copyFile(`${out}/admin.png`,'docs/screenshots/ai-assistant-admin.png');
   const save = async (action) => {
     const response = page.waitForResponse(r=>r.url().endsWith('/assistant/admin/settings') && r.request().method()==='PUT');
     await action(); assert.equal((await response).status(),200);
@@ -78,9 +78,8 @@ try {
   assert.equal((await call('/assistant/admin')).controls.disabled,false);
   await page.reload({waitUntil:'networkidle'});
   await page.locator('#assistant-trigger').waitFor({state:'visible'});
-  await save(()=>page.locator('#assistant-overage').check());
-  await save(async()=>{await page.locator('[data-setting="overageCapCredits"]').fill('2');await page.locator('[data-setting="overageCapCredits"]').press('Tab');});
-  assert.equal((await call('/assistant/admin')).controls.overageCapCredits,2);
+  assert.equal(await page.locator('#assistant-overage').count(),0);
+  await page.getByText('Automatic overage billing is unavailable.',{exact:false}).waitFor();
   await page.setViewportSize({width:390,height:844});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.screenshot({path:`${out}/mobile.png`,fullPage:true});

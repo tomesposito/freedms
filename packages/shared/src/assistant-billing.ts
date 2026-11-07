@@ -7,11 +7,15 @@ export interface AssistantPlan {
   id: 'assistant-plan'; tenantId: string; tier: keyof typeof assistantTiers;
   status: 'active' | 'past_due' | 'cancelled'; cycleAnchor: string;
   stripeCustomerId?: string; stripeSubscriptionId?: string; accessUntil?: string;
+  licensedUserIds?: string[]; paidSeats?: number; paidPeriodStart?: string; paidPeriodEnd?: string; paidInvoiceId?: string;
+  appliedSeatChangeId?: string; checkoutPurchaseId?: string;
+  billingHold?: 'refund' | 'dispute';
   disabled: boolean; overageEnabled: boolean; overageCapCredits: number; perRequestCreditCap: number; version: number;
 }
 export interface AssistantCycle {
   id: string; tenantId: string; cycleStart: string; cycleEnd: string; billedUserCount: number;
   allotmentCredits: number; topUpCredits: number; version: number;
+  paidCapacity?: number;
 }
 export interface AssistantTokenUsage { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
 export interface AssistantLedgerEntry extends AssistantTokenUsage {

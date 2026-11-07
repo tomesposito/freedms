@@ -11,7 +11,7 @@ import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import type { Customer, CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
 import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
-import { conflict, requireId } from './errors.js';
+import { conflict, requireId, requireCycleStart } from './errors.js';
 const forecastKinds = new Set<CrmEntity['kind']>(['deal', 'service-appointment', 'part', 'parts-sale', 'repair-order']);
 interface State { billingLink?: AssistantBillingLink; stripeReceipts: Set<string>; assistantPlan?: AssistantPlan; assistantCycles: Map<string, AssistantCycle>; assistantLedger: Map<string, AssistantLedgerEntry>; mcpGrants: Map<string, McpGrant>; mcpRegistrations: Map<string, McpRegistration>; mcpAttempts: Map<string, {bucket: number; count: number}>; ideas: Map<string, Idea>; accessRequests: Map<string, AccessRequest>; leadPageEpoch: number; leadPageCache: Map<string, LeadPage>; accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
@@ -65,12 +65,17 @@ export class MemoryRepositories implements RepositoryFactory {
         if (s.billingLink || [...this.states.values()].some(row => row.billingLink?.customerId === record.customerId)) throw conflict();
         s.billingLink = structuredClone(record); s.events.set(event.id, structuredClone(event));
       },
+      updateAssistantBillingLink: async (record, expected, event) => {
+        assertBillingLink(tenantId, record, event); check(event);
+        if (record.version !== expected + 1 || s.billingLink?.version !== expected || s.billingLink.customerId !== record.customerId) throw conflict();
+        s.billingLink = structuredClone(record); s.events.set(event.id, structuredClone(event));
+      },
       stripeEventProcessed: async id => s.stripeReceipts.has(requireId(id)),
-      commitStripeEvent: async ({eventId, paymentId, plan, cycle, event}) => {
+      commitStripeEvent: async ({eventId, paymentId, plan, cycle, previousCycle, event}) => {
         requireId(eventId); if (paymentId) requireId(paymentId);
         assertAssistantPlan(tenantId, plan, plan.version - 1, event); check(event);
         if (cycle) assertAssistantCycle(tenantId, cycle, cycle.version - 1);
-        if (s.stripeReceipts.has(eventId) || (paymentId && s.stripeReceipts.has(paymentId)) ||
+        if ((previousCycle && s.assistantCycles.get(previousCycle.id)?.version !== previousCycle.version) || s.stripeReceipts.has(eventId) || (paymentId && s.stripeReceipts.has(paymentId)) ||
             (s.assistantPlan?.version ?? 0) !== plan.version - 1 ||
             (cycle && (s.assistantCycles.get(cycle.id)?.version ?? 0) !== cycle.version - 1)) throw conflict();
         s.stripeReceipts.add(eventId); if (paymentId) s.stripeReceipts.add(paymentId);
@@ -83,9 +88,9 @@ export class MemoryRepositories implements RepositoryFactory {
         if ((s.assistantPlan?.version ?? 0) !== expected) throw conflict();
         s.assistantPlan = structuredClone(record); s.events.set(event.id, structuredClone(event));
       },
-      assistantCycle: async start => structuredClone(s.assistantCycles.get(requireId(start))),
+      assistantCycle: async start => structuredClone(s.assistantCycles.get(requireCycleStart(start))),
       saveAssistantCycle: async (record, expected) => {
-        assertAssistantCycle(tenantId, record, expected); requireId(record.id);
+        assertAssistantCycle(tenantId, record, expected); requireCycleStart(record.id);
         if ((s.assistantCycles.get(record.id)?.version ?? 0) !== expected) throw conflict();
         s.assistantCycles.set(record.id, structuredClone(record));
       },

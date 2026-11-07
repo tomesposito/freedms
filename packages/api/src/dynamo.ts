@@ -12,7 +12,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
 import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
-import { conflict, requireId } from './errors.js';
+import { conflict, requireId, requireCycleStart } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   // In-process, warm-instance only; the consistent epoch Get validates across instances.
   // A cold/missing page still reads every LEAD#/CUSTOMER# query page.
@@ -156,15 +156,24 @@ export class DynamoRepositories implements RepositoryFactory {
         await transact([put('ASSISTANTBILLING', record), eventPut(event), {Put: {TableName: this.table,
           Item: {PK: `STRIPECUSTOMER#${requireId(record.customerId)}`, SK: 'TENANT', data: {tenantId}}, ConditionExpression: 'attribute_not_exists(PK)'}}]);
       },
+      updateAssistantBillingLink: async (record, expected, event) => {
+        assertBillingLink(tenantId, record, event);
+        if (record.version !== expected + 1) throw new Error('Invalid billing version');
+        const row = put('ASSISTANTBILLING', record, '#d.#v = :v AND #d.#c = :c', expected);
+        Object.assign(row.Put!.ExpressionAttributeNames!, {'#c': 'customerId'}); Object.assign(row.Put!.ExpressionAttributeValues!, {':c': record.customerId});
+        await transact([row, eventPut(event)]);
+      },
       stripeEventProcessed: async id => !!await get(`STRIPERECEIPT#${requireId(id)}`),
-      commitStripeEvent: async ({eventId, paymentId, plan, cycle, event}) => {
+      commitStripeEvent: async ({eventId, paymentId, plan, cycle, previousCycle, event}) => {
         assertAssistantPlan(tenantId, plan, plan.version - 1, event);
         if (cycle) assertAssistantCycle(tenantId, cycle, cycle.version - 1);
         await transact([
+          ...(previousCycle ? [{ConditionCheck: {TableName: this.table, Key: key(`ASSISTANTCYCLE#${requireCycleStart(previousCycle.id)}`),
+            ConditionExpression: '#d.#v = :v', ExpressionAttributeNames: {'#d': 'data', '#v': 'version'}, ExpressionAttributeValues: {':v': previousCycle.version}}}] : []),
           put(`STRIPERECEIPT#${requireId(eventId)}`, {tenantId}),
           ...(paymentId ? [put(`STRIPERECEIPT#${requireId(paymentId)}`, {tenantId})] : []),
           put('ASSISTANTPLAN', plan, plan.version > 1 ? '#d.#v = :v' : 'attribute_not_exists(PK)', plan.version > 1 ? plan.version - 1 : undefined),
-          ...(cycle ? [put(`ASSISTANTCYCLE#${requireId(cycle.id)}`, cycle, cycle.version > 1 ? '#d.#v = :v' : 'attribute_not_exists(PK)', cycle.version > 1 ? cycle.version - 1 : undefined)] : []), eventPut(event)
+          ...(cycle ? [put(`ASSISTANTCYCLE#${requireCycleStart(cycle.id)}`, cycle, cycle.version > 1 ? '#d.#v = :v' : 'attribute_not_exists(PK)', cycle.version > 1 ? cycle.version - 1 : undefined)] : []), eventPut(event)
         ]);
       },
       assistantPlan: () => get<AssistantPlan>('ASSISTANTPLAN'),
@@ -172,10 +181,10 @@ export class DynamoRepositories implements RepositoryFactory {
         assertAssistantPlan(tenantId, record, expected, event);
         await transact([put('ASSISTANTPLAN', record, expected ? '#d.#v = :v' : 'attribute_not_exists(PK)', expected || undefined), eventPut(event)]);
       },
-      assistantCycle: start => get<AssistantCycle>(`ASSISTANTCYCLE#${requireId(start)}`),
+      assistantCycle: start => get<AssistantCycle>(`ASSISTANTCYCLE#${requireCycleStart(start)}`),
       saveAssistantCycle: async (record, expected) => {
         assertAssistantCycle(tenantId, record, expected);
-        await transact([put(`ASSISTANTCYCLE#${requireId(record.id)}`, record, expected ? '#d.#v = :v' : 'attribute_not_exists(PK)', expected || undefined)]);
+        await transact([put(`ASSISTANTCYCLE#${requireCycleStart(record.id)}`, record, expected ? '#d.#v = :v' : 'attribute_not_exists(PK)', expected || undefined)]);
       },
       commitAssistantLedger: async (entries, cycle, planVersion) => {
         assertAssistantCommit(tenantId, entries, cycle);
@@ -185,15 +194,15 @@ export class DynamoRepositories implements RepositoryFactory {
         await transact([
           {ConditionCheck: {TableName: this.table, Key: key('ASSISTANTPLAN'), ConditionExpression: '#d.#v = :v',
             ExpressionAttributeNames: {'#d': 'data', '#v': 'version'}, ExpressionAttributeValues: {':v': planVersion}}},
-          put(`ASSISTANTCYCLE#${requireId(cycle.id)}`, {...cycle, version: cycle.version + 1}, '#d.#v = :v', cycle.version),
-          put(`ASSISTANTLEDGER#${requireId(cycle.cycleStart)}#${entries[0].id}`, {entries}),
+          put(`ASSISTANTCYCLE#${requireCycleStart(cycle.id)}`, {...cycle, version: cycle.version + 1}, '#d.#v = :v', cycle.version),
+          put(`ASSISTANTLEDGER#${requireCycleStart(cycle.cycleStart)}#${entries[0].id}`, {entries}),
         ]);
       },
       appendAssistantLedger: async record => {
         assertAssistantLedger(tenantId, record);
-        await transact([put(`ASSISTANTLEDGER#${requireId(record.cycleStart)}#${requireId(record.id)}`, record)]);
+        await transact([put(`ASSISTANTLEDGER#${requireCycleStart(record.cycleStart)}#${requireId(record.id)}`, record)]);
       },
-      assistantLedger: async start => (await listRows<AssistantLedgerEntry | {entries: AssistantLedgerEntry[]}>(`ASSISTANTLEDGER#${requireId(start)}#`)).flatMap(row => 'entries' in row ? row.entries : [row]),
+      assistantLedger: async start => (await listRows<AssistantLedgerEntry | {entries: AssistantLedgerEntry[]}>(`ASSISTANTLEDGER#${requireCycleStart(start)}#`)).flatMap(row => 'entries' in row ? row.entries : [row]),
       ideas: () => listRows<Idea>('IDEA#'),
       idea: id => get<Idea>(`IDEA#${requireId(id)}`),
       saveIdea: async (record, expectedVersion, event) => {

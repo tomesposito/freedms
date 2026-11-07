@@ -18,7 +18,15 @@ Parameters:
   AssistantModelId:
     Type: String
     Default: ''
-    Description: Empty = assistant off; set to a Bedrock Sonnet 5.5 inference profile (or model) ID the account can invoke in the stack region
+    Description: Empty = assistant off; set to a tested Bedrock inference profile (or model) ID the account can invoke in the stack region
+  AssistantFoundationModelId:
+    Type: String
+    Default: ''
+    Description: Foundation model ID used by the configured inference profile
+  StripeSecretArn:
+    Type: String
+    Default: ''
+    Description: Secrets Manager ARN containing the Stripe credentials and price IDs
   StripeSecretKey:
     Type: String
     Default: ''
@@ -83,6 +91,7 @@ Parameters:
     AllowedValues: ['true', 'false']
     Description: Enable app/apex DNS only after Free plan and application acceptance
 Conditions:
+  HasStripeSecret: !Not [!Equals [!Ref StripeSecretArn, '']]
   McpRegistered: !Not [!Equals [!Join ['', !Ref McpCallbackURLs], '']]
   McpLogoutRegistered: !Not [!Equals [!Join ['', !Ref McpLogoutURLs], '']]
   ManagedLoginBrandingEnabled: !Equals [!Ref EnableManagedLoginBranding, 'true']
@@ -300,12 +309,13 @@ Resources:
       Architectures: [arm64]
       ReservedConcurrentExecutions: 2
       MemorySize: 256
-      Timeout: 15
+      Timeout: 30
       Environment:
         Variables:
           PILOT_OPERATOR_SUBJECT: !Ref PilotOperatorSubject
           PILOT_OPERATOR_TENANT_ID: !Ref PilotOperatorTenantId
           FREEDMS_ASSISTANT_MODEL: !Ref AssistantModelId
+          FREEDMS_STRIPE_SECRET_ARN: !Ref StripeSecretArn
           FREEDMS_STRIPE_SECRET_KEY: !Ref StripeSecretKey
           FREEDMS_STRIPE_WEBHOOK_SECRET: !Ref StripeWebhookSecret
           FREEDMS_STRIPE_PRICE_ASSISTANT: !Ref StripePriceAssistant
@@ -326,13 +336,18 @@ Resources:
       Policies:
         - Statement:
             - Effect: Allow
+              Action: [secretsmanager:GetSecretValue]
+              Resource: !If [HasStripeSecret, !Ref StripeSecretArn, !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:unused']
+            - Effect: Allow
               Action: [cognito-idp:CreateUserPoolClient, cognito-idp:DeleteUserPoolClient]
               Resource: !GetAtt UserPool.Arn
             - Effect: Allow
               Action: [bedrock:InvokeModel]
               Resource:
                 - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${AssistantModelId}'
-                - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/${AssistantModelId}'
+                - !Sub 'arn:aws:bedrock:us-east-1::foundation-model/${AssistantFoundationModelId}'
+                - !Sub 'arn:aws:bedrock:us-east-2::foundation-model/${AssistantFoundationModelId}'
+                - !Sub 'arn:aws:bedrock:us-west-2::foundation-model/${AssistantFoundationModelId}'
             - Effect: Allow
               Action: [ses:SendEmail]
               Resource: '*'

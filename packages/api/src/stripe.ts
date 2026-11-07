@@ -1,21 +1,27 @@
+import Stripe from 'stripe';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { assistantTiers } from '@freedms/shared';
 import { ApiError } from './errors.js';
+export const STRIPE_API_VERSION = '2026-10-28.endive' as const;
 export type AssistantTier = keyof typeof assistantTiers;
 export interface StripeSubscription {
   id: string; customerId: string; tier: AssistantTier; status: string;
-  periodStart: string; periodEnd: string; cancelAtPeriodEnd: boolean; endedAt?: string; paid: boolean;
+  periodStart: string; periodEnd: string; cancelAtPeriodEnd: boolean; endedAt?: string; paid: boolean; quantity?: number; invoiceId?: string; changedAt?: string; pending?: boolean;
 }
 export interface StripeBillingEvent {
   id: string; customerId?: string; subscription?: StripeSubscription;
   payment?: {id: string; credits: number};
+  hold?: 'refund' | 'dispute';
 }
 export interface StripeBilling {
   readonly configured: boolean;
+  readonly testMode?: boolean;
   createCustomer(tenantId: string): Promise<string>;
-  checkoutSubscription(customerId: string, tier: AssistantTier, seats: number, returnUrl: string): Promise<{url: string}>;
-  checkoutTopUp(customerId: string, credits: number, returnUrl: string): Promise<{url: string}>;
+  checkoutSubscription(customerId: string, tier: AssistantTier, seats: number, returnUrl: string, purchase?: {id: string; expiresAt: number}): Promise<{url: string}>;
+  checkoutTopUp(customerId: string, credits: number, returnUrl: string, requestId?: string): Promise<{url: string}>;
   portal(customerId: string, returnUrl: string): Promise<{url: string}>;
+  getSubscription?(subscriptionId: string): Promise<StripeSubscription>;
+  updateSubscription?(subscriptionId: string, seats: number, tier: AssistantTier, requestId: string): Promise<StripeSubscription>;
   verifyEvent(rawBody: string, signature: string | undefined): Promise<StripeBillingEvent>;
 }
 export const billingUnavailable = () => new ApiError(503, 'BILLING_UNAVAILABLE', "Billing isn't set up yet.");
@@ -43,19 +49,20 @@ const iso = (seconds: unknown): string => {
   if (typeof seconds !== 'number' || !Number.isSafeInteger(seconds) || seconds <= 0) throw new ApiError(502, 'STRIPE_RESPONSE', 'Stripe returned an invalid billing period.');
   return new Date(seconds * 1000).toISOString();
 };
-export function validTopUp(credits: unknown): credits is number { return typeof credits === 'number' && Number.isSafeInteger(credits) && credits >= 1 && credits <= 100000; }
+export function validTopUp(credits: unknown): credits is number { return typeof credits === 'number' && Number.isSafeInteger(credits) && credits >= 2 && credits <= 100000; }
 export class HttpStripeBilling implements StripeBilling {
   readonly configured = true;
+  readonly testMode: boolean;
+  private client: Stripe;
   constructor(private key: string, private webhookSecret: string, private prices: Record<AssistantTier | 'topup', string>,
-    private fetcher: typeof fetch = fetch, private now = () => new Date()) {}
+    fetcher: typeof fetch = fetch, private now = () => new Date(), private portalConfiguration?: string) {
+    this.testMode = /^(sk|rk)_test_/.test(key);
+    this.client = new Stripe(key, {apiVersion: STRIPE_API_VERSION, timeout: 6000, maxNetworkRetries: 1,
+      httpClient: Stripe.createFetchHttpClient(fetcher)});
+  }
   private async request(path: string, fields?: Record<string, string>, key?: string): Promise<Json> {
     try {
-      const result = await this.fetcher(`https://api.stripe.com/v1/${path}`, {method: fields ? 'POST' : 'GET',
-        headers: {Authorization: `Bearer ${this.key}`, 'Stripe-Version': '2025-03-31.basil',
-          ...(fields ? {'Content-Type': 'application/x-www-form-urlencoded'} : {}), ...(key ? {'Idempotency-Key': key} : {})},
-        ...(fields ? {body: new URLSearchParams(fields)} : {}), signal: AbortSignal.timeout(15000)});
-      if (!result.ok) throw new Error('Stripe request failed');
-      return await result.json() as Json;
+      return await this.client.rawRequest(fields ? 'POST' : 'GET', `/v1/${path}`, fields, key ? {idempotencyKey: key} : undefined);
     } catch { throw new ApiError(502, 'BILLING_PROVIDER_UNAVAILABLE', 'Billing could not be reached. Please try again.'); }
   }
   async createCustomer(tenantId: string) {
@@ -67,16 +74,44 @@ export class HttpStripeBilling implements StripeBilling {
     if (typeof result.url !== 'string' || !/^https:\/\/(checkout|billing)\.stripe\.com\//.test(result.url)) throw new ApiError(502, 'STRIPE_RESPONSE', 'Invalid billing link.');
     return {url: result.url};
   }
-  async checkoutSubscription(customer: string, tier: AssistantTier, seats: number, returnUrl: string) {
-    return this.link(await this.request('checkout/sessions', {mode: 'subscription', customer, success_url: returnUrl, cancel_url: returnUrl,
-      'line_items[0][price]': this.prices[tier], 'line_items[0][quantity]': String(seats), 'metadata[tier]': tier}));
+  async checkoutSubscription(customer: string, tier: AssistantTier, seats: number, returnUrl: string, purchase?: {id: string; expiresAt: number}) {
+    const subscriptions = await this.request(`subscriptions?customer=${encodeURIComponent(customer)}&status=all&limit=100`);
+    if (subscriptions.data?.some((row: Json) => !['canceled', 'incomplete_expired'].includes(row.status)))
+      throw new ApiError(409, 'BILLING_PLAN_EXISTS', 'A subscription already exists. Open Manage billing or wait for payment confirmation.');
+    return this.link(await this.request('checkout/sessions', {mode: 'subscription', 'managed_payments[enabled]': 'false', customer, success_url: returnUrl, cancel_url: returnUrl,
+      'line_items[0][price]': this.prices[tier], 'line_items[0][quantity]': String(seats), 'metadata[tier]': tier,
+      'billing_address_collection': 'required', 'customer_update[name]': 'auto', 'customer_update[address]': 'auto',
+      ...(purchase ? {expires_at: String(purchase.expiresAt), 'client_reference_id': purchase.id} : {})}, purchase?.id));
   }
-  async checkoutTopUp(customer: string, credits: number, returnUrl: string) {
-    if (!validTopUp(credits)) throw new ApiError(400, 'INVALID_INPUT', 'Choose 1 to 100000 credits.');
-    return this.link(await this.request('checkout/sessions', {mode: 'payment', customer, success_url: returnUrl, cancel_url: returnUrl,
-      'line_items[0][price]': this.prices.topup, 'line_items[0][quantity]': String(credits), 'metadata[credits]': String(credits)}));
+  async checkoutTopUp(customer: string, credits: number, returnUrl: string, requestId?: string) {
+    if (!validTopUp(credits)) throw new ApiError(400, 'INVALID_INPUT', 'Choose 2 to 100000 credits.');
+    return this.link(await this.request('checkout/sessions', {mode: 'payment', 'managed_payments[enabled]': 'false', customer, success_url: returnUrl, cancel_url: returnUrl,
+      'line_items[0][price]': this.prices.topup, 'line_items[0][quantity]': String(credits), 'metadata[credits]': String(credits),
+      'invoice_creation[enabled]': 'true', 'billing_address_collection': 'required', 'customer_update[name]': 'auto', 'customer_update[address]': 'auto'}, requestId));
   }
-  async portal(customer: string, returnUrl: string) { return this.link(await this.request('billing_portal/sessions', {customer, return_url: returnUrl})); }
+  async portal(customer: string, returnUrl: string) {
+    return this.link(await this.request('billing_portal/sessions', {customer, return_url: returnUrl,
+      ...(this.portalConfiguration ? {configuration: this.portalConfiguration} : {})}));
+  }
+  async getSubscription(subscriptionId: string) {
+    const sub = this.subscription(await this.request(`subscriptions/${encodeURIComponent(subscriptionId)}?expand[]=latest_invoice`));
+    if (!sub) throw new ApiError(502, 'STRIPE_RESPONSE', 'Invalid subscription.');
+    return sub;
+  }
+  async updateSubscription(subscriptionId: string, seats: number, tier: AssistantTier, requestId: string) {
+    const current = await this.request(`subscriptions/${encodeURIComponent(subscriptionId)}?expand[]=latest_invoice`);
+    const normalized = this.subscription(current);
+    if (!normalized) throw new ApiError(502, 'STRIPE_RESPONSE', 'Invalid subscription.');
+    if (current.pending_update || (normalized.quantity === seats && normalized.tier === tier)) return normalized;
+    const increase = seats * assistantTiers[tier].pricePerUserCents > (normalized.quantity ?? 0) * assistantTiers[normalized.tier].pricePerUserCents;
+    const updated = await this.request(`subscriptions/${encodeURIComponent(subscriptionId)}`, {
+      'items[0][id]': id(current.items.data[0]), 'items[0][quantity]': String(seats), 'items[0][price]': this.prices[tier],
+      payment_behavior: 'pending_if_incomplete', proration_behavior: increase ? 'always_invoice' : 'none', 'expand[0]': 'latest_invoice'
+    }, `${requestId}-${id(current.latest_invoice)}`);
+    const result = this.subscription(updated);
+    if (!result) throw new ApiError(502, 'STRIPE_RESPONSE', 'Invalid subscription update.');
+    return result;
+  }
   private subscription(row: Json): StripeSubscription | undefined {
     const items = row.items?.data;
     if (!Array.isArray(items) || items.length !== 1) return;
@@ -86,7 +121,10 @@ export class HttpStripeBilling implements StripeBilling {
     return {id: id(row), customerId: id(row.customer), tier, status: row.status,
       periodStart: iso(item.current_period_start ?? row.current_period_start), periodEnd: iso(item.current_period_end ?? row.current_period_end),
       cancelAtPeriodEnd: row.cancel_at_period_end === true, ...(row.ended_at ? {endedAt: iso(row.ended_at)} : {}),
-      paid: row.latest_invoice?.status === 'paid' && row.latest_invoice?.amount_paid > 0};
+      quantity: Number.isSafeInteger(item.quantity) && item.quantity > 0 ? item.quantity : undefined,
+      invoiceId: id(row.latest_invoice), pending: !!row.pending_update,
+      ...(row.latest_invoice?.created ? {changedAt: iso(row.latest_invoice.created)} : {}),
+      paid: row.latest_invoice?.status === 'paid' && row.latest_invoice?.amount_remaining === 0};
   }
   async verifyEvent(raw: string, signature: string | undefined): Promise<StripeBillingEvent> {
     verifyStripeSignature(raw, signature, this.webhookSecret, this.now());
@@ -102,9 +140,12 @@ export class HttpStripeBilling implements StripeBilling {
       if (session.mode === 'payment') {
         const credits = Number(session.metadata?.credits), lines = session.line_items?.data;
         if (validTopUp(credits) && lines?.length === 1 && id(lines[0].price) === this.prices.topup && lines[0].quantity === credits &&
-            session.currency === 'usd' && session.amount_total === credits * 25) result.payment = {id: id(session), credits};
+            session.currency === 'usd' && (session.amount_subtotal ?? session.amount_total) === credits * 25) result.payment = {id: id(session), credits};
       }
-    } else if (['customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted'].includes(event.type)) {
+    } else if (['charge.refunded', 'charge.dispute.created'].includes(event.type)) {
+      const charge = await this.request(`charges/${encodeURIComponent(event.type === 'charge.refunded' ? id(row) : id(row.charge))}`);
+      result.customerId = id(charge.customer); result.hold = event.type === 'charge.refunded' ? 'refund' : 'dispute';
+    } else if (['customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted', 'customer.subscription.pending_update_applied'].includes(event.type)) {
       const current = await this.request(`subscriptions/${encodeURIComponent(id(row))}?expand[]=latest_invoice`);
       result.customerId = id(current.customer); result.subscription = this.subscription(current);
     } else if (['invoice.paid', 'invoice.payment_failed', 'invoice.payment_action_required'].includes(event.type)) {
@@ -120,6 +161,6 @@ export class HttpStripeBilling implements StripeBilling {
 export function stripeBillingFromEnv(env: NodeJS.ProcessEnv = process.env): StripeBilling {
   const prices = {assistant: env.FREEDMS_STRIPE_PRICE_ASSISTANT ?? '', 'assistant-pro': env.FREEDMS_STRIPE_PRICE_ASSISTANT_PRO ?? '',
     'assistant-heavy': env.FREEDMS_STRIPE_PRICE_ASSISTANT_HEAVY ?? '', topup: env.FREEDMS_STRIPE_PRICE_TOPUP ?? ''};
-  return env.FREEDMS_STRIPE_SECRET_KEY && Object.values(prices).every(Boolean)
-    ? new HttpStripeBilling(env.FREEDMS_STRIPE_SECRET_KEY, env.FREEDMS_STRIPE_WEBHOOK_SECRET ?? '', prices) : new UnconfiguredStripeBilling();
+  return env.FREEDMS_STRIPE_SECRET_KEY && env.FREEDMS_STRIPE_WEBHOOK_SECRET && Object.values(prices).every(Boolean)
+    ? new HttpStripeBilling(env.FREEDMS_STRIPE_SECRET_KEY, env.FREEDMS_STRIPE_WEBHOOK_SECRET, prices, fetch, () => new Date(), env.FREEDMS_STRIPE_PORTAL_CONFIGURATION) : new UnconfiguredStripeBilling();
 }

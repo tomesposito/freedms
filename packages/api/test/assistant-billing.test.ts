@@ -217,7 +217,8 @@ test('assistant Dynamo billing keys, pagination, conditional writes and atomic t
 
 test('assistant admin readout, active seats, authorization, missing plan and validation', async () => {
   const s = await setup();
-  assert.deepEqual((await s.get('/assistant/admin')).data, {plan: null, billingConfigured: false});
+  assert.equal((await s.get('/assistant/admin')).data.plan, null);
+  assert.equal((await s.get('/assistant/admin')).data.billingConfigured, false);
   assert.equal((await s.settings({disabled: true})).error.code, 'ASSISTANT_PLAN_REQUIRED');
   await s.plan({tier: 'assistant-pro'});
   let data = (await s.get('/assistant/admin')).data;

@@ -114,14 +114,15 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
           return response(200, {data: await searchRecords(repository, text(request.query?.q ?? '', 'Search', 200, true))});
         }
         const billing = new AssistantBilling(repository, now, options.assistantSeedLocalPlan === true && !options.hosted);
-        if (/^\/assistant\/admin\/billing\/(checkout|topup|portal)$/.test(path) && method === 'POST') {
+        if (/^\/assistant\/admin\/billing\/(checkout|topup|portal|seats)$/.test(path) && method === 'POST') {
           if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can manage billing.');
+          if (path.endsWith('/checkout') && !options.assistantProvider?.configured) throw new ApiError(503, 'ASSISTANT_UNAVAILABLE', 'The AI assistant must be configured before purchasing access.');
           return response(200, {data: await billingAction(repository, options.stripe ?? new UnconfiguredStripeBilling(), principal, path.split('/').at(-1)!,
             request.body ? parseBody(request.body) : {}, billingReturnUrl(options.appBaseUrl, request.origin, options.hosted === true), now())});
         }
         if ((path === '/assistant/admin' && method === 'GET') || (path === '/assistant/admin/settings' && method === 'PUT')) {
           if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can manage the AI assistant.');
-          return response(200, {data: {...(method === 'GET' ? await billing.admin(principal) : await billing.updateSettings(principal, parseBody(request.body))), billingConfigured: options.stripe?.configured ?? false}});
+          return response(200, {data: {...(method === 'GET' ? await billing.admin(principal) : await billing.updateSettings(principal, parseBody(request.body))), billingConfigured: (options.stripe?.configured ?? false) && (options.assistantProvider?.configured ?? false), billingTestMode: options.stripe?.testMode ?? false}});
         }
         if (path === '/assistant/pool' && method === 'GET') return response(200, {data: await billing.pool(principal)});
         if (path === '/assistant/usage' && method === 'GET') return response(200, {data: await billing.usage(principal)});
