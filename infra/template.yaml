@@ -355,7 +355,7 @@ Resources:
                 StringEquals:
                   ses:FromAddress: !Ref MailFrom
             - Effect: Allow
-              Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:PutItem, dynamodb:DeleteItem]
+              Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:ConditionCheckItem]
               Resource: !GetAtt Table.Arn
             - Effect: Allow
               Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
