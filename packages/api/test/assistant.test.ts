@@ -108,6 +108,10 @@ test('Nemotron keeps instructions, tool calls and usage without unsupported cach
     assert.equal(command.input.system?.length, 1);
     assert.match(command.input.system?.[0]?.text ?? '', /Money is integer cents/);
     assert.match(command.input.system?.[0]?.text ?? '', /Never invent records/);
+    assert.match(command.input.system?.[0]?.text ?? '', /may only come from tool results/);
+    assert.match(command.input.system?.[0]?.text ?? '', /earlier messages are not evidence/);
+    assert.match(command.input.system?.[0]?.text ?? '', /speculating about the system itself/);
+    assert.match(command.input.system?.[0]?.text ?? '', /never present an unchecked claim as the current state/);
     assert.ok(command.input.system?.every(block => !block.cachePoint));
     assert.deepEqual(command.input.toolConfig?.tools, assistantToolSpecs);
     assert.deepEqual(command.input.inferenceConfig, {maxTokens: 4096});
