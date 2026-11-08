@@ -83,9 +83,10 @@ test('assistant provider selection is fail-closed and never selects the local st
   assert.ok(assistantProviderFromEnv({FREEDMS_ASSISTANT_STUB: '1'}) instanceof UnconfiguredAssistantProvider);
   await assert.rejects(new UnconfiguredAssistantProvider().converse(), /isn't set up/);
 });
-test('Bedrock uses Converse, static prefix caching and a 15-second abort signal without network', async () => {
-  const provider = new BedrockAssistantProvider('offline-model', {send: async (command, options) => {
-    assert.equal(command.input.modelId, 'offline-model');
+test('Claude uses Converse, static prefix caching and a 15-second abort signal without network', async () => {
+  const model = 'us.anthropic.claude-sonnet-4-6';
+  const provider = new BedrockAssistantProvider(model, {send: async (command, options) => {
+    assert.equal(command.input.modelId, model);
     assert.deepEqual(command.input.messages, user);
     assert.deepEqual(command.input.system?.at(-1), {cachePoint: {type: 'default'}});
     assert.deepEqual(command.input.toolConfig?.tools, assistantToolSpecs);
@@ -97,6 +98,24 @@ test('Bedrock uses Converse, static prefix caching and a 15-second abort signal 
   assert.deepEqual(provider.lastUsage, {inputTokens: 1, outputTokens: 1, cacheReadTokens: 3, cacheWriteTokens: 4});
   const failed = new BedrockAssistantProvider('offline', {send: async () => {throw Error('private provider content');}});
   await assert.rejects(failed.converse(user, assistantToolSpecs), error => error instanceof Error && !error.message.includes('private') && error.message.includes('could not complete'));
+});
+test('Nemotron keeps instructions, tool calls and usage without unsupported cache checkpoints', async () => {
+  const model = 'nvidia.nemotron-super-3-120b';
+  const toolCall = call('search_vehicles', {search: 'STOCK-98'});
+  const provider = new BedrockAssistantProvider(model, {send: async (command, options) => {
+    assert.equal(command.input.modelId, model);
+    assert.deepEqual(command.input.messages, user);
+    assert.equal(command.input.system?.length, 1);
+    assert.match(command.input.system?.[0]?.text ?? '', /Money is integer cents/);
+    assert.match(command.input.system?.[0]?.text ?? '', /Never invent records/);
+    assert.ok(command.input.system?.every(block => !block.cachePoint));
+    assert.deepEqual(command.input.toolConfig?.tools, assistantToolSpecs);
+    assert.deepEqual(command.input.inferenceConfig, {maxTokens: 4096});
+    assert.ok(options.abortSignal instanceof AbortSignal);
+    return {$metadata: {}, stopReason: 'tool_use', usage: {inputTokens: 100, outputTokens: 20, totalTokens: 120}, metrics: {latencyMs: 1}, output: {message: toolCall}};
+  }});
+  assert.deepEqual(await provider.converse(user, assistantToolSpecs), toolCall);
+  assert.deepEqual(provider.lastUsage, {inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0});
 });
 test('assistant endpoint refuses unauthenticated requests and defaults to machine-readable paywall without a free turn', async () => {
   const provider = new ScriptedProvider([]), s = await setup(provider, false);

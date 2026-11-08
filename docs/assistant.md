@@ -45,8 +45,11 @@ and `GET /assistant/usage` supplies attributed usage without chat content.
 
 Set `FREEDMS_ASSISTANT_MODEL` to the Bedrock model/inference profile ID. The SDK
 uses the deployment's AWS credentials and region. Converse requests have a
-15-second abort deadline and no automatic retries. A cache checkpoint after the
-static system prompt covers the tools/system prefix, following the
+15-second abort deadline and no automatic retries. The pilot uses NVIDIA Nemotron
+3 Super 120B (`nvidia.nemotron-super-3-120b`) through regional on-demand Bedrock.
+Nemotron requests omit explicit cache checkpoints, which this model does not
+support. Claude requests retain a cache checkpoint after the static system prompt
+covering the tools/system prefix, following the
 [AWS prompt caching documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html).
 There is no model fallback or content logging. Live model access, IAM permissions,
 and cache-hit measurements require deployment verification; tests use no Bedrock
