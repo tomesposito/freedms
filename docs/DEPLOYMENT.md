@@ -66,9 +66,10 @@ The existing operator CLI remains available for reviewing and handling requests.
 
 The assistant is off by default. With `AssistantModelId` empty, the stack behaves
 exactly as today. To enable it, set `AssistantModelId` to a tested Bedrock
-inference profile ID the account can invoke in the stack region (`us-east-1`)
+model or inference profile ID the account can invoke in the stack region (`us-east-1`)
 and redeploy. The parameter supplies `FREEDMS_ASSISTANT_MODEL` to the API Lambda.
-Set `AssistantFoundationModelId` to the matching foundation-model ID. The template
+Set `AssistantFoundationModelId` to the matching foundation-model ID (the same ID
+for a directly invoked regional model). The template
 adds only `bedrock:InvokeModel`, scoped to the profile and that model in the three
 US routing regions; it grants nothing broader.
 
@@ -87,10 +88,18 @@ signing secret. The API reads and caches this secret; secrets are not copied int
 Lambda environment variables. The legacy secret/price parameters remain for
 backward compatibility and should remain empty for this deployment.
 
-Configure and verify the assistant provider before enabling purchases. In this
-AWS account, `us.anthropic.claude-sonnet-4-6` was tested successfully; the documented
-Sonnet 5.5 profile returned AccessDenied. For 4.6, use foundation-model ID
-`anthropic.claude-sonnet-4-6`. Test keys enable clearly labeled sandbox checkout,
+Configure and verify the assistant provider before enabling purchases. The pilot
+uses NVIDIA Nemotron 3 Super 120B: set both `AssistantModelId` and
+`AssistantFoundationModelId` to `nvidia.nemotron-super-3-120b`. It supports the
+assistant's Converse tool flow in `us-east-1`; explicit prompt-cache checkpoints
+are omitted for this model. Deploy the compatible provider code before changing
+the model parameters, then verify the runtime role's invocation permission and
+a complete assistant tool round trip. Record the changed Lambda configuration
+fingerprint in the private release baseline so subsequent releases preserve it.
+For rollback, use `us.anthropic.claude-sonnet-4-6` with foundation-model ID
+`anthropic.claude-sonnet-4-6`; its cache checkpoint remains enabled.
+
+Test keys enable clearly labeled sandbox checkout,
 not real payments. Live activation requires an activated Stripe account, a
 separate live secret/catalog/webhook, and an end-to-end live configuration check.
 The free dealership application does not depend on billing availability.

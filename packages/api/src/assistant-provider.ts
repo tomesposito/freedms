@@ -24,8 +24,9 @@ export class BedrockAssistantProvider implements AssistantProvider {
   async converse(messages: AssistantMessage[], toolSpecs: AssistantToolSpec[]): Promise<AssistantMessage> {
     try {
       const result = await this.client.send(new ConverseCommand({modelId: this.model, messages,
-        // The system checkpoint caches the complete tools + system prefix.
-        system: [{text: system}, {cachePoint: {type: 'default'}}],
+        // Claude accepts explicit checkpoints; Nemotron does not. Keep the
+        // system instructions for every model without sending unsupported fields.
+        system: [{text: system}, ...(this.model.includes('anthropic.claude-') ? [{cachePoint: {type: 'default' as const}}] : [])],
         toolConfig: {tools: toolSpecs}, inferenceConfig: {maxTokens: 4096},
       }), {abortSignal: AbortSignal.timeout(15_000)});
       const message = result.output?.message;
