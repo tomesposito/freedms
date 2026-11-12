@@ -9,6 +9,9 @@ import { seedDemo } from '../src/demo-seed.js';
 import { vehicleFields, tools } from '../src/mcp/tools.js';
 import { gatewayHandler } from '../src/gateway.js';
 import { localAuth } from '../src/local-auth.js';
+import { deleteMcpRegistration, type RegistrationClients } from '../src/mcp/registration.js';
+import { grantEvent } from '../src/ai-connections.js';
+import { OPERATOR_TENANT_ID } from '../src/repository.js';
 import { accessVerifier } from '../src/mcp/auth.js';
 const now = new Date('2026-10-30T12:00:00Z');
 const {privateKey, publicKey} = generateKeyPairSync('rsa', {modulusLength: 2048});
@@ -66,6 +69,79 @@ test('MCP rejects invalid access tokens with a resource challenge and caches off
   const failing = createHandler(s.repositories, {decode: async () => {throw Error();}}, () => now, undefined, undefined, undefined, undefined, {mcp: {...config, jwks: async () => {throw Error('private network detail');}}});
   assert.equal((await failing({method: 'POST', path: '/mcp', authorization: `Bearer ${token()}`})).statusCode, 401);
 });
+async function registeredSetup() {
+  const s = await setup();
+  const clients: RegistrationClients = {create: async () => 'dynamic-client', delete: async () => {}};
+  const registration = {poolId: 'offline-pool', clients};
+  const handle = createHandler(s.repositories, {decode: async () => {throw Error('Network forbidden');}}, () => now,
+    undefined, undefined, undefined, undefined, {mcp: config, registration});
+  const registered = await handle({method: 'POST', path: '/mcp/register', sourceIp: '192.0.2.1',
+    body: JSON.stringify({client_name: 'Offline assistant', redirect_uris: ['https://assistant.example/callback']})});
+  assert.equal(registered.statusCode, 201);
+  const clientId = JSON.parse(registered.body).client_id as string;
+  return {...s, registration, clientId, jwt: token({client_id: clientId, scope: 'freedms/mcp.read'})};
+}
+test('registered client completes registration, token verification and tenant-scoped reads; deletion denies admission', async () => {
+  const s = await registeredSetup();
+  const listed = await s.request('tools/list', {}, s.jwt);
+  assert.equal(listed.response.statusCode, 200);
+  assert.ok(listed.result.tools.some((t: {name: string}) => t.name === 'search_vehicles'));
+  assert.ok(listed.result.tools.every((t: {annotations: {readOnlyHint: boolean}}) => t.annotations.readOnlyHint));
+  const result = await s.call('search_vehicles', {}, s.jwt);
+  assert.equal(result.isError, false);
+  const rest = await s.handle({method: 'GET', path: '/vehicles', claims: {sub: 'admin-A', 'custom:tenant_id': 'A', iss: '', aud: '', exp: 1, token_use: 'id'}});
+  assert.deepEqual(result.structuredContent, JSON.parse(rest.body));
+  const other = s.repositories.forTenant('B');
+  for (const [name, kind] of [['get_lead', 'lead'], ['get_customer', 'customer'], ['get_deal', 'deal']] as const) {
+    assert.equal((await s.call(name, {id: (await other.crmList(kind))[0].id}, s.jwt)).structuredContent.error.code, 'NOT_FOUND');
+  }
+  assert.equal((await s.call('get_vehicle', {id: (await other.list({}))[0].id}, s.jwt)).structuredContent.error.code, 'NOT_FOUND');
+  assert.equal((await s.call('search_vehicles', {tenantId: 'B'}, s.jwt)).isError, true);
+  await deleteMcpRegistration(s.repositories, s.registration, s.clientId);
+  assert.equal((await s.request('tools/list', {}, s.jwt)).response.statusCode, 401);
+  assert.equal((await s.request('tools/list')).response.statusCode, 200);
+});
+test('registered clients retain token validation, live membership and grant revocation checks', async () => {
+  const s = await registeredSetup();
+  for (const overrides of [{iss: 'wrong'}, {exp: 1}, {scope: 'openid'}, {token_use: 'id'}]) {
+    assert.equal((await s.request('tools/list', {}, token({client_id: s.clientId, ...overrides}))).response.statusCode, 401);
+  }
+  assert.equal((await s.request('tools/list', {}, s.jwt.slice(0, -10) + 'invalid')).response.statusCode, 401);
+  assert.deepEqual((await s.request('tools/list', {}, token({client_id: s.clientId, sub: 'unknown'}))).result.tools, []);
+  const repo = s.repositories.forTenant('A');
+  const membership = repo.membership;
+  const original = s.repositories.forTenant.bind(s.repositories);
+  s.repositories.forTenant = tenant => {
+    const scoped = tenant === 'A' ? {...repo, membership: async (id: string) => {
+      const member = await membership(id); return member ? {...member, active: false} : undefined;
+    }} : original(tenant);
+    return scoped;
+  };
+  assert.deepEqual((await s.request('tools/list', {}, s.jwt)).result.tools, []);
+  s.repositories.forTenant = original;
+  await s.request('tools/list', {}, s.jwt);
+  const grant = (await repo.mcpGrants()).find(g => g.clientId === s.clientId)!;
+  const revoked = {...grant, revokedAt: now.toISOString(), version: grant.version + 1};
+  await repo.saveMcpGrant(revoked, grant.version, grantEvent(revoked, grant.userId, 'mcp-grant.revoked'));
+  assert.equal((await s.request('tools/list', {}, s.jwt)).response.statusCode, 401);
+});
+
+test('registration admission fails closed on storage errors and bypasses lookup for configured clients', async () => {
+  const s = await registeredSetup(), original = s.repositories.forTenant.bind(s.repositories);
+  let lookups = 0;
+  s.repositories.forTenant = tenant => tenant === OPERATOR_TENANT_ID
+    ? {...original(tenant), mcpRegistration: async () => {lookups++; throw Error('Private storage detail');}}
+    : original(tenant);
+  assert.equal((await s.request('tools/list', {}, s.jwt)).response.statusCode, 401);
+  assert.equal(lookups, 1);
+  assert.equal((await s.request('tools/list')).response.statusCode, 200);
+  assert.equal(lookups, 1);
+  await assert.rejects(accessVerifier(config)(`Bearer ${s.jwt}`), /Unauthorized/);
+  const verify = accessVerifier({...config, isRegisteredClient: async () => {throw Error('private');}});
+  await assert.rejects(verify(`Bearer ${s.jwt}`), /^Error: Unauthorized$/);
+  assert.equal((await verify(`Bearer ${token()}`)).client_id, config.clientId);
+});
+
 test('original fourteen MCP reads preserve REST resources and tenant isolation', async () => {
   const s = await setup(), repo = s.repositories.forTenant('A');
   const ids: Record<string, string> = {get_vehicle: (await repo.list({}))[0].id, get_lead: (await repo.crmList('lead'))[0].id, get_customer: (await repo.crmList('customer'))[0].id, get_deal: (await repo.crmList('deal'))[0].id};

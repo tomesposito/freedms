@@ -5,6 +5,7 @@ export interface McpConfig {
   issuer: string; clientId: string; resource: string;
   jwks?: () => Promise<{keys: (JsonWebKey & {kid?: string; alg?: string; use?: string})[]}>;
   now?: () => number;
+  isRegisteredClient?: (clientId: string) => Promise<boolean>;
 }
 export function accessVerifier(config: McpConfig) {
   const now = config.now ?? Date.now;
@@ -22,7 +23,7 @@ export function accessVerifier(config: McpConfig) {
     const h = JSON.parse(Buffer.from(header, 'base64url').toString());
     const claims = JSON.parse(Buffer.from(payload, 'base64url').toString()) as AccessClaims;
     if (h.alg !== 'RS256' || typeof h.kid !== 'string' || claims.iss !== config.issuer ||
-      claims.client_id !== config.clientId || !config.clientId || claims.token_use !== 'access' ||
+      typeof claims.client_id !== 'string' || !claims.client_id || !config.clientId || claims.token_use !== 'access' ||
       typeof claims.exp !== 'number' || !Number.isFinite(claims.exp) || claims.exp <= now() / 1000 ||
       typeof claims.scope !== 'string' || !claims.scope.split(' ').some(s => ['freedms/mcp.read', 'freedms/mcp.write'].includes(s))) throw Error('Unauthorized');
     requireId(claims.sub);
@@ -32,6 +33,11 @@ export function accessVerifier(config: McpConfig) {
     }
     const key = cache.keys.find(k => k.kid === h.kid && k.kty === 'RSA' && (!k.alg || k.alg === 'RS256') && (!k.use || k.use === 'sig'));
     if (!key || !verify('RSA-SHA256', Buffer.from(`${header}.${payload}`), createPublicKey({key, format: 'jwk'}), Buffer.from(signature, 'base64url'))) throw Error('Unauthorized');
+    if (claims.client_id !== config.clientId) {
+      try {
+        if (!await config.isRegisteredClient?.(claims.client_id)) throw Error('Unauthorized');
+      } catch { throw Error('Unauthorized'); }
+    }
     return claims;
   };
 }

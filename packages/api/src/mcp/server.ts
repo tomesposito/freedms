@@ -4,13 +4,14 @@ import type { AuthClaims } from '@freedms/shared';
 import { authorize } from '../auth.js';
 import { ApiError } from '../errors.js';
 import { response, errorResponse, type ApiRequest, type ApiResponse } from '../handler.js';
-import type { RepositoryFactory } from '../repository.js';
+import { OPERATOR_TENANT_ID, type RepositoryFactory } from '../repository.js';
 import { object, onlyKeys } from '../validation.js';
 import { accessVerifier, type McpConfig } from './auth.js';
 import { tools } from './tools.js';
 export const isMcpPath = (path: string) => ['/mcp', '/mcp/register', '/.well-known/oauth-protected-resource'].includes(path.replace(/\/$/, ''));
 export function createMcpHandler(repositories: RepositoryFactory, execute: (request: ApiRequest) => Promise<ApiResponse>, config: McpConfig) {
-  const verify = accessVerifier(config);
+  const verify = accessVerifier({...config,
+    isRegisteredClient: async clientId => !!await repositories.forTenant(OPERATOR_TENANT_ID).mcpRegistration(clientId)});
   const metadata = new URL('./.well-known/oauth-protected-resource', config.resource).href;
   const rpc = (id: unknown, result: unknown) => response(200, {jsonrpc: '2.0', id, result});
   const fail = (id: unknown, code: number, message: string) => response(200, {jsonrpc: '2.0', id, error: {code, message}});
