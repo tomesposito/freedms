@@ -1,3 +1,4 @@
+import { overviewRoute } from './overview';
 import { mountCommandBar, commandBarHtml } from './command-bar';
 import { assistantAdminRoute } from './assistant-admin';
 import { mountAssistant, resetAssistant, openAssistantSkill } from './assistant';
@@ -272,6 +273,7 @@ async function route(): Promise<void> {
       else await dealsRoute(parts, ui);
     }
     else if (parts[0] === 'import') await importRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
+    else if (parts[0] === 'overview') await overviewRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'reports') await reportsRoute({api, download, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'parts') await partsRoute(parts, {api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'service') await serviceRoute(parts, {api, apiEnvelope, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});

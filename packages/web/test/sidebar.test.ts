@@ -6,10 +6,10 @@ import { sidebarUserHtml, sidebarToggleIcon, sidebarNavigation, readSidebarPrefe
 const main = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
 test('Sidebar renders all destinations in order with distinct inline icons and accessible tooltips', () => {
-  const expected = [['Inventory',''],['Leads','leads'],['Deals','deals'],['Service','service'],['Parts','parts'],['Accounting','accounting'],['F&amp;I','fi-products'],['Documents','documents'],['Compliance','compliance'],['Reports','reports'],['Feeds','feeds'],['Webhooks','webhooks'],['Ideas','ideas'],['AI connections','ai-connections'],['Account','account'],['Users','users']];
+  const expected = [['Overview','overview'],['Inventory',''],['Leads','leads'],['Deals','deals'],['Service','service'],['Parts','parts'],['Accounting','accounting'],['F&amp;I','fi-products'],['Documents','documents'],['Compliance','compliance'],['Reports','reports'],['Feeds','feeds'],['Webhooks','webhooks'],['Ideas','ideas'],['AI connections','ai-connections'],['Account','account'],['Users','users']];
   const links = [...sidebarNavigation(true).matchAll(/<a href="([^"]+)" title="([^"]+)" aria-label="([^"]+)">(<svg.*?<\/svg>)<span class="nav-text">([^<]+)<\/span><\/a>/g)];
-  assert.equal(links.length, 16);
-  assert.equal(new Set(links.map(link => link[4])).size, 16);
+  assert.equal(links.length, 17);
+  assert.equal(new Set(links.map(link => link[4])).size, 17);
   links.forEach((link, i) => {
     assert.equal(link[1], `#/${expected[i][1]}`);
     for (const index of [2, 3, 5]) assert.equal(link[index], expected[i][0]);
@@ -32,7 +32,7 @@ test('Sidebar pilot operator navigation places exactly two Pilot links between C
     [['Ideas review', '#/ideas-review'], ['Pilot requests', '#/pilot-requests']],
     [['Ideas', '#/ideas'], ['AI connections', '#/ai-connections'], ['Account', '#/account'], ['Users', '#/users']],
   ]);
-  assert.equal([...html.matchAll(/<a\b/g)].length, 18);
+  assert.equal([...html.matchAll(/<a\b/g)].length, 19);
 });
 test('Sidebar hides Pilot navigation for non-admins even with the pilot operator flag', () => {
   const html = sidebarNavigation(false, true);

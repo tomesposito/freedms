@@ -97,3 +97,5 @@ import '../packages/api/test/assistant-skills.test.js';
 
 import '../packages/api/test/search.test.js';
 import '../packages/web/test/command-bar.test.js';
+
+import '../packages/web/test/overview.test.js';

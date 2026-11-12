@@ -50,6 +50,14 @@ Real captures from the local app on the current build — the same screens the
 verification tours use. The sample dealership data is local-only; the app itself
 always starts empty.
 
+**Lot overview**
+
+Current inventory and lead snapshots alongside trailing 30-day sales, using the
+same aggregates as Reports. Captured from the built app with a seeded local demo
+tenant; these are sample dealership numbers.
+
+![Lot overview with inventory aging, daily sales, and lead pipeline](docs/screenshots/lot-overview.png)
+
 **AI assistant**
 
 The slide-in assistant shows tool results, replies, and per-turn credit receipts.

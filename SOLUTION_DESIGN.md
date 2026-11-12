@@ -712,6 +712,22 @@ assistant cluster and tray, while the bar and record search remain available.
 The administrative switch remains solely in Account → AI assistant.
 
 
+### D-15 — Lot Overview dashboard (2026-11-11)
+
+Approved by Tom via the Lot Overview design package on November 11. Overview
+lives at `#/overview`, above Inventory in the sidebar; Inventory remains the
+landing page. Six basis-labelled tiles and three ECharts bar charts render
+from one fixed declarative definition (metric, chart type, window, position).
+Customization and filters remain outside v1.
+
+Tenant-scoped `GET /reports/overview` calls the existing inventory, sales, and
+lead report functions, returning aggregates only, with independently settled
+sources for partial failures. Sales report now computes daily trend buckets
+whose counts reconcile to deals sold. Sales uses a fixed trailing 30-day UTC
+window (today minus 29 days through today); inventory and leads are current
+snapshots. Money remains cents. Empty, loading, partial-error, and full-error
+states preserve the app's report conventions, with Retry and real first actions.
+
 ## 9. AI direction — less dealer work (owner, 2026-10-19)
 
 **Shipped:** The in-app AI assistant is live behind configuration through
