@@ -524,6 +524,19 @@ for the free hosting service. This decides D-7 for assistant actions;
 metering for any future non-assistant AI work follows the same unit
 unless a later decision says otherwise.
 
+**Amendment (owner's build #123, 2026-11-07; recorded 2026-11-13):** the
+billing mechanics above describe the original ruling. As shipped in #123,
+automatic overage is removed: usage stops when prepaid credits run out,
+and top-ups are prepaid purchases that carry forward across cycles.
+Seat changes apply only from payment-confirmed subscription state, and
+credits for paid plans derive from the paid subscription quantity.
+Overage remains only on non-Stripe (operator-granted or local) plans,
+where plan records force it off for any Stripe-backed plan. Two
+consequences for the text above: "no rollover in v1" now applies to
+plan allotments only — purchased top-up credits carry forward; and the
+admin-enabled overage at $0.25/credit is not offered on billed plans.
+Issues #115 and #116 were closed as superseded by #123 on 2026-11-12.
+
 ### D-8 — Initial agent authority
 
 **Status: MCP connector decision accepted by Tom, 2026-10-30 (#71); other agent workflows remain draft.**
@@ -681,6 +694,14 @@ No silent fallback: if Bedrock errors or the model is unavailable, the
 turn fails clean and uncharged rather than a cheaper model answering
 instead.
 
+**Note (2026-11-13):** the single-model framing above is the launch
+state, not the current one. #127 (owner, 2026-11-07) added Nemotron
+support through the same Bedrock Converse provider class, so the
+configured-model set is no longer Claude-only; cache-point system blocks
+are sent only for `anthropic.claude-` model IDs. Whether D-13's wording
+should be generalized to a standing multi-provider clause is the owner's
+call — this note records the shipped fact without changing the decision.
+
 ### D-14 — Command bar and explicit search/ask routing (2026-11-04)
 
 Approved by Tom on November 4. A 42px navy (`#0B1F2C`) bar spans the content
@@ -727,6 +748,33 @@ whose counts reconcile to deals sold. Sales uses a fixed trailing 30-day UTC
 window (today minus 29 days through today); inventory and leads are current
 snapshots. Money remains cents. Empty, loading, partial-error, and full-error
 states preserve the app's report conventions, with Retry and real first actions.
+
+### D-16 — Assistant turn pricing (2026-11-13)
+
+**Status: OPEN — owner's call, filed as issue #134 (2026-11-10).**
+
+**Context:** the shipped loop charges ANSWER_PRICE (1 credit) for the final
+no-tool round of every turn, on top of the per-action prices of any tool
+calls the turn already made — the code comment states the policy plainly:
+"Every no-tool final round costs one credit, including after tool rounds."
+The persona E2E suite (J12, approved 2026-11-10) caught the consequence:
+a grounded lookup — one read action and its answer — costs 2 credits,
+while D-7's text prices a read at 1 and the tray's own copy tells the
+dealer "a lookup costs 1." D-7's unit as written ("one credit per executed
+assistant action — one tool call, OR one no-tool answer") supports two
+readings, and the shipped code implements the other one.
+
+**Options:** (a) per-action only — the final answer round is not charged
+when the turn already paid for tool actions; a no-tool-only turn still
+costs 1. The code changes; D-7's text stands as written. (b) answer always
+charged — D-7 is amended to say a turn costs its actions plus 1 for the
+answer, and the tray copy and the E2E spec change to match.
+
+**Recommendation:** (a). The dealer's mental model is per action, the
+published copy already promises it, and the answer is the tool results
+restated — charging for it separately reads as double-charging the same
+work. Until the owner rules, the code keeps its current behavior and
+#134 stays out of the build queue.
 
 ## 9. AI direction — less dealer work (owner, 2026-10-19)
 
