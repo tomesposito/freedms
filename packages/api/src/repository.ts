@@ -85,6 +85,7 @@ export interface TenantRepository {
   inventoryReportRows(): Promise<Vehicle[]>;
   forecastRows(window: ForecastWindow): Promise<ForecastRows>;
   salesReportRows(range: SalesReportRange): Promise<SalesReportRows>;
+  commandSearch(search: string): Promise<CommandSearchRows>;
   leadSummary(): Promise<LeadReport>;
   leadListPage(query: LeadQuery): Promise<LeadPage>;
   crmList<K extends CrmEntity['kind']>(kind: K): Promise<Extract<CrmEntity, {kind: K}>[]>;
@@ -447,27 +448,62 @@ export function assertBillingLink(tenantId: string, record: AssistantBillingLink
   if (!Number.isSafeInteger(record.version) || record.version < 1 || !/^[a-zA-Z0-9_-]{1,128}$/.test(record.customerId)) throw new Error('Invalid billing link');
 }
 
+export interface CommandSearchRows {
+  people: {customer: Customer; lead?: Lead; deal?: Deal}[];
+  deals: {deal: Deal; customer?: Customer; vehicle?: Vehicle}[];
+}
+
+/** Consume repository order without retaining rejected rows or full join tables. */
+export async function commandSearchSelection(
+  search: string,
+  rows: (kind: 'customer' | 'lead' | 'deal') => AsyncIterable<CrmEntity> | Iterable<CrmEntity>,
+  customerGet: (id: string) => Promise<Customer | undefined>,
+  vehicleGet: (id: string) => Promise<Vehicle | undefined>,
+  relatedGet: (kind: 'lead' | 'deal', id: string) => Promise<Lead | Deal | undefined>,
+): Promise<CommandSearchRows> {
+  const result: CommandSearchRows = {people: [], deals: []};
+  for await (const row of rows('customer')) {
+    if (row.kind !== 'customer' || ![row.name, row.phone, row.email].join(' ').toLowerCase().includes(search)) continue;
+    result.people.push({customer: row});
+    if (result.people.length === 5) break;
+  }
+  for (const kind of ['lead', 'deal'] as const) {
+    const pending = new Set(result.people.map(p => p.customer.id));
+    if (!pending.size) continue;
+    for await (const row of rows(kind)) {
+      if ((row.kind !== 'lead' && row.kind !== 'deal') || !pending.has(row.customerId)) continue;
+      const person = result.people.find(p => p.customer.id === row.customerId)!;
+      // Discover the first reference in list order, then resolve only that row.
+      const related = await relatedGet(kind, row.id);
+      if (kind === 'lead') person.lead = related as Lead | undefined;
+      else person.deal = related as Deal | undefined;
+      pending.delete(row.customerId);
+      if (!pending.size) break;
+    }
+  }
+  for await (const row of rows('deal')) {
+    if (row.kind !== 'deal') continue;
+    const customer = await customerGet(row.customerId);
+    const vehicle = await vehicleGet(row.vehicleId);
+    if (![customer?.name, vehicle?.stockNumber].join(' ').toLowerCase().includes(search)) continue;
+    result.deals.push({deal: row, customer, vehicle});
+    if (result.deals.length === 5) break;
+  }
+  return result;
+}
+
 /** Read-only command search, using the same tenant repository as list routes. */
 export async function searchRecords(repo: TenantRepository, query: string) {
   const empty = {vehicles: [], people: [], deals: []};
   const search = query.trim().toLowerCase();
   if (!search) return empty;
-  const [vehicles, customers, leads, deals, stock] = await Promise.all([
-    repo.listPage({search, limit: 5, offset: 0}), repo.crmList('customer'),
-    repo.crmList('lead'), repo.crmList('deal'), repo.list({}),
+  const [vehicles, rows] = await Promise.all([
+    repo.listPage({search, limit: 5, offset: 0}), repo.commandSearch(search),
   ]);
-  const people = customers.filter(c => [c.name, c.phone, c.email].join(' ').toLowerCase().includes(search));
-  const customerMap = new Map(customers.map(c => [c.id, c]));
-  const vehicleMap = new Map(stock.map(v => [v.id, v]));
   return {
     vehicles: vehicles.vehicles.map(v => ({id: v.id, title: `${v.year} ${v.make} ${v.model}`, meta: `Stock ${v.stockNumber} · ${v.status}`, href: `#/vehicles/${v.id}`})),
-    people: people.slice(0, 5).map(c => {
-      const lead = leads.find(l => l.customerId === c.id);
-      const deal = deals.find(d => d.customerId === c.id);
-      return {id: c.id, title: c.name, meta: [c.phone, c.email].filter(Boolean).join(' · '),
-        href: lead ? `#/leads/${lead.id}` : deal ? `#/deals/${deal.id}` : `#/leads?customerId=${encodeURIComponent(c.id)}`};
-    }),
-    deals: deals.filter(d => [customerMap.get(d.customerId)?.name, vehicleMap.get(d.vehicleId)?.stockNumber].join(' ').toLowerCase().includes(search)).slice(0, 5)
-      .map(d => ({id: d.id, title: customerMap.get(d.customerId)?.name ?? 'Customer unavailable', meta: `${vehicleMap.get(d.vehicleId)?.stockNumber ?? 'Vehicle unavailable'} · ${d.status}`, href: `#/deals/${d.id}`})),
+    people: rows.people.map(({customer: c, lead, deal}) => ({id: c.id, title: c.name, meta: [c.phone, c.email].filter(Boolean).join(' · '),
+      href: lead ? `#/leads/${lead.id}` : deal ? `#/deals/${deal.id}` : `#/leads?customerId=${encodeURIComponent(c.id)}`})),
+    deals: rows.deals.map(({deal: d, customer, vehicle}) => ({id: d.id, title: customer?.name ?? 'Customer unavailable', meta: `${vehicle?.stockNumber ?? 'Vehicle unavailable'} · ${d.status}`, href: `#/deals/${d.id}`})),
   };
 }

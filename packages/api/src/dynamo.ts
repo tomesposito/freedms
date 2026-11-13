@@ -11,7 +11,7 @@ import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, ScanCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
-import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantWaitlist, assertAssistantWaitlistRemoved, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantWaitlist, assertAssistantWaitlistRemoved, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, commandSearchSelection, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId, requireCycleStart } from './errors.js';
 export class DynamoRepositories implements RepositoryFactory {
   // In-process, warm-instance only; the consistent epoch Get validates across instances.
@@ -437,6 +437,35 @@ export class DynamoRepositories implements RepositoryFactory {
           if (row) customers.push(row);
         }
         return {deals: selection.deals, vehicles, customers};
+      },
+      commandSearch: async search => {
+        const client = this.client, table = this.table;
+        // Sparse/no matches still walk all pages. Retention is bounded, and each
+        // iterator stops requesting pages as soon as its selection is full.
+        async function* rows(kind: 'customer' | 'lead' | 'deal') {
+          let cursor: Record<string, unknown> | undefined;
+          do {
+            const result = await client.send(new QueryCommand({TableName: table,
+              KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+              ExpressionAttributeValues: {':pk': PK, ':prefix': `${kind.toUpperCase()}#`},
+              ConsistentRead: true, ExclusiveStartKey: cursor}));
+            for (const item of result.Items ?? []) {
+              const row = item.data as CrmEntity;
+              assertScope(tenantId, row);
+              yield row;
+            }
+            cursor = result.LastEvaluatedKey;
+          } while (cursor);
+        }
+        const scopedGet = async <T extends {tenantId: string}>(key: string) => {
+          const row = await get<T>(key);
+          if (row) assertScope(tenantId, row);
+          return row;
+        };
+        return commandSearchSelection(search, rows,
+          id => scopedGet<Customer>(`CUSTOMER#${requireId(id)}`),
+          id => scopedGet<Vehicle>(`VEHICLE#${requireId(id)}`),
+          (kind, id) => scopedGet<Lead | import('@freedms/shared').Deal>(`${kind.toUpperCase()}#${requireId(id)}`));
       },
       leadSummary: async () => {
         const summary = countLeads([]);
