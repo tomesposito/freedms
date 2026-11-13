@@ -27,9 +27,10 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
     if (!calls.length) {
       // Every no-tool final round costs one credit, including after tool rounds.
       // Never expose an answer that cannot be paid for: return the stop note instead.
-      const stop = meter?.stop(ANSWER_PRICE);
+      const stop = await meter?.beforeWrite(ANSWER_PRICE);
       if (stop) return finish(stop);
-      meter?.charge('answer', ANSWER_PRICE, usage);
+      const settlement = await meter?.charge('answer', ANSWER_PRICE, usage);
+      if (settlement) return finish(settlement);
       return finish(answer.content?.map(block => block.text ?? '').join('\n') ?? '');
     }
     if (round === 10) return finish(stepLimit);
@@ -39,12 +40,15 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
     for (const call of calls) {
       const tool = tools.find(tool => tool.name === call.name);
       const price = priceForTool(call.name!);
-      const stop = price && meter?.stop(price);
+      const stop = price && (price.actionClass === 'write' ? await meter?.beforeWrite(price) : meter?.stop(price));
       if (stop) return finish(stop);
       const result = tool ? await executeTool(tool, call.input, claims, execute)
         : {isError: true, content: [{text: 'Tool unavailable.'}]};
-      if (!result.isError && price) { meter?.charge(call.name!, price, usage); usage = zeroUsage; }
       transcript.push({tool: call.name!, ok: !result.isError});
+      if (!result.isError && price) {
+        const settlement = await meter?.charge(call.name!, price, usage); usage = zeroUsage;
+        if (settlement) return finish(settlement);
+      }
       const raw = result.content.map(block => block.text).join('\n');
       const text = raw.length > 16000 ? raw.slice(0, 16000) + '\n[Tool result truncated]' : raw;
       results.push({toolResult: {toolUseId: call.toolUseId!, status: result.isError ? 'error' : 'success', content: [{text}]}});

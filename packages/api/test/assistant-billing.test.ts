@@ -5,6 +5,8 @@ import type { AssistantPlan, AuthClaims, OutboxEvent } from '@freedms/shared';
 import { AssistantBilling, assistantCycleDates, proratedAssistantCredits, priceForTool, PHOTO_PRICE } from '../src/assistant-billing.js';
 import { MemoryRepositories } from '../src/memory.js';
 import { createHandler } from '../src/handler.js';
+import { runAssistant } from '../src/assistant.js';
+import { ApiError } from '../src/errors.js';
 import { tools } from '../src/mcp/tools.js';
 import { LocalAssistantProvider } from '../src/local-assistant.js';
 import type { AssistantProvider, AssistantMessage } from '../src/assistant-provider.js';
@@ -99,12 +101,12 @@ test('assistant billing debits read, write and answer exactly and attributes rou
   assert.ok(rows.every(row => !('messages' in row) && !('input' in row)));
   assert.equal((await s.get('/assistant/pool')).data.balanceCredits, 70);
 });
-test('assistant billing failed tools are free and failed turns discard all pending debits', async () => {
+test('assistant billing failed tools are free and completed actions stay charged when later provider work fails', async () => {
   const s = await setup(new Fake([calls('unknown', 'get_vehicle', 'search_vehicles'), reply])); await s.plan();
   const result = await s.chat(); assert.equal(result.data.creditsUsed, 2);
   assert.deepEqual(result.data.transcript.map((r: {ok: boolean}) => r.ok), [false, false, true]);
   const failed = await setup(new Fake([calls('search_vehicles'), new Error('offline failure')])); await failed.plan();
-  assert.equal((await failed.chat()).status, 500); assert.deepEqual(await failed.repo.assistantLedger('2026-01-01'), []);
+  assert.equal((await failed.chat()).status, 500); assert.equal((await failed.repo.assistantLedger('2026-01-01')).length, 1);
 });
 test('assistant pool exhaustion stops mid-round and refuses the next turn before provider invocation', async () => {
   const fake = new Fake([calls('search_vehicles', 'search_vehicles', 'create_customer', 'search_vehicles')]);
@@ -184,18 +186,66 @@ test('local stub seeds only with explicit local option and burns the entire seed
   }
 });
 
-test('assistant completed-turn commits are atomic, immutable and reject stale billing snapshots', async () => {
-  const s = await setup(); await s.plan(); await s.balance(1);
+test('assistant completed-action commits are atomic, immutable and concurrent meters settle stale billing snapshots', async () => {
+  const s = await setup(); await s.plan(); await s.balance(10);
   const first = await s.billing.meter(s.actor), concurrent = await s.billing.meter(s.actor);
-  first.charge('answer', {actionClass: 'answer', credits: 1});
-  concurrent.charge('answer', {actionClass: 'answer', credits: 1});
+  assert.deepEqual(await Promise.all([first.charge('answer', {actionClass: 'answer', credits: 1}), concurrent.charge('answer', {actionClass: 'answer', credits: 1})]), [undefined, undefined]);
+  assert.equal(await first.finish(), 1); assert.equal(await concurrent.finish(), 1);
   assert.equal(await first.finish(), 1);
-  await assert.rejects(concurrent.finish(), {code: 'CONFLICT'});
-  await assert.rejects(first.finish(), {code: 'CONFLICT'});
-  assert.equal((await s.repo.assistantLedger('2026-01-01')).length, 1);
-  assert.equal((await s.get('/assistant/pool')).data.balanceCredits, 0);
-  const rows = await s.repo.assistantLedger('2026-01-01'); rows[0].credits = 999;
+  const rows = await s.repo.assistantLedger('2026-01-01');
+  assert.equal(rows.length, 2); assert.equal(new Set(rows.map(r => r.id)).size, 2);
+  const cycle = (await s.repo.assistantCycle('2026-01-01'))!, plan = (await s.repo.assistantPlan())!;
+  await assert.rejects(s.repo.commitAssistantLedger([rows[0]], cycle, plan.version), {code: 'CONFLICT'});
+  await s.repo.commitAssistantLedger([{...rows[0], id: 'fresh'}], cycle, plan.version);
+  await assert.rejects(s.repo.commitAssistantLedger([{...rows[0], id: 'stale'}], cycle, plan.version), {code: 'CONFLICT'});
+  rows[0].credits = 999;
   assert.equal((await s.repo.assistantLedger('2026-01-01'))[0].credits, 1);
+});
+
+test('assistant fresh write fence stops disable, revocation and concurrent exhaustion while preserving earlier receipts', async () => {
+  for (const change of ['disabled', 'cancelled', 'exhausted'] as const) {
+    const s = await setup(); await s.plan();
+    const meter = await s.billing.meter(s.actor);
+    const provider = new Fake([calls('search_vehicles', 'create_customer')]);
+    let executions = 0;
+    const result = await runAssistant([{role: 'user', content: [{text: 'go'}]}], provider,
+      {sub: 'user-A', 'custom:tenant_id': 'A'} as AuthClaims, async () => {
+        executions++;
+        if (change === 'exhausted') await s.balance(1);
+        else await s.plan(change === 'disabled' ? {disabled: true} : {status: 'cancelled'});
+        return {statusCode: 200, headers: {}, body: JSON.stringify({data: []})};
+      }, meter);
+    assert.equal(executions, 1); assert.equal(result.creditsUsed, 1);
+    assert.deepEqual(result.transcript, [{tool: 'search_vehicles', ok: true}]);
+    assert.match(result.reply, /disabled|plan is required|exhausted/);
+  }
+});
+
+test('assistant ledger retries never replay a tool and settlement failures retain successful outcomes', async () => {
+  for (const mode of ['conflict', 'lost-ack', 'exhausted', 'offline'] as const) {
+    const s = await setup(); await s.plan();
+    let attempts = 0, executions = 0; const ids: string[] = [];
+    const commit = s.repo.commitAssistantLedger;
+    s.repo.commitAssistantLedger = async (entries, cycle, version) => {
+      attempts++; ids.push(entries[0].id);
+      if (mode === 'offline') throw new Error('offline');
+      if (mode === 'exhausted' || (mode === 'conflict' && attempts === 1)) throw new ApiError(409, 'CONFLICT', 'injected');
+      await commit(entries, cycle, version);
+      if (mode === 'lost-ack') throw new Error('lost acknowledgement');
+    };
+    const meter = await s.billing.meter(s.actor);
+    const result = await runAssistant([{role: 'user', content: [{text: 'go'}]}], new Fake([calls('create_customer'), reply]),
+      {sub: 'user-A', 'custom:tenant_id': 'A'} as AuthClaims, async () => {
+        executions++; return {statusCode: 200, headers: {}, body: JSON.stringify({data: {id: 'created'}})};
+      }, meter);
+    assert.equal(executions, 1); assert.deepEqual(result.transcript, [{tool: 'create_customer', ok: true}]);
+    const rows = await s.repo.assistantLedger('2026-01-01');
+    if (mode === 'offline' || mode === 'exhausted') {
+      assert.match(result.reply, /DID execute successfully/); assert.equal(result.creditsUsed, 0);
+      assert.equal(attempts, mode === 'offline' ? 1 : 5); assert.equal(rows.length, 0);
+    } else { assert.equal(result.reply, 'Done'); assert.equal(result.creditsUsed, 3); assert.equal(rows.length, 2); }
+    if (mode === 'conflict' || mode === 'exhausted') assert.equal(ids[0], ids[1]);
+  }
 });
 
 test('assistant Dynamo billing keys, pagination, conditional writes and atomic turn batches work offline', async () => {
