@@ -4,12 +4,16 @@ import { grantEvent } from '../ai-connections.js';
 import { OPERATOR_TENANT_ID, type RepositoryFactory } from '../repository.js';
 import type { AccessClaims, McpConfig } from './auth.js';
 
-/** Storage failures never prevent a tool call; a successfully read revocation always does. */
+/** Revocation reads fail closed; grant bookkeeping is best-effort. */
 export async function grantRevoked(repositories: RepositoryFactory, tenantId: string, access: AccessClaims, config: McpConfig): Promise<boolean> {
+  let existing: McpGrant | undefined;
+  let repo;
   try {
-    const repo = repositories.forTenant(tenantId);
-    const existing = (await repo.mcpGrants()).find(g => g.userId === access.sub && g.clientId === access.client_id);
-    if (existing?.revokedAt) return true;
+    repo = repositories.forTenant(tenantId);
+    existing = (await repo.mcpGrants()).find(g => g.userId === access.sub && g.clientId === access.client_id);
+  } catch { return true; }
+  if (existing?.revokedAt) return true;
+  try {
     const now = (config.now ?? Date.now)(), timestamp = new Date(now).toISOString();
     const scopes = access.scope.split(' ').filter(Boolean);
     if (existing) {
@@ -23,6 +27,14 @@ export async function grantRevoked(repositories: RepositoryFactory, tenantId: st
         firstGrantedAt: timestamp, lastUsedAt: timestamp, revokedAt: null, version: 1};
       await repo.saveMcpGrant(record, 0, grantEvent(record, access.sub, 'mcp-grant.recorded'));
     }
-  } catch { /* Best-effort bookkeeping, including optimistic write conflicts. */ }
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'CONFLICT') {
+      // A revoke may have won the race against this bookkeeping write.
+      try {
+        return Boolean((await repo.mcpGrants()).find(g => g.userId === access.sub && g.clientId === access.client_id)?.revokedAt);
+      } catch { return true; }
+    }
+    // Other bookkeeping failures do not prevent a tool call.
+  }
   return false;
 }
