@@ -17,6 +17,21 @@ test('Assistant template defaults off and scopes invocation to the configured mo
   assert.equal((parameters.match(/^  AssistantModelId:$/gm) ?? []).length, 1);
   assert.match(model, /^    Type: String$/m);
   assert.match(model, /^    Default: ''$/m);
+  const rules = template.split('\nRules:\n')[1]?.split('\nResources:')[0];
+  assert.ok(rules);
+  const pairing = rules.match(/^  AssistantModelPairing:\n((?:^    .*\n)+)/m)?.[1];
+  assert.ok(pairing, 'AssistantModelPairing rule exists');
+  assert.equal(pairing.split('        AssertDescription:')[0], [
+    '    Assertions:',
+    '      - Assert: !Or',
+    '          - !And',
+    "              - !Equals [!Ref AssistantModelId, '']",
+    "              - !Equals [!Ref AssistantFoundationModelId, '']",
+    '          - !And',
+    "              - !Not [!Equals [!Ref AssistantModelId, '']]",
+    "              - !Not [!Equals [!Ref AssistantFoundationModelId, '']]",
+    '',
+  ].join('\n'));
   const inventory = template.match(/^  InventoryFunction:\n((?:^    .*\n)+)/m)?.[1];
   assert.ok(inventory, 'API Lambda resource exists');
   const timeout = Number(inventory.match(/^      Timeout: (\d+)$/m)?.[1]);

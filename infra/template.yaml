@@ -101,6 +101,16 @@ Rules:
     Assertions:
       - Assert: !Equals [!Ref 'AWS::Region', us-east-1]
         AssertDescription: CloudFront certificates and WAF must deploy in us-east-1
+  AssistantModelPairing:
+    Assertions:
+      - Assert: !Or
+          - !And
+              - !Equals [!Ref AssistantModelId, '']
+              - !Equals [!Ref AssistantFoundationModelId, '']
+          - !And
+              - !Not [!Equals [!Ref AssistantModelId, '']]
+              - !Not [!Equals [!Ref AssistantFoundationModelId, '']]
+        AssertDescription: "AssistantModelId and AssistantFoundationModelId must be set together: the inference profile and its foundation model are both required for Bedrock authorization (see docs/DEPLOYMENT.md)."
 Resources:
   Table:
     Type: AWS::DynamoDB::Table
