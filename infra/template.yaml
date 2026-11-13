@@ -309,7 +309,7 @@ Resources:
       Architectures: [arm64]
       ReservedConcurrentExecutions: 2
       MemorySize: 256
-      Timeout: 30
+      Timeout: 60
       Environment:
         Variables:
           PILOT_OPERATOR_SUBJECT: !Ref PilotOperatorSubject
@@ -355,12 +355,16 @@ Resources:
                 StringEquals:
                   ses:FromAddress: !Ref MailFrom
             - Effect: Allow
-              Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:ConditionCheckItem]
+              Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:Scan, dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:ConditionCheckItem]
               Resource: !GetAtt Table.Arn
             - Effect: Allow
               Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
               Resource: !Sub '${Documents.Arn}/tenants/*'
       Events:
+        WebhookDrain:
+          Type: Schedule
+          Properties:
+            Schedule: rate(5 minutes)
         Mcp:
           Type: HttpApi
           Properties:

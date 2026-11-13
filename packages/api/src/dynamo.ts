@@ -9,7 +9,7 @@ import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, QueryCommand, ScanCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
 import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantWaitlist, assertAssistantWaitlistRemoved, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId, requireCycleStart } from './errors.js';
@@ -54,6 +54,21 @@ export class DynamoRepositories implements RepositoryFactory {
       rows.push(...(result.Items ?? []).map(item => item.data as AssistantWaitlistEntry)); cursor = result.LastEvaluatedKey;
     } while (cursor);
     return rows;
+  }
+  /** Existing endpoints predate a registry: enumerate only enabled webhook rows in this table. */
+  async webhookTenantIds(): Promise<string[]> {
+    const tenants = new Set<string>(); let cursor: Record<string, unknown> | undefined;
+    do {
+      const result = await this.client.send(new ScanCommand({TableName: this.table,
+        FilterExpression: 'begins_with(SK, :prefix) AND #d.#enabled = :enabled',
+        ProjectionExpression: '#d.#tenant',
+        ExpressionAttributeNames: {'#d': 'data', '#enabled': 'enabled', '#tenant': 'tenantId'},
+        ExpressionAttributeValues: {':prefix': 'WEBHOOK#', ':enabled': true},
+        ConsistentRead: true, ExclusiveStartKey: cursor}));
+      for (const item of result.Items ?? []) tenants.add(requireId(item.data.tenantId));
+      cursor = result.LastEvaluatedKey;
+    } while (cursor);
+    return [...tenants].sort();
   }
   async tenantForSubject(subject: string): Promise<string | undefined> {
     const result = await this.client.send(new GetCommand({TableName: this.table,
@@ -286,6 +301,26 @@ export class DynamoRepositories implements RepositoryFactory {
         await transact([put(`WEBHOOK#${requireId(record.id)}`, record, expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined), eventPut(event)]);
       },
       webhookDeliveries: () => listRows<WebhookDelivery>('DELIVERY#'),
+      claimWebhookDelivery: async (record, staleUpdatedAt) => {
+        assertScope(tenantId, record); requireId(record.id);
+        if (record.status !== 'pending') throw new Error('Invalid webhook claim');
+        if (staleUpdatedAt !== undefined && !(Date.parse(staleUpdatedAt) < Date.parse(record.updatedAt) - 15 * 60_000)) return false;
+        try {
+          await this.client.send(new TransactWriteCommand({TransactItems: [{Put: {
+            TableName: this.table, Item: {...key(`DELIVERY#${record.id}`), data: record},
+            ConditionExpression: staleUpdatedAt === undefined ? 'attribute_not_exists(PK)' : '#d.#status = :pending AND #d.#updated = :updated',
+            ...(staleUpdatedAt === undefined ? {} : {
+              ExpressionAttributeNames: {'#d': 'data', '#status': 'status', '#updated': 'updatedAt'},
+              ExpressionAttributeValues: {':pending': 'pending', ':updated': staleUpdatedAt}
+            })
+          }}]}));
+          return true;
+        } catch (error) {
+          if (error instanceof Error && error.name === 'TransactionCanceledException' &&
+            (error as Error & {CancellationReasons?: {Code?: string}[]}).CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed') return false;
+          throw error;
+        }
+      },
       saveWebhookDelivery: async record => {
         assertScope(tenantId, record);
         await transact([{Put: {TableName: this.table, Item: {...key(`DELIVERY#${requireId(record.id)}`), data: record}}}]);

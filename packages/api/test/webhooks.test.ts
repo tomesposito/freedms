@@ -6,13 +6,13 @@ import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, QueryCommand, ScanCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { webhookEventTypes, type OutboxEvent, type WebhookDelivery, type WebhookEndpoint } from '@freedms/shared';
 import { MemoryRepositories } from '../src/memory.js';
 import { DynamoRepositories } from '../src/dynamo.js';
 import { createHandler } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
-import { dispatchWebhooks, fetchWebhookSender, hostedWebhookSender, MAX_DELIVERIES_PER_PASS, scheduleWebhookDispatch, type WebhookSender } from '../src/webhooks.js';
+import { drainWebhooks, dispatchWebhooks, fetchWebhookSender, hostedWebhookSender, MAX_DELIVERIES_PER_PASS, scheduleWebhookDispatch, type WebhookSender } from '../src/webhooks.js';
 const now = new Date('2026-10-22T12:00:00Z');
 const date = now.toISOString();
 const input = {mileage: null, stockNumber: 'S2', vin: '1HGCM82633A004352', year: 2003, make: 'Honda', model: 'Accord', trim: 'EX', status: 'available', listPrice: 1234567, cost: 990000, reconCosts: [], notes: 'Private note', dateStocked: '2026-10-01', location: 'Lot'};
@@ -71,7 +71,7 @@ test('real loopback HTTP delivery verifies raw signature, metadata, tenant isola
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const {call, endpoint, add} = await setup(fetchWebhookSender);
   const a = (await endpoint('A', `${base}/A`)).data; await endpoint('B', `${base}/B`);
-  assert.equal((await add()).status, 201); await waitFor(async () => (await call('/webhooks/deliveries')).data.length === 1); assert.equal(requests.length, 1); assert.equal(requests[0].url, '/A');
+  assert.equal((await add()).status, 201); await waitFor(async () => (await call('/webhooks/deliveries')).data[0]?.status === 'delivered'); assert.equal(requests.length, 1); assert.equal(requests[0].url, '/A');
   const received = requests[0];
   assert.equal(received.headers['x-freedms-signature'], `sha256=${createHmac('sha256', a.secret).update(received.body).digest('hex')}`);
   assert.equal(received.headers['content-type'], 'application/json'); assert.equal(received.headers['x-freedms-event'], 'vehicle.created');
@@ -217,7 +217,7 @@ test('mutations return before a blocked sender and active drains pick up later c
     await waitFor(async () => response !== undefined);
     assert.equal(response!.status, 201);
     await started.promise;
-    assert.equal((await call('/webhooks/deliveries')).data.length, 0);
+    assert.equal((await call('/webhooks/deliveries')).data[0].status, 'pending');
     assert.equal((await add()).status, 201);
     assert.equal(sends, 1, 'same tenant must have only one active drain');
   } finally { release.resolve(); }
@@ -248,15 +248,15 @@ test('overlapping passes and duplicate scheduling converge on a stable delivery 
   const {repositories, add, endpoint} = await setup(sender);
   await add(); await endpoint();
   const repo = repositories.forTenant('A');
-  const passes = [dispatchWebhooks(repo, sender, now), dispatchWebhooks(repo, sender, now)];
+  const passes = [dispatchWebhooks({...repo, webhookDispatchScope: undefined}, sender, now), dispatchWebhooks({...repositories.forTenant('A'), webhookDispatchScope: undefined}, sender, now)];
   scheduleWebhookDispatch(repo, sender, now);
   scheduleWebhookDispatch(repositories.forTenant('A'), sender, now);
-  try { await waitFor(async () => ids.length === 3); }
+  try { await waitFor(async () => ids.length === 1); }
   finally { release.resolve(); }
   await Promise.all(passes);
   await waitFor(async () => (await repo.webhookDeliveries()).length === 1);
   await dispatchWebhooks(repo, sender, now);
-  assert.equal(new Set(ids).size, 1);
+  assert.equal(ids.length, 1); assert.equal(new Set(ids).size, 1);
   assert.equal((await repo.webhookDeliveries())[0].id, ids[0]);
 });
 
@@ -382,4 +382,104 @@ test('hosted rejects redirects, DNS failures and times out unresolved DNS withou
   await assert.rejects(timeout('https://example.invalid', init), /timeout/);
   release([{address: '8.8.8.8', family: 4}]);
   await new Promise(resolve => setImmediate(resolve));
+});
+
+
+test('pending claims skip live owners and recover only after fifteen minutes with the same ID', async () => {
+  const {repositories, add, endpoint} = await setup();
+  await add(); await endpoint();
+  const repo = repositories.forTenant('A');
+  // A failed final write models an invocation dying after its durable claim.
+  let id = '';
+  await assert.rejects(dispatchWebhooks({...repo, saveWebhookDelivery: async () => { throw Error('invocation died'); }}, async (_url, init) => {
+    id = init.headers['x-freedms-delivery']; return {status: 204};
+  }, now), /invocation died/);
+  assert.equal((await repo.webhookDeliveries())[0].status, 'pending');
+  const sender: WebhookSender = async (_url, init) => { assert.equal(init.headers['x-freedms-delivery'], id); return {status: 204}; };
+  assert.equal((await dispatchWebhooks(repo, () => { assert.fail('fresh claim must not send'); }, new Date(now.getTime() + 15 * 60_000))).created, 0);
+  const later = new Date(now.getTime() + 15 * 60_000 + 1);
+  const passes = await Promise.all([dispatchWebhooks(repo, sender, later), dispatchWebhooks(repositories.forTenant('A'), sender, later)]);
+  assert.equal(passes.reduce((sum, pass) => sum + pass.created, 0), 1);
+  assert.equal((await repo.webhookDeliveries())[0].status, 'delivered');
+  await assert.rejects(repositories.forTenant('B').claimWebhookDelivery({... (await repo.webhookDeliveries())[0], status: 'pending'}), /scope/);
+});
+
+test('scheduled drain shares a bounded budget across tenants and resumes on the next run', async () => {
+  const {repositories, add, endpoint} = await setup();
+  for (const tenant of ['A', 'B']) { await add(tenant); await add(tenant); await endpoint(tenant); }
+  const sent: string[] = [];
+  const sender: WebhookSender = async (_url, init) => { sent.push(JSON.parse(init.body).tenantId); return {status: 204}; };
+  assert.deepEqual(await repositories.webhookTenantIds(), ['A', 'B']);
+  assert.deepEqual(await drainWebhooks(repositories, sender, now, 3), {created: 3, delivered: 3, failed: 0});
+  assert.deepEqual(sent, ['A', 'A', 'B']);
+  assert.deepEqual(await drainWebhooks(repositories, sender, now, 3), {created: 1, delivered: 1, failed: 0});
+  assert.deepEqual(sent, ['A', 'A', 'B', 'B']);
+});
+
+test('hosted mutation awaits the inline attempt and preserves commits when delivery fails', async () => {
+  const started = deferred(), release = deferred();
+  const {endpoint, add, repositories} = await setup(async () => { started.resolve(); await release.promise; return {status: 204}; }, true);
+  await endpoint('A', 'https://example.invalid/hook');
+  let returned = false;
+  const mutation = add().then(result => { returned = true; return result; });
+  await started.promise;
+  try { assert.equal(returned, false); assert.equal((await repositories.forTenant('A').webhookDeliveries())[0].status, 'pending'); }
+  finally { release.resolve(); }
+  assert.equal((await mutation).status, 201);
+  assert.equal((await repositories.forTenant('A').webhookDeliveries())[0].status, 'delivered');
+  let attempts = 0;
+  const failing = await setup(async () => { attempts++; throw Error('receiver failed'); }, true);
+  await failing.endpoint('A', 'https://example.invalid/hook');
+  assert.equal((await failing.add()).status, 201);
+  assert.equal(attempts, 3);
+  assert.equal((await failing.repositories.forTenant('A').webhookDeliveries())[0].status, 'failed');
+  const broken = failing.repositories.forTenant.bind(failing.repositories);
+  failing.repositories.forTenant = tenant => ({...broken(tenant), claimWebhookDelivery: async () => { throw Error('storage unavailable'); }});
+  assert.equal((await failing.add()).status, 201);
+});
+
+test('Dynamo claims condition creation and exact stale timestamps, and propagate storage failures', async () => {
+  const commands: TransactWriteCommand[] = [];
+  let failure: Error | undefined;
+  const client = {send: async (command: TransactWriteCommand) => { commands.push(command); if (failure) throw failure; return {}; }} as unknown as DynamoDBDocumentClient;
+  const repo = new DynamoRepositories('table', client).forTenant('A');
+  const record: WebhookDelivery = {id: 'delivery', tenantId: 'A', endpointId: 'hook', eventId: 'vehicle', eventType: 'vehicle.created', status: 'pending', attempts: 0, lastStatusCode: null, lastError: null, createdAt: date, updatedAt: date};
+  assert.equal(await repo.claimWebhookDelivery(record), true);
+  const put = commands[0].input.TransactItems![0].Put!;
+  assert.equal(put.ConditionExpression, 'attribute_not_exists(PK)');
+  assert.deepEqual([put.Item!.PK, put.Item!.SK], ['TENANT#A', 'DELIVERY#delivery']);
+  const stale = new Date(now.getTime() - 15 * 60_000 - 1).toISOString();
+  assert.equal(await repo.claimWebhookDelivery(record, stale), true);
+  assert.equal(commands[1].input.TransactItems![0].Put!.ConditionExpression, '#d.#status = :pending AND #d.#updated = :updated');
+  assert.deepEqual(commands[1].input.TransactItems![0].Put!.ExpressionAttributeValues, {':pending': 'pending', ':updated': stale});
+  assert.equal(await repo.claimWebhookDelivery(record, date), false);
+  failure = Object.assign(Error('lost race'), {name: 'TransactionCanceledException', CancellationReasons: [{Code: 'ConditionalCheckFailed'}]});
+  assert.equal(await repo.claimWebhookDelivery(record), false);
+  failure = Error('storage unavailable');
+  await assert.rejects(repo.claimWebhookDelivery(record), /storage unavailable/);
+});
+
+test('Dynamo webhook tenant enumeration paginates enabled endpoint rows and deduplicates tenants', async () => {
+  const commands: ScanCommand[] = [];
+  const cursor = {PK: 'TENANT#A', SK: 'WEBHOOK#hook'};
+  const client = {send: async (command: ScanCommand) => {
+    commands.push(command);
+    return commands.length === 1 ? {Items: [{data: {tenantId: 'A'}}], LastEvaluatedKey: cursor} : {Items: [{data: {tenantId: 'A'}}, {data: {tenantId: 'B'}}]};
+  }} as unknown as DynamoDBDocumentClient;
+  assert.deepEqual(await new DynamoRepositories('table', client).webhookTenantIds(), ['A', 'B']);
+  assert.equal(commands[0].input.FilterExpression, 'begins_with(SK, :prefix) AND #d.#enabled = :enabled');
+  assert.deepEqual(commands[1].input.ExclusiveStartKey, cursor);
+});
+
+
+test('hosted schedule routes through the API Lambda to the bounded drain without gateway auth', () => {
+  const template = readFileSync('infra/template.yaml', 'utf8');
+  const lambda = readFileSync('packages/api/src/lambda.ts', 'utf8');
+  assert.match(template, /Handler: lambda\.handler/);
+  assert.match(template, /WebhookDrain:\s+Type: Schedule\s+Properties:\s+Schedule: rate\(5 minutes\)/);
+  assert.match(template, /Timeout: 60/);
+  assert.match(template, /dynamodb:Scan/);
+  assert.ok(lambda.indexOf("event.source === 'aws.events'") < lambda.indexOf('const handle = createHandler'));
+  assert.match(lambda, /return webhookDrainHandler\(\)/);
+  assert.match(lambda, /webhookDrainHandler = async \(\) => drainWebhooks\(repositories, hostedWebhookSender\(\), new Date\(\)\)/);
 });

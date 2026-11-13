@@ -27,7 +27,7 @@ import { accounting } from './accounting.js';
 import { fiProducts } from './fi.js';
 import { documentControls } from './documents.js';
 import { mfa } from './mfa.js';
-import { scheduleWebhookDispatch, fetchWebhookSender, hostedWebhookSender, guardHostedWebhookSender, webhooks, type WebhookSender } from './webhooks.js';
+import { dispatchWebhooks, scheduleWebhookDispatch, fetchWebhookSender, hostedWebhookSender, guardHostedWebhookSender, webhooks, type WebhookSender } from './webhooks.js';
 import { feeds } from './feed.js';
 import { inventoryImport } from './import.js';
 import { analytics, analyticsFromEnv, track, type AnalyticsVendor } from './analytics.js';
@@ -65,6 +65,12 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
 }
 export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {stripe?: StripeBilling; appBaseUrl?: string; assistantSeedLocalPlan?: boolean; assistantProvider?: AssistantProvider; assistantEntitlement?: AssistantEntitlement; registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
   const sender = options.hosted ? guardHostedWebhookSender(webhookSender ?? hostedWebhookSender()) : webhookSender ?? fetchWebhookSender;
+  const postCommit = async (repo: TenantRepository) => {
+    try {
+      if (options.hosted) await dispatchWebhooks(repo, sender, now(), {maxDeliveries: 5});
+      else scheduleWebhookDispatch(repo, sender, now());
+    } catch (error) { console.error('Webhook dispatch failed', error instanceof Error ? error.name : 'UnknownError'); }
+  };
   // A failed secret load must not reopen test entitlements to other users.
   const sandboxRestricted = options.hosted === true && options.stripe?.testMode !== false;
   const sandboxDenied = () => new ApiError(403, 'ASSISTANT_SANDBOX_RESTRICTED', 'Paid AI plans are not available yet. Join the waiting list in Account → AI assistant.');
@@ -76,14 +82,14 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         const result = await intake(request, repositories, now());
         // Intake has authenticated its tenant token before returning a successful mutation.
         if (result.statusCode >= 200 && result.statusCode < 300) {
-          try { scheduleWebhookDispatch(repositories.forTenant(request.intakeToken!.split('.')[0]), sender, now()); } catch { /* Preserve the committed intake. */ }
+          try { await postCommit(repositories.forTenant(request.intakeToken!.split('.')[0])); } catch { /* Preserve the committed intake. */ }
         }
         return compressResponse(result, request.acceptEncoding);
       }
       if (request.path.replace(/\/$/, '').startsWith('/share/')) {
         const {result, tenantId} = await publicShare(request, repositories, now(), documents);
         if (request.method.toUpperCase() === 'POST' && result.statusCode >= 200 && result.statusCode < 300) {
-          try { scheduleWebhookDispatch(repositories.forTenant(tenantId), sender, now()); } catch { /* Preserve the committed buyer mutation. */ }
+          try { await postCommit(repositories.forTenant(tenantId)); } catch { /* Preserve the committed buyer mutation. */ }
         }
         return compressResponse(result, request.acceptEncoding);
       }
@@ -255,7 +261,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       };
       const result = await execute();
       if (result.statusCode >= 200 && result.statusCode < 300 && ['POST', 'PUT', 'DELETE'].includes(method) && !/^\/webhooks(\/|$)/.test(path) && !/^\/(account|admin)\/mfa(\/|$)/.test(path)) {
-        try { scheduleWebhookDispatch(repository, sender, now()); } catch { /* Delivery failures must never fail a committed mutation. */ }
+        try { await postCommit(repository); } catch { /* Delivery failures must never fail a committed mutation. */ }
       }
       return compressResponse(result, request.acceptEncoding);
     } catch (error) { return errorResponse(error); }

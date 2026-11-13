@@ -63,6 +63,8 @@ export interface TenantRepository {
   webhookEndpoint(id: string): Promise<WebhookEndpoint | undefined>;
   saveWebhookEndpoint(record: WebhookEndpoint, expectedVersion: number, event: OutboxEvent): Promise<void>;
   webhookDeliveries(): Promise<WebhookDelivery[]>;
+  /** Atomically create, or replace the exact stale pending claim read by the caller. */
+  claimWebhookDelivery(record: WebhookDelivery, staleUpdatedAt?: string): Promise<boolean>;
   saveWebhookDelivery(record: WebhookDelivery): Promise<void>;
   feedConfig(): Promise<FeedConfig | undefined>;
   saveFeedConfig(record: FeedConfig, expectedVersion: number, event: OutboxEvent): Promise<void>;
@@ -98,7 +100,7 @@ export interface TenantRepository {
   delete(id: string, expectedVersion: number, event: OutboxEvent): Promise<void>;
   provision(tenant: Tenant, user: User, membership: Membership, event: OutboxEvent, acceptance?: CrmWrite): Promise<void>;
 }
-export interface RepositoryFactory { tenantForStripeCustomer?(customerId: string): Promise<string | undefined>; ideasQueue?(): Promise<Idea[]>; assistantWaitlistQueue?(): Promise<AssistantWaitlistEntry[]>; tenantForSubject?(subject: string): Promise<string | undefined>; forTenant(tenantId: string): TenantRepository }
+export interface RepositoryFactory { webhookTenantIds?(): Promise<string[]>; tenantForStripeCustomer?(customerId: string): Promise<string | undefined>; ideasQueue?(): Promise<Idea[]>; assistantWaitlistQueue?(): Promise<AssistantWaitlistEntry[]>; tenantForSubject?(subject: string): Promise<string | undefined>; forTenant(tenantId: string): TenantRepository }
 export function matches(vehicle: Vehicle, query: VehicleQuery): boolean {
   return (!query.status || vehicle.status === query.status) && (!query.search ||
     [vehicle.stockNumber, vehicle.vin, vehicle.make, vehicle.model, vehicle.trim, vehicle.location]

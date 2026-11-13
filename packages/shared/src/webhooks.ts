@@ -10,6 +10,6 @@ export interface WebhookEndpoint extends CrmRecord {
 export type PublicWebhookEndpoint = Omit<WebhookEndpoint, 'secret'>;
 export interface WebhookDelivery {
   id: string; tenantId: string; endpointId: string; eventId: string; eventType: WebhookEventType;
-  status: 'delivered' | 'failed'; attempts: number; lastStatusCode: number | null; lastError: string | null;
+  status: 'pending' | 'delivered' | 'failed'; attempts: number; lastStatusCode: number | null; lastError: string | null;
   createdAt: string; updatedAt: string;
 }
