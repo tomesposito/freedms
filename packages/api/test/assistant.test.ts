@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AuthClaims } from '@freedms/shared';
 import { BedrockAssistantProvider, UnconfiguredAssistantProvider, assistantProviderFromEnv, type AssistantMessage, type AssistantProvider } from '../src/assistant-provider.js';
-import { assistantToolSpecs, runAssistant } from '../src/assistant.js';
+import { ASSISTANT_TURN_BUDGET_MS, ASSISTANT_SETTLEMENT_RESERVE_MS, assistantToolSpecs, runAssistant } from '../src/assistant.js';
 import { createHandler } from '../src/handler.js';
 import { MemoryRepositories } from '../src/memory.js';
 import { LocalAssistantProvider } from '../src/local-assistant.js';
@@ -19,6 +19,9 @@ test('Assistant template defaults off and scopes invocation to the configured mo
   assert.match(model, /^    Default: ''$/m);
   const inventory = template.match(/^  InventoryFunction:\n((?:^    .*\n)+)/m)?.[1];
   assert.ok(inventory, 'API Lambda resource exists');
+  const timeout = Number(inventory.match(/^      Timeout: (\d+)$/m)?.[1]);
+  assert.equal(timeout, 60);
+  assert.ok(timeout * 1000 > ASSISTANT_TURN_BUDGET_MS + ASSISTANT_SETTLEMENT_RESERVE_MS);
   const environment = inventory.split('      Environment:\n')[1]?.split('      Policies:')[0];
   assert.ok(environment);
   assert.equal((template.match(/^          FREEDMS_ASSISTANT_MODEL: !Ref AssistantModelId$/gm) ?? []).length, 1);
@@ -195,4 +198,80 @@ test('local test double keeps context metadata out of keyword matching for the o
   const chat = async (text: string) => JSON.parse((await s.chat({messages: [{role: 'user', text}], context: {surface: 'vehicles'}})).body).data;
   assert.deepEqual((await chat('Hello')).transcript, []);
   assert.deepEqual((await chat('Find stock STOCK-98')).transcript, [{tool: 'search_vehicles', ok: true}]);
+});
+
+const workBudget = ASSISTANT_TURN_BUDGET_MS - ASSISTANT_SETTLEMENT_RESERVE_MS;
+function trackingMeter() {
+  const charges: string[] = [];
+  let finishes = 0;
+  return {charges, get finishes() { return finishes; },
+    stop: () => undefined, beforeWrite: async () => undefined,
+    charge: async (action: string) => { charges.push(action); return undefined; },
+    finish: async () => { finishes++; return charges.length; }};
+}
+test('turn deadline stops repeated tool rounds with settled actions and transcript intact', async () => {
+  let now = 0, rounds = 0;
+  const meter = trackingMeter();
+  const provider: AssistantProvider = {configured: true, converse: async () => {
+    rounds++; now += workBudget / 4;
+    return call();
+  }};
+  const result = await runAssistant(user, provider, claims, async () => ({statusCode: 200, headers: {}, body: '{"data":[]}'}), meter, {now: () => now});
+  assert.equal(rounds, 4);
+  assert.match(result.reply, /ran out of time.*Work already done stands.*another message/);
+  assert.equal(meter.finishes, 1);
+  assert.deepEqual(meter.charges, Array(3).fill('search_vehicles'));
+  assert.equal(result.creditsUsed, 3);
+  assert.deepEqual(result.transcript, Array(3).fill({tool: 'search_vehicles', ok: true}));
+});
+test('later provider timeout shrinks and a deadline rejection finishes gracefully', async () => {
+  let now = 0;
+  const timeouts: number[] = [];
+  const meter = trackingMeter();
+  const provider: AssistantProvider = {configured: true, converse: async (_messages, _tools, options) => {
+    timeouts.push(options!.timeoutMs!);
+    if (timeouts.length === 1) { now = workBudget - 2000; return call(); }
+    now += options!.timeoutMs!;
+    throw Error('deadline abort');
+  }};
+  const result = await runAssistant(user, provider, claims, async () => ({statusCode: 200, headers: {}, body: '{"data":[]}'}), meter, {now: () => now});
+  assert.deepEqual(timeouts, [workBudget, 2000]);
+  assert.match(result.reply, /ran out of time/);
+  assert.equal(result.creditsUsed, 1);
+  assert.deepEqual(result.transcript, [{tool: 'search_vehicles', ok: true}]);
+  assert.equal(meter.finishes, 1);
+  now = 0;
+  await assert.rejects(runAssistant(user, {configured: true, converse: async () => {throw Error('early failure');}}, claims,
+    async () => {throw Error('unexpected tool');}, undefined, {now: () => now}), /early failure/);
+});
+test('deadline between tools stops new work and includes the completed action', async () => {
+  let now = 0, executions = 0;
+  const meter = trackingMeter();
+  const provider = new ScriptedProvider([{role: 'assistant', content: [...call().content!, ...call('search_vehicles', {}, 'second').content!]}]);
+  const result = await runAssistant(user, provider, claims, async () => {
+    executions++; now = workBudget;
+    return {statusCode: 200, headers: {}, body: '{"data":[]}'};
+  }, meter, {now: () => now});
+  assert.equal(executions, 1); assert.equal(result.creditsUsed, 1);
+  assert.equal(meter.finishes, 1); assert.match(result.reply, /ran out of time/);
+  assert.deepEqual(meter.charges, ['search_vehicles']);
+});
+test('normal turns retain answers, transcripts and D-16 action pricing within the budget', async () => {
+  for (const withTool of [false, true]) {
+    const meter = trackingMeter();
+    const provider = new ScriptedProvider(withTool ? [call(), reply()] : [reply()]);
+    const result = await runAssistant(user, provider, claims, async () => ({statusCode: 200, headers: {}, body: '{"data":[]}'}), meter, {now: () => 100});
+    assert.deepEqual(result, {reply: 'Done', transcript: withTool ? [{tool: 'search_vehicles', ok: true}] : [], creditsUsed: 1});
+    assert.deepEqual(meter.charges, [withTool ? 'search_vehicles' : 'answer']);
+    assert.equal(meter.finishes, 1);
+  }
+});
+test('Bedrock caps each call at 15s or the shorter caller timeout without waiting', async (t) => {
+  const durations: number[] = [];
+  t.mock.method(AbortSignal, 'timeout', (duration: number) => {
+    durations.push(duration); return new AbortController().signal;
+  });
+  const provider = new BedrockAssistantProvider('offline', {send: async () => ({$metadata: {}, stopReason: 'end_turn', usage: {inputTokens: 0, outputTokens: 0, totalTokens: 0}, metrics: {latencyMs: 0}, output: {message: reply()}})});
+  for (const options of [undefined, {timeoutMs: 20000}, {timeoutMs: 1234}]) await provider.converse(user, assistantToolSpecs, options);
+  assert.deepEqual(durations, [15000, 15000, 1234]);
 });

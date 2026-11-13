@@ -17,7 +17,7 @@ and `text`. Limits: 50 turns, 16,000 characters per turn, 64 KiB request body.
 Success:
 
 ```json
-{"data":{"reply":"Found the vehicle.","transcript":[{"tool":"search_vehicles","ok":true}],"creditsUsed":2}}
+{"data":{"reply":"Found the vehicle.","transcript":[{"tool":"search_vehicles","ok":true}],"creditsUsed":1}}
 ```
 
 The transcript covers tools executed during this request. Tool failures are sent
@@ -26,9 +26,21 @@ rounds execute, with at most twenty calls per round. Each result sent back to th
 model is limited to 16,000 characters with an explicit truncation marker. Further
 tool requests after ten rounds return a plain step-limit note.
 
+## Turn time limit
+
+Turns stay synchronous. Each turn has a 45-second budget, including a 5-second
+reserve for settlement. Model and tool work stops starting after 40 seconds.
+Each model call has a 15-second cap, shortened to the work time left in the turn.
+This leaves 15 seconds of the API Lambda's 60-second timeout for entitlement,
+context loading, and returning the response. A tool already running finishes and
+settles before the turn stops. When time runs out, the dealer gets a plain note
+asking them to send another message to continue, with the executed-tool transcript
+and credits already settled. Completed work stands; the limit adds no answer charge.
+
 The handler uses the #99 credit ledger and entitlement implementation. Reads cost
-1 credit, writes 2, and the final no-tool answer 1; failed actions and failed turns
-are not charged. The example above uses 2 credits (lookup plus answer). With no
+1 credit and writes 2. A final answer costs 1 only when no action charge settled
+during the turn; failed actions stay free. The example above uses 1 credit for
+the lookup. With no
 active plan, before any provider or tool work, the endpoint returns HTTP 402:
 
 ```json

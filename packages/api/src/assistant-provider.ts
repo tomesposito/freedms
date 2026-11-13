@@ -2,10 +2,11 @@ import { BedrockRuntimeClient, ConverseCommand, type Message, type Tool, type Co
 import { ApiError } from './errors.js';
 export type AssistantMessage = Message;
 export type AssistantToolSpec = Tool;
+export interface AssistantConverseOptions { timeoutMs?: number }
 export interface AssistantProvider {
   lastUsage?: import('@freedms/shared').AssistantTokenUsage;
   configured: boolean;
-  converse(messages: AssistantMessage[], toolSpecs: AssistantToolSpec[]): Promise<AssistantMessage>;
+  converse(messages: AssistantMessage[], toolSpecs: AssistantToolSpec[], options?: AssistantConverseOptions): Promise<AssistantMessage>;
 }
 export const assistantUnavailable = () => new ApiError(503, 'ASSISTANT_UNAVAILABLE', "AI assistant isn't set up.");
 export const assistantFailure = () => new ApiError(502, 'ASSISTANT_PROVIDER_FAILED', 'AI assistant could not complete this turn. Please retry.');
@@ -21,14 +22,14 @@ export class BedrockAssistantProvider implements AssistantProvider {
   lastUsage?: import('@freedms/shared').AssistantTokenUsage;
   configured = true;
   constructor(private model: string, private client: AssistantTransport = new BedrockRuntimeClient({maxAttempts: 1})) {}
-  async converse(messages: AssistantMessage[], toolSpecs: AssistantToolSpec[]): Promise<AssistantMessage> {
+  async converse(messages: AssistantMessage[], toolSpecs: AssistantToolSpec[], options?: AssistantConverseOptions): Promise<AssistantMessage> {
     try {
       const result = await this.client.send(new ConverseCommand({modelId: this.model, messages,
         // Claude accepts explicit checkpoints; Nemotron does not. Keep the
         // system instructions for every model without sending unsupported fields.
         system: [{text: system}, ...(this.model.includes('anthropic.claude-') ? [{cachePoint: {type: 'default' as const}}] : [])],
         toolConfig: {tools: toolSpecs}, inferenceConfig: {maxTokens: 4096},
-      }), {abortSignal: AbortSignal.timeout(15_000)});
+      }), {abortSignal: AbortSignal.timeout(Math.min(15_000, options?.timeoutMs ?? 15_000))});
       const message = result.output?.message;
       if (message?.role !== 'assistant' || !message.content?.length) throw assistantFailure();
       this.lastUsage = {inputTokens: result.usage?.inputTokens ?? 0, outputTokens: result.usage?.outputTokens ?? 0,
