@@ -20,17 +20,22 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
   execute: (request: ApiRequest) => Promise<ApiResponse>, meter?: AssistantMeter) {
   const history = structuredClone(messages), transcript: {tool: string; ok: boolean}[] = [];
   const finish = async (reply: string) => ({reply, transcript, creditsUsed: await meter?.finish() ?? 0});
+  let settledActions = 0;
   for (let round = 0; round <= 10; round++) {
     const answer = await provider.converse(history, assistantToolSpecs);
     const calls = answer.content?.flatMap(block => block.toolUse ? [block.toolUse] : []) ?? [];
     let usage = provider.lastUsage ? {...provider.lastUsage} : zeroUsage;
     if (!calls.length) {
-      // Every no-tool final round costs one credit, including after tool rounds.
-      // Never expose an answer that cannot be paid for: return the stop note instead.
-      const stop = await meter?.beforeWrite(ANSWER_PRICE);
-      if (stop) return finish(stop);
-      const settlement = await meter?.charge('answer', ANSWER_PRICE, usage);
-      if (settlement) return finish(settlement);
+      // D-16 (2026-11-13): per-action pricing only. The final answer is charged
+      // as a no-tool answer (1 credit) only when no action charge settled this
+      // turn; after charged actions it is free. Never expose an answer that
+      // cannot be paid for: return the stop note instead.
+      if (!settledActions) {
+        const stop = await meter?.beforeWrite(ANSWER_PRICE);
+        if (stop) return finish(stop);
+        const settlement = await meter?.charge('answer', ANSWER_PRICE, usage);
+        if (settlement) return finish(settlement);
+      }
       return finish(answer.content?.map(block => block.text ?? '').join('\n') ?? '');
     }
     if (round === 10) return finish(stepLimit);
@@ -48,6 +53,7 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
       if (!result.isError && price) {
         const settlement = await meter?.charge(call.name!, price, usage); usage = zeroUsage;
         if (settlement) return finish(settlement);
+        settledActions++;
       }
       const raw = result.content.map(block => block.text).join('\n');
       const text = raw.length > 16000 ? raw.slice(0, 16000) + '\n[Tool result truncated]' : raw;

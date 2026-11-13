@@ -90,20 +90,20 @@ test('assistant billing prices derive from registry methods and reserve photo pr
   for (const tool of tools) assert.deepEqual(priceForTool(tool.name), {actionClass: tool.method === 'GET' ? 'read' : 'write', credits: tool.method === 'GET' ? 1 : 2});
   assert.equal(priceForTool('unknown'), undefined); assert.deepEqual(PHOTO_PRICE, {actionClass: 'photo', credits: 3});
 });
-test('assistant billing debits read, write and answer exactly and attributes round tokens once', async () => {
+test('assistant billing debits read and write exactly; the answer after charged actions is free (D-16)', async () => {
   const s = await setup(new Fake([calls('search_vehicles', 'create_customer', 'search_vehicles'), reply])); await s.plan();
-  const result = await s.chat(); assert.equal(result.status, 200); assert.equal(result.data.creditsUsed, 5);
+  const result = await s.chat(); assert.equal(result.status, 200); assert.equal(result.data.creditsUsed, 4);
   assert.ok(result.data.transcript.every((r: {ok: boolean}) => r.ok));
   const rows = await s.repo.assistantLedger('2026-01-01');
-  assert.deepEqual(rows.map(r => r.credits), [1, 2, 1, 1]);
-  assert.deepEqual(rows.map(r => r.inputTokens), [10, 0, 0, 10]);
-  for (const [key, total] of Object.entries({inputTokens: 20, outputTokens: 10, cacheReadTokens: 6, cacheWriteTokens: 4})) assert.equal(rows.reduce((sum, row) => sum + row[key as 'inputTokens'], 0), total);
+  assert.deepEqual(rows.map(r => r.credits), [1, 2, 1]);
+  assert.deepEqual(rows.map(r => r.inputTokens), [10, 0, 0]);
+  for (const [key, total] of Object.entries({inputTokens: 10, outputTokens: 5, cacheReadTokens: 3, cacheWriteTokens: 2})) assert.equal(rows.reduce((sum, row) => sum + row[key as 'inputTokens'], 0), total);
   assert.ok(rows.every(row => !('messages' in row) && !('input' in row)));
-  assert.equal((await s.get('/assistant/pool')).data.balanceCredits, 70);
+  assert.equal((await s.get('/assistant/pool')).data.balanceCredits, 71);
 });
 test('assistant billing failed tools are free and completed actions stay charged when later provider work fails', async () => {
   const s = await setup(new Fake([calls('unknown', 'get_vehicle', 'search_vehicles'), reply])); await s.plan();
-  const result = await s.chat(); assert.equal(result.data.creditsUsed, 2);
+  const result = await s.chat(); assert.equal(result.data.creditsUsed, 1);
   assert.deepEqual(result.data.transcript.map((r: {ok: boolean}) => r.ok), [false, false, true]);
   const failed = await setup(new Fake([calls('search_vehicles'), new Error('offline failure')])); await failed.plan();
   assert.equal((await failed.chat()).status, 500); assert.equal((await failed.repo.assistantLedger('2026-01-01')).length, 1);
@@ -115,13 +115,18 @@ test('assistant pool exhaustion stops mid-round and refuses the next turn before
   assert.equal((await s.repo.crmList('customer')).length, 0);
   assert.equal((await s.chat()).error.code, 'ASSISTANT_CREDITS_EXHAUSTED'); assert.equal(fake.count, 1);
 });
-test('assistant never exposes an unpaid final answer at pool or request cap', async () => {
+test('assistant answer after a charged action is delivered even when the pool or cap is spent (D-16)', async () => {
   for (const cap of [false, true]) {
     const s = await setup(new Fake([calls('search_vehicles'), reply])); await s.plan(cap ? {perRequestCreditCap: 1} : {});
     if (!cap) await s.balance(1);
-    const result = await s.chat(); assert.equal(result.data.creditsUsed, 1); assert.notEqual(result.data.reply, 'Done');
-    assert.match(result.data.reply, cap ? /credit cap/ : /pool is exhausted/);
+    const result = await s.chat(); assert.equal(result.data.creditsUsed, 1); assert.equal(result.data.reply, 'Done');
   }
+});
+test('assistant never exposes an unpaid no-tool answer when the pool is exhausted', async () => {
+  const s = await setup(new Fake([reply])); await s.plan(); await s.balance(0);
+  // No action settled this turn, so the answer itself must be paid for; with an
+  // empty pool the turn stops at the entitlement gate instead of answering free.
+  assert.equal((await s.chat()).error.code, 'ASSISTANT_CREDITS_EXHAUSTED');
 });
 test('assistant default 25-credit cap and custom caps stop before remaining actions execute', async () => {
   for (const cap of [25, 3]) {
@@ -132,8 +137,8 @@ test('assistant default 25-credit cap and custom caps stop before remaining acti
 });
 test('assistant overage allows negative balances and readouts show overage used', async () => {
   const s = await setup(new Fake([calls('search_vehicles', 'search_vehicles'), reply])); await s.plan({overageEnabled: true}); await s.balance(0);
-  assert.equal((await s.chat()).data.creditsUsed, 3);
-  const pool = (await s.get('/assistant/pool')).data; assert.equal(pool.balanceCredits, -3); assert.equal(pool.overageCreditsUsed, 3);
+  assert.equal((await s.chat()).data.creditsUsed, 2);
+  const pool = (await s.get('/assistant/pool')).data; assert.equal(pool.balanceCredits, -2); assert.equal(pool.overageCreditsUsed, 2);
 });
 test('assistant UTC anniversaries clamp month ends without drifting and prorate per added user', () => {
   assert.deepEqual(assistantCycleDates('2026-01-31T23:59:00Z', new Date('2026-02-28')), {cycleStart: '2026-02-28', cycleEnd: '2026-03-31'});
@@ -176,7 +181,7 @@ test('assistant pool, ledger and usage isolate tenants and usage is limited by c
 test('local stub seeds only with explicit local option and burns the entire seeded pool', async () => {
   const s = await setup(new LocalAssistantProvider(), true);
   let total = 0;
-  for (let i = 0; i < 38; i++) { const result = await s.chat(); assert.equal(result.status, 200); total += result.data.creditsUsed; }
+  for (let i = 0; i < 75; i++) { const result = await s.chat(); assert.equal(result.status, 200); total += result.data.creditsUsed; }
   assert.equal(total, 75); assert.equal((await s.chat()).error.code, 'ASSISTANT_CREDITS_EXHAUSTED');
   assert.equal((await s.get('/assistant/pool')).data.balanceCredits, 0);
   assert.equal((await s.repo.assistantPlan())?.perRequestCreditCap, 25);
@@ -243,7 +248,7 @@ test('assistant ledger retries never replay a tool and settlement failures retai
     if (mode === 'offline' || mode === 'exhausted') {
       assert.match(result.reply, /DID execute successfully/); assert.equal(result.creditsUsed, 0);
       assert.equal(attempts, mode === 'offline' ? 1 : 5); assert.equal(rows.length, 0);
-    } else { assert.equal(result.reply, 'Done'); assert.equal(result.creditsUsed, 3); assert.equal(rows.length, 2); }
+    } else { assert.equal(result.reply, 'Done'); assert.equal(result.creditsUsed, 2); assert.equal(rows.length, 1); }
     if (mode === 'conflict' || mode === 'exhausted') assert.equal(ids[0], ids[1]);
   }
 });

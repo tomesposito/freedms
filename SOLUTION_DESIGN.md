@@ -522,7 +522,9 @@ ledger data; increases follow the Terms (30 days' notice, admin acceptance
 before work runs at a higher rate). The assistant's margin is what pays
 for the free hosting service. This decides D-7 for assistant actions;
 metering for any future non-assistant AI work follows the same unit
-unless a later decision says otherwise.
+unless a later decision says otherwise. Turn pricing is clarified by
+D-16 (2026-11-13): the final answer round of a tool-using turn is not
+charged separately.
 
 **Amendment (owner's build #123, 2026-11-07; recorded 2026-11-13):** the
 billing mechanics above describe the original ruling. As shipped in #123,
@@ -751,7 +753,8 @@ states preserve the app's report conventions, with Retry and real first actions.
 
 ### D-16 — Assistant turn pricing (2026-11-13)
 
-**Status: OPEN — owner's call, filed as issue #134 (2026-11-10).**
+**Status: DECIDED — owner, 2026-11-13: option (a), per-action only
+(issue #134).**
 
 **Context:** the shipped loop charges ANSWER_PRICE (1 credit) for the final
 no-tool round of every turn, on top of the per-action prices of any tool
@@ -773,8 +776,14 @@ answer, and the tray copy and the E2E spec change to match.
 **Recommendation:** (a). The dealer's mental model is per action, the
 published copy already promises it, and the answer is the tool results
 restated — charging for it separately reads as double-charging the same
-work. Until the owner rules, the code keeps its current behavior and
-#134 stays out of the build queue.
+work.
+
+**Decision (2026-11-13):** option (a). A turn costs the sum of its
+successfully executed actions; the final answer round is charged (1
+credit, as a no-tool answer) only when no action charge settled during
+the turn — a no-tool-only turn, or a turn whose tool calls all failed
+(failed actions stay free per D-7). D-7's text stands as written; the
+loop changes to match it.
 
 ## 9. AI direction — less dealer work (owner, 2026-10-19)
 
