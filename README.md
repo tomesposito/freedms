@@ -67,7 +67,9 @@ it is not a live model response.
 The content column's command bar combines record search and the assistant. Click
 its prompt or press Ctrl/Cmd+K outside a form field. Records navigate directly;
 priced page skills and the final “Ask the assistant” row run only when selected.
-On phones, search and assistant icons share the branded Menu header.
+On desktop, the assistant docks below the full-width command bar and the page
+reflows beside it, remaining interactive. On phones, search and assistant icons
+share the branded Menu header and the assistant opens as a full-width overlay.
 
 ![Command bar with AI assistant conversation and credit receipt](docs/screenshots/ai-assistant.png)
 
