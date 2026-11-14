@@ -7,6 +7,7 @@ export interface InventoryReport {
   totals: {count: number; totalCost: number; totalListPrice: number};
 }
 export interface SalesReport {
+  trend: {date: string; count: number}[];
   from: string | null; to: string | null;
   rows: {soldDate: string; dealId: string; buyer: string; vehicle: string; price: number; frontGross: number; fiGross: number; fiRetail: number; cost: number; recon: number; tax: number; fees: number}[];
   totals: {dealsSold: number; totalFrontGross: number; totalFiGross: number; averageGross: number};
@@ -52,3 +53,11 @@ export type ReportDataset = keyof typeof reportDatasets;
 export interface ReportDefinition {dataset: ReportDataset; columns: string[]; from?: string; to?: string; groupBy?: string}
 export interface SavedReport extends CrmRecord {kind: 'saved-report'; name: string; definition: ReportDefinition}
 export interface CustomReport {dataset: ReportDataset; columns: {key: string; label: string}[]; rows: string[][]}
+
+/** Aggregate-only sources settle independently; errors never expose repository details. */
+export type OverviewSection<T> = {status: 'fulfilled'; value: T} | {status: 'rejected'; reason: string};
+export interface OverviewReport {
+  inventory: OverviewSection<Omit<InventoryReport, 'rows'>>;
+  sales: OverviewSection<Omit<SalesReport, 'rows'>>;
+  leads: OverviewSection<Pick<LeadReport, 'byStage' | 'total'>>;
+}

@@ -383,3 +383,48 @@ test('inventory bounded reads preserve legacy JSON/CSV, page through sold rows a
   await memory.inventoryReportRows();
   assert.equal(clone.mock.callCount(), 1);
 });
+
+test('overview equals report aggregates, strips rows, and isolates tenants over the same UTC window', async () => {
+  const s = await setup();
+  await s.vehicle('AGING', 91);
+  for (const [i, date] of ['2026-09-20', '2026-09-21', '2026-10-20', '2026-10-21'].entries()) await s.sell(date, i);
+  s.reset();
+  await s.json('/leads', 'POST', {customerId: s.customer.id, source: 'phone'});
+  const range = {from: '2026-09-21', to: '2026-10-20'};
+  const overview = await s.json('/reports/overview', 'GET', undefined, range);
+  for (const source of ['inventory', 'sales', 'leads']) {
+    const report = await s.json(`/reports/${source}`, 'GET', undefined, source === 'sales' ? range : undefined);
+    const {rows, bySource, ...aggregates} = report;
+    assert.deepEqual(overview[source], {status: 'fulfilled', value: aggregates});
+  }
+  assert.equal(overview.sales.value.trend.length, 30);
+  assert.equal(overview.sales.value.totals.dealsSold, 2);
+  assert.equal(overview.sales.value.trend.reduce((sum: number, b: {count: number}) => sum + b.count, 0), 2);
+  assert.equal(overview.sales.value.trend[0].date, range.from);
+  assert.equal(overview.sales.value.trend.at(-1).date, range.to);
+  assert.doesNotMatch(JSON.stringify(overview), /"rows"|"buyer"|"dealId"|"stockNumber"|"bySource"/);
+  const other = await s.json('/reports/overview', 'GET', undefined, range, 'B');
+  assert.equal(other.inventory.value.totals.count, 0);
+  assert.equal(other.sales.value.totals.dealsSold, 0);
+  assert.equal(other.leads.value.total, 0);
+  for (const query of [undefined, {from: range.from}, {to: range.to}, range]) {
+    const sales = await s.json('/reports/sales', 'GET', undefined, query);
+    assert.equal(sales.trend.reduce((sum: number, b: {count: number}) => sum + b.count, 0), sales.totals.dealsSold);
+  }
+  assert.equal((await s.request('/reports/overview', {from: 'bad'})).statusCode, 400);
+  assert.equal((await s.request('/reports/overview.csv')).statusCode, 404);
+  assert.equal((await s.request('/reports/overview', undefined, 'A', 'POST')).statusCode, 405);
+});
+
+test('overview settles source failures independently and sanitizes errors', async () => {
+  const {overviewReport} = await import('../src/reports.js');
+  const s = await setup(), repo = s.repositories.forTenant('A');
+  const guarded = new Proxy(repo, {get(target, property) {
+    if (property === 'inventoryReportRows') return async () => { throw new Error('private database detail'); };
+    return Reflect.get(target, property);
+  }});
+  const data = await overviewReport(guarded, new Date('2026-10-20'), {from: '2026-09-21', to: '2026-10-20'});
+  assert.equal(data.inventory.status, 'rejected');
+  assert.equal(data.sales.status, 'fulfilled'); assert.equal(data.leads.status, 'fulfilled');
+  assert.doesNotMatch(JSON.stringify(data), /private database/);
+});

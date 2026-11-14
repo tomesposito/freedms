@@ -113,11 +113,12 @@ export async function assistantSkillsEndpoint(request: ApiRequest, principal: Pr
   let reply = '', proposals: Proposal[] | undefined, creditsUsed = 0;
   const call = async <T>(name: string, args: object = {}): Promise<T> => {
     if (!(skill.reads.includes(name) || (apply && skill.writes.includes(name)))) throw new Error('Tool outside skill definition');
-    const price = priceForTool(name)!; const stop = meter?.stop(price); if (stop) throw new SkillStop(stop);
+    const price = priceForTool(name)!; const stop = price.actionClass === 'write' ? await meter?.beforeWrite(price) : meter?.stop(price); if (stop) throw new SkillStop(stop);
     const result = await executeTool(tools.find(t => t.name === name)!, args, request.claims!, execute);
     transcript.push({tool: name, ok: !result.isError});
     if (result.isError) throw new SkillStop(`Could not complete ${name.replace(/_/g, ' ')}. No further actions ran.`);
-    meter?.charge(`skill:${skill.id}:${name}`, price);
+    const settlement = await meter?.charge(`skill:${skill.id}:${name}`, price);
+    if (settlement) throw new SkillStop(settlement);
     return (result.structuredContent as {data: T}).data;
   };
   try {

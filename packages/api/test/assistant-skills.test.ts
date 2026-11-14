@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AuthClaims, Customer, OutboxEvent } from '@freedms/shared';
 import { createHandler } from '../src/handler.js';
+import { AssistantBilling } from '../src/assistant-billing.js';
 import { MemoryRepositories } from '../src/memory.js';
 import type { AssistantMessage, AssistantProvider } from '../src/assistant-provider.js';
 import { assistantSkillsEndpoint, customerProposals, type Proposal } from '../src/assistant-skills.js';
@@ -174,4 +175,35 @@ test('accepted fixes group into one customer write and stale or foreign selectio
   assert.deepEqual((await s.apply('clean_record', 'contact', selected, foreign.id)).data.applied, []);
   assert.deepEqual(await s.repositories.forTenant('B').crmGet('customer', foreign.id), foreign);
   assert.deepEqual((await s.req(`/assistant/skills?surface=contact&id=${foreign.id}`)).data, {context: null, skills: []});
+});
+
+test('skills refresh the write fence and preserve completed outcomes on settlement failure', async () => {
+  for (const mode of ['disabled', 'settlement'] as const) {
+    const s = await setup(), c = await s.addCustomer();
+    await s.req('/assistant/pool');
+    const billing = new AssistantBilling(s.repo, () => date);
+    let executions = 0;
+    const commit = s.repo.commitAssistantLedger;
+    s.repo.commitAssistantLedger = async (entries, cycle, version) => {
+      if (mode === 'settlement' && entries[0].actionClass === 'write') throw new Error('offline');
+      await commit(entries, cycle, version);
+    };
+    const proposal = customerProposals(c).find(p => p.kind === 'fix' && p.field === 'phone')!;
+    const result = await assistantSkillsEndpoint({method: 'POST', path: '/assistant/skills/apply', claims: auth(),
+      body: JSON.stringify({skill: 'clean_record', surface: 'contact', id: c.id, accepted: [proposal.proposalId]})},
+      {tenantId: 'A', userId: 'user-A', role: 'admin'}, billing, async request => {
+        executions++;
+        if (request.method === 'GET') {
+          if (mode === 'disabled') await billing.updateSettings({tenantId: 'A', userId: 'user-A', role: 'admin'}, {disabled: true});
+          return {statusCode: 200, headers: {}, body: JSON.stringify({data: c})};
+        }
+        return {statusCode: 200, headers: {}, body: JSON.stringify({data: {...c, version: 2}})};
+      }, date);
+    const data = JSON.parse(result.body).data;
+    assert.equal(data.creditsUsed, 1);
+    assert.equal(executions, mode === 'disabled' ? 1 : 2);
+    assert.match(data.reply, mode === 'disabled' ? /disabled/ : /DID execute successfully/);
+    assert.deepEqual(data.transcript, [{tool: 'get_customer', ok: true}, ...(mode === 'settlement' ? [{tool: 'update_customer', ok: true}] : [])]);
+    assert.equal((await s.repo.assistantLedger('2026-11-04')).length, 1);
+  }
 });

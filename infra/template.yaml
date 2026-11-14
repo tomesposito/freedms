@@ -101,6 +101,16 @@ Rules:
     Assertions:
       - Assert: !Equals [!Ref 'AWS::Region', us-east-1]
         AssertDescription: CloudFront certificates and WAF must deploy in us-east-1
+  AssistantModelPairing:
+    Assertions:
+      - Assert: !Or
+          - !And
+              - !Equals [!Ref AssistantModelId, '']
+              - !Equals [!Ref AssistantFoundationModelId, '']
+          - !And
+              - !Not [!Equals [!Ref AssistantModelId, '']]
+              - !Not [!Equals [!Ref AssistantFoundationModelId, '']]
+        AssertDescription: "AssistantModelId and AssistantFoundationModelId must be set together: the inference profile and its foundation model are both required for Bedrock authorization (see docs/DEPLOYMENT.md)."
 Resources:
   Table:
     Type: AWS::DynamoDB::Table
@@ -309,7 +319,7 @@ Resources:
       Architectures: [arm64]
       ReservedConcurrentExecutions: 2
       MemorySize: 256
-      Timeout: 30
+      Timeout: 60
       Environment:
         Variables:
           PILOT_OPERATOR_SUBJECT: !Ref PilotOperatorSubject
@@ -355,12 +365,16 @@ Resources:
                 StringEquals:
                   ses:FromAddress: !Ref MailFrom
             - Effect: Allow
-              Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:ConditionCheckItem]
+              Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:Scan, dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:ConditionCheckItem]
               Resource: !GetAtt Table.Arn
             - Effect: Allow
               Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
               Resource: !Sub '${Documents.Arn}/tenants/*'
       Events:
+        WebhookDrain:
+          Type: Schedule
+          Properties:
+            Schedule: rate(5 minutes)
         Mcp:
           Type: HttpApi
           Properties:

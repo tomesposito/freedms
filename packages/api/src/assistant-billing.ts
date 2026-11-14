@@ -35,7 +35,8 @@ export function proratedAssistantCredits(credits: number, added: number, cycleSt
 type Actor = Pick<Principal, 'tenantId' | 'userId' | 'role'>;
 export interface AssistantMeter {
   stop(price: {credits: number}): string | undefined;
-  charge(action: string, price: Pick<AssistantLedgerEntry, 'actionClass' | 'credits'>, usage?: AssistantTokenUsage): void;
+  beforeWrite(price: {credits: number}): Promise<string | undefined>;
+  charge(action: string, price: Pick<AssistantLedgerEntry, 'actionClass' | 'credits'>, usage?: AssistantTokenUsage): Promise<string | undefined>;
   finish(): Promise<number>;
 }
 export class AssistantBilling implements AssistantEntitlement {
@@ -113,25 +114,56 @@ export class AssistantBilling implements AssistantEntitlement {
   }
   async meter(actor: Actor): Promise<AssistantMeter> {
     await this.requireEntitlement(actor);
-    const {pool, cycle, plan} = await this.snapshot(actor);
-    const pending: AssistantLedgerEntry[] = []; let total = 0;
+    let {pool} = await this.snapshot(actor);
+    let total = 0;
+    const stop = (price: {credits: number}) => total + price.credits > pool.perRequestCreditCap
+      ? 'The assistant hit the credit cap for this message. Please send another message to continue.'
+      : pool.balanceCredits + (pool.overageEnabled ? pool.overageCapCredits : 0) < price.credits
+        ? pool.overageEnabled ? 'The assistant reached the monthly overage cap. Raise the cap or wait for the next cycle to continue.' : 'The assistant credit pool is exhausted. Add credits or wait for the next cycle to continue.' : undefined;
     return {
-      stop: price => total + price.credits > pool.perRequestCreditCap
-        ? 'The assistant hit the credit cap for this message. Please send another message to continue.'
-        : pool.balanceCredits + (plan.overageEnabled ? plan.overageCapCredits : 0) - total < price.credits
-          ? plan.overageEnabled ? 'The assistant reached the monthly overage cap. Raise the cap or wait for the next cycle to continue.' : 'The assistant credit pool is exhausted. Add credits or wait for the next cycle to continue.' : undefined,
-      charge: (action, price, usage = zeroUsage) => {
-        pending.push({id: randomUUID(), tenantId: actor.tenantId, actorId: actor.userId, action, ...price, ...usage,
-          cycleStart: pool.cycleStart, createdAt: this.now().toISOString()}); total += price.credits;
+      // Reads use the last balance, reduced after each settlement. Writes refresh the fence.
+      stop,
+      beforeWrite: async price => {
+        try { pool = await this.requireEntitlement(actor); }
+        catch (error) {
+          if (error instanceof ApiError && [402, 403].includes(error.status)) return error.message;
+          return 'The assistant could not verify access. No further actions ran.';
+        }
+        return stop(price);
       },
-      finish: async () => {
-        // An optimistic conflict fails the turn without publishing any debit. No retry:
-        // business actions may have executed and must never be replayed automatically.
-        if (pending.length) await this.repository.commitAssistantLedger(pending, cycle, plan.version);
-        return total;
+      charge: async (action, price, usage = zeroUsage) => {
+        const entry: AssistantLedgerEntry = {id: randomUUID(), tenantId: actor.tenantId, actorId: actor.userId, action, ...price, ...usage,
+          cycleStart: pool.cycleStart, createdAt: this.now().toISOString()};
+        try {
+          for (let attempt = 0; attempt < 5; attempt++) {
+            // Retry only the ledger with the SAME id; never replay a business action.
+            // Read the original cycle even if the billing period rolls over during execution.
+            const plan = await this.plan(actor);
+            const cycle = await this.repository.assistantCycle(entry.cycleStart);
+            if (!plan || !cycle) throw new Error('Billing state unavailable');
+            try {
+              await this.repository.commitAssistantLedger([entry], cycle, plan.version);
+              total += price.credits; pool.balanceCredits -= price.credits;
+              return;
+            } catch (error) {
+              // A lost acknowledgement may mean the debit is already durable.
+              if ((await this.repository.assistantLedger(entry.cycleStart)).some(row => row.id === entry.id)) {
+                total += price.credits; pool.balanceCredits -= price.credits;
+                return;
+              }
+              if (!(error instanceof ApiError) || error.code !== 'CONFLICT' || attempt === 4) throw error;
+            }
+          }
+        } catch {
+          return action === 'answer'
+            ? 'The assistant could not settle the answer charge. The answer has been withheld.'
+            : `The action ${action} DID execute successfully, but its credit settlement could not be confirmed. No further actions ran. Review the completed action before retrying.`;
+        }
       },
+      finish: async () => total,
     };
   }
+
   async admin(actor: Actor, waitingListOnly = false) {
     const plan = waitingListOnly ? undefined : await this.plan(actor);
     const users = waitingListOnly ? [] : (await this.repository.workspaceUsers()).filter(row => row.membership.active).map(row => ({userId: row.user.id, name: row.user.name, assigned: (plan?.licensedUserIds ?? []).includes(row.user.id)}));

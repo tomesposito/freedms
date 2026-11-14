@@ -10,12 +10,15 @@ import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import type { Customer, CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
-import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantWaitlist, assertAssistantWaitlistRemoved, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantWaitlist, assertAssistantWaitlistRemoved, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, commandSearchSelection, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId, requireCycleStart } from './errors.js';
 const forecastKinds = new Set<CrmEntity['kind']>(['deal', 'service-appointment', 'part', 'parts-sale', 'repair-order']);
 interface State { billingLink?: AssistantBillingLink; stripeReceipts: Set<string>; assistantPlan?: AssistantPlan; assistantWaitlist?: AssistantWaitlistEntry; assistantCycles: Map<string, AssistantCycle>; assistantLedger: Map<string, AssistantLedgerEntry>; mcpGrants: Map<string, McpGrant>; mcpRegistrations: Map<string, McpRegistration>; mcpAttempts: Map<string, {bucket: number; count: number}>; ideas: Map<string, Idea>; accessRequests: Map<string, AccessRequest>; leadPageEpoch: number; leadPageCache: Map<string, LeadPage>; accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
 export class MemoryRepositories implements RepositoryFactory {
   private states = new Map<string, State>();
+  async webhookTenantIds(): Promise<string[]> {
+    return [...this.states].filter(([, state]) => [...state.webhookEndpoints.values()].some(endpoint => endpoint.enabled)).map(([id]) => id).sort();
+  }
   async tenantForStripeCustomer(customerId: string) {
     return [...this.states].find(([, s]) => s.billingLink?.customerId === customerId)?.[0];
   }
@@ -178,6 +181,14 @@ export class MemoryRepositories implements RepositoryFactory {
         s.webhookEndpoints.set(record.id, structuredClone(record)); s.events.set(event.id, structuredClone(event));
       },
       webhookDeliveries: async () => structuredClone([...s.webhookDeliveries.values()]),
+      claimWebhookDelivery: async (record, staleUpdatedAt) => {
+        assertScope(tenantId, record); requireId(record.id);
+        if (record.status !== 'pending') throw new Error('Invalid webhook claim');
+        const existing = s.webhookDeliveries.get(record.id);
+        if (existing && !(existing.status === 'pending' && existing.updatedAt === staleUpdatedAt && Date.parse(existing.updatedAt) < Date.parse(record.updatedAt) - 15 * 60_000)) return false;
+        s.webhookDeliveries.set(record.id, structuredClone(record));
+        return true;
+      },
       saveWebhookDelivery: async record => { assertScope(tenantId, record); requireId(record.id); s.webhookDeliveries.set(record.id, structuredClone(record)); },
       feedConfig: async () => structuredClone(s.feedConfig),
       saveFeedConfig: async (record, expectedVersion, event) => { assertFeedConfig(tenantId, record, expectedVersion, event); check(event); if ((s.feedConfig?.version ?? 0) !== expectedVersion) throw conflict(); s.feedConfig = structuredClone(record); s.events.set(event.id, structuredClone(event)); },
@@ -247,6 +258,17 @@ export class MemoryRepositories implements RepositoryFactory {
           if (row?.kind === 'customer') customers.push(row);
         }
         return structuredClone({deals: selection.deals, vehicles, customers});
+      },
+      commandSearch: async search => {
+        const scoped = <T extends {tenantId: string}>(row: T | undefined): T | undefined => {
+          if (row) assertScope(tenantId, row);
+          return row;
+        };
+        return structuredClone(await commandSearchSelection(search,
+          function* (kind) { for (const row of s.crmByKind.get(kind)?.values() ?? []) yield scoped(row)!; },
+          async id => scoped(s.crmByKind.get('customer')?.get(id)) as Customer | undefined,
+          async id => scoped(s.vehicles.get(id)),
+          async (kind, id) => scoped(s.crmByKind.get(kind)?.get(id)) as never));
       },
       leadSummary: async () => countLeads(s.crm.values()),
       leadListPage: async query => {

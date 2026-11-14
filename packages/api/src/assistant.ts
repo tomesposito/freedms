@@ -15,21 +15,46 @@ export class DenyAssistantEntitlement implements AssistantEntitlement {
 export const assistantToolSpecs: AssistantToolSpec[] = tools.map(({name, description, inputSchema}) => ({toolSpec: {
   name, description, inputSchema: {json: inputSchema as NonNullable<NonNullable<NonNullable<AssistantToolSpec['toolSpec']>['inputSchema']>['json']>},
 }}));
+// InventoryFunction in infra/template.yaml has a 60s timeout: 45s total turn
+// budget = 40s model/tool work + 5s settlement reserve, leaving 15s for
+// pre-turn entitlement/context work and response handling.
+export const ASSISTANT_TURN_BUDGET_MS = 45_000;
+export const ASSISTANT_SETTLEMENT_RESERVE_MS = 5_000;
+export interface AssistantTurnOptions { now?: () => number }
+const timeLimit = 'The assistant ran out of time for this message. Work already done stands. Please send another message to continue.';
 const stepLimit = 'The assistant hit the step limit for this message. Please send another message to continue.';
 export async function runAssistant(messages: AssistantMessage[], provider: AssistantProvider, claims: AuthClaims,
-  execute: (request: ApiRequest) => Promise<ApiResponse>, meter?: AssistantMeter) {
+  execute: (request: ApiRequest) => Promise<ApiResponse>, meter?: AssistantMeter, options: AssistantTurnOptions = {}) {
+  const now = options.now ?? (() => performance.now());
+  const deadline = now() + ASSISTANT_TURN_BUDGET_MS;
+  const remainingWork = () => deadline - now() - ASSISTANT_SETTLEMENT_RESERVE_MS;
   const history = structuredClone(messages), transcript: {tool: string; ok: boolean}[] = [];
   const finish = async (reply: string) => ({reply, transcript, creditsUsed: await meter?.finish() ?? 0});
+  let settledActions = 0;
   for (let round = 0; round <= 10; round++) {
-    const answer = await provider.converse(history, assistantToolSpecs);
+    const timeoutMs = Math.floor(remainingWork());
+    if (timeoutMs <= 0) return finish(timeLimit);
+    let answer: AssistantMessage;
+    try {
+      answer = await provider.converse(history, assistantToolSpecs, {timeoutMs});
+    } catch (error) {
+      if (remainingWork() <= 0) return finish(timeLimit);
+      throw error;
+    }
+    if (remainingWork() <= 0) return finish(timeLimit);
     const calls = answer.content?.flatMap(block => block.toolUse ? [block.toolUse] : []) ?? [];
     let usage = provider.lastUsage ? {...provider.lastUsage} : zeroUsage;
     if (!calls.length) {
-      // Every no-tool final round costs one credit, including after tool rounds.
-      // Never expose an answer that cannot be paid for: return the stop note instead.
-      const stop = meter?.stop(ANSWER_PRICE);
-      if (stop) return finish(stop);
-      meter?.charge('answer', ANSWER_PRICE, usage);
+      // D-16 (2026-11-13): per-action pricing only. The final answer is charged
+      // as a no-tool answer (1 credit) only when no action charge settled this
+      // turn; after charged actions it is free. Never expose an answer that
+      // cannot be paid for: return the stop note instead.
+      if (!settledActions) {
+        const stop = await meter?.beforeWrite(ANSWER_PRICE);
+        if (stop) return finish(stop);
+        const settlement = await meter?.charge('answer', ANSWER_PRICE, usage);
+        if (settlement) return finish(settlement);
+      }
       return finish(answer.content?.map(block => block.text ?? '').join('\n') ?? '');
     }
     if (round === 10) return finish(stepLimit);
@@ -37,14 +62,20 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
     history.push(answer);
     const results: NonNullable<AssistantMessage['content']> = [];
     for (const call of calls) {
+      if (remainingWork() <= 0) return finish(timeLimit);
       const tool = tools.find(tool => tool.name === call.name);
       const price = priceForTool(call.name!);
-      const stop = price && meter?.stop(price);
+      const stop = price && (price.actionClass === 'write' ? await meter?.beforeWrite(price) : meter?.stop(price));
       if (stop) return finish(stop);
+      if (remainingWork() <= 0) return finish(timeLimit);
       const result = tool ? await executeTool(tool, call.input, claims, execute)
         : {isError: true, content: [{text: 'Tool unavailable.'}]};
-      if (!result.isError && price) { meter?.charge(call.name!, price, usage); usage = zeroUsage; }
       transcript.push({tool: call.name!, ok: !result.isError});
+      if (!result.isError && price) {
+        const settlement = await meter?.charge(call.name!, price, usage); usage = zeroUsage;
+        if (settlement) return finish(settlement);
+        settledActions++;
+      }
       const raw = result.content.map(block => block.text).join('\n');
       const text = raw.length > 16000 ? raw.slice(0, 16000) + '\n[Tool result truncated]' : raw;
       results.push({toolResult: {toolUseId: call.toolUseId!, status: result.isError ? 'error' : 'success', content: [{text}]}});

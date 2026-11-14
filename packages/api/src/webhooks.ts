@@ -5,7 +5,7 @@ import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { webhookEventTypes, type OutboxEvent, type Principal, type PublicWebhookEndpoint, type WebhookDelivery, type WebhookEndpoint, type WebhookEventType } from '@freedms/shared';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
-import type { TenantRepository } from './repository.js';
+import type { RepositoryFactory, TenantRepository } from './repository.js';
 import { invalid, onlyKeys, version } from './validation.js';
 export type WebhookSender = (url: string, init: {headers: Record<string, string>; body: string}) => Promise<{status: number}>;
 export const fetchWebhookSender: WebhookSender = async (url, init) => {
@@ -123,15 +123,19 @@ export async function dispatchWebhooks(repo: TenantRepository, sender: WebhookSe
   const summary = {created: 0, delivered: 0, failed: 0, remaining: 0};
   const endpoints = (await repo.webhookEndpoints()).filter(endpoint => endpoint.enabled).sort((a, b) => a.id.localeCompare(b.id));
   if (!endpoints.length) return summary;
-  const existing = new Set((await repo.webhookDeliveries()).map(d => JSON.stringify([d.endpointId, d.eventId])));
+  const existing = new Map((await repo.webhookDeliveries()).map(d => [JSON.stringify([d.endpointId, d.eventId]), d]));
   for (const event of (await repo.events()).sort((a, b) => a.occurredAt.localeCompare(b.occurredAt) || a.id.localeCompare(b.id))) {
     if (!webhookEventTypes.includes(event.type as WebhookEventType)) continue;
     for (const endpoint of endpoints) {
       const pair = JSON.stringify([endpoint.id, event.id]);
-      if (!endpoint.eventTypes.includes(event.type as WebhookEventType) || existing.has(pair)) continue;
+      const previous = existing.get(pair);
+      if (!endpoint.eventTypes.includes(event.type as WebhookEventType) || (previous && (previous.status !== 'pending' || !(Date.parse(previous.updatedAt) < now.getTime() - 15 * 60_000)))) continue;
       if (summary.created >= limit) { summary.remaining++; continue; }
       const date = now.toISOString();
-      const delivery: WebhookDelivery = {id: deliveryId(endpoint.id, event.id), tenantId: endpoint.tenantId, endpointId: endpoint.id, eventId: event.id, eventType: event.type as WebhookEventType, status: 'failed', attempts: 0, lastStatusCode: null, lastError: null, createdAt: date, updatedAt: date};
+      const delivery: WebhookDelivery = {id: deliveryId(endpoint.id, event.id), tenantId: endpoint.tenantId, endpointId: endpoint.id, eventId: event.id, eventType: event.type as WebhookEventType, status: 'pending', attempts: 0, lastStatusCode: null, lastError: null, createdAt: date, updatedAt: date};
+      if (!await repo.claimWebhookDelivery(delivery, previous?.updatedAt)) continue;
+      summary.created++;
+      delivery.status = 'failed';
       const {id, type, tenantId, aggregateId, aggregateVersion, occurredAt, actorId} = event;
       const body = JSON.stringify({id, type, tenantId, aggregateId, aggregateVersion, occurredAt, actorId});
       const headers = {'content-type': 'application/json', 'x-freedms-event': type, 'x-freedms-delivery': delivery.id, 'x-freedms-signature': `sha256=${createHmac('sha256', endpoint.secret).update(body).digest('hex')}`};
@@ -146,8 +150,23 @@ export async function dispatchWebhooks(repo: TenantRepository, sender: WebhookSe
         } catch { delivery.lastError = 'Network or timeout failure'; }
       }
       await repo.saveWebhookDelivery(delivery);
-      existing.add(pair); summary.created++; summary[delivery.status]++;
+      existing.set(pair, delivery); summary[delivery.status]++;
     }
+  }
+  return summary;
+}
+/** Shared hosted entry logic; the budget counts successful claims across all tenants. */
+export async function drainWebhooks(repositories: RepositoryFactory, sender: WebhookSender, now: Date, budget = 5) {
+  if (!Number.isInteger(budget) || budget < 1) throw new RangeError('Invalid drain budget');
+  if (!repositories.webhookTenantIds) throw new Error('Webhook tenant enumeration unavailable');
+  const summary = {created: 0, delivered: 0, failed: 0};
+  for (const tenantId of await repositories.webhookTenantIds()) {
+    while (summary.created < budget) {
+      const pass = await dispatchWebhooks(repositories.forTenant(tenantId), sender, now, {maxDeliveries: Math.min(MAX_DELIVERIES_PER_PASS, budget - summary.created)});
+      summary.created += pass.created; summary.delivered += pass.delivered; summary.failed += pass.failed;
+      if (!pass.created || !pass.remaining) break;
+    }
+    if (summary.created >= budget) break;
   }
   return summary;
 }

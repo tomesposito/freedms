@@ -17,6 +17,7 @@ const destination = (label: string, href: string, paths: string): Destination =>
 export function sidebarNavigation(admin: boolean, pilotOperator = false): string {
   const groups: [string, Destination[]][] = [
     ['Sales', [
+      destination('Overview', '#/overview', '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'),
       destination('Inventory', '#/', '<path d="m5 10 2-5h10l2 5M4 10h16v8H4zM7 18v2m10-2v2M7 14h1m8 0h1"/>'),
       destination('Leads', '#/leads', '<circle cx="12" cy="7" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>'),
       destination('Deals', '#/deals', '<path d="M6 3h8l4 4v14H6zM14 3v5h4M9 12h6m-6 4h6"/>'),

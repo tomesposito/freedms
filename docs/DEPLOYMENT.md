@@ -69,7 +69,8 @@ exactly as today. To enable it, set `AssistantModelId` to a tested Bedrock
 model or inference profile ID the account can invoke in the stack region (`us-east-1`)
 and redeploy. The parameter supplies `FREEDMS_ASSISTANT_MODEL` to the API Lambda.
 Set `AssistantFoundationModelId` to the matching foundation-model ID (the same ID
-for a directly invoked regional model). The template
+for a directly invoked regional model). Setting only one of the two parameters
+fails template validation, so a half-configured assistant cannot deploy. The template
 adds only `bedrock:InvokeModel`, scoped to the profile and that model in the three
 US routing regions; it grants nothing broader.
 

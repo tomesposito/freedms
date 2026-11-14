@@ -88,6 +88,7 @@ import "../packages/api/test/assistant-billing.test.js";
 import "../packages/web/test/assistant.test.js";
 
 import '../packages/web/test/assistant-admin.test.js';
+import '../packages/web/test/markdown.test.js';
 
 import '../packages/api/test/stripe.test.js';
 import '../packages/api/test/assistant-sandbox.test.js';
@@ -96,3 +97,5 @@ import '../packages/api/test/assistant-skills.test.js';
 
 import '../packages/api/test/search.test.js';
 import '../packages/web/test/command-bar.test.js';
+
+import '../packages/web/test/overview.test.js';

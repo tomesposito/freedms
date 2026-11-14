@@ -1,7 +1,7 @@
 import { stockedCost } from './fixed-ops.js';
 import { repairOrderTotals, type FixedOpsReport } from '@freedms/shared';
 import type { Track } from './analytics.js';
-import { agingBuckets, pencilMath, type InventoryReport, type LeadReport, type SalesReport, type Vehicle } from '@freedms/shared';
+import { agingBuckets, pencilMath, type OverviewReport, type OverviewSection, type InventoryReport, type LeadReport, type SalesReport, type Vehicle } from '@freedms/shared';
 import { ApiError, missing } from './errors.js';
 import { csvResponse, response, type ApiRequest } from './handler.js';
 import { soldDate, type TenantRepository } from './repository.js';
@@ -44,7 +44,16 @@ export async function salesReport(repo: TenantRepository, range: ReturnType<type
   }
   rows.sort((a, b) => a.soldDate.localeCompare(b.soldDate) || a.dealId.localeCompare(b.dealId));
   const totalFrontGross = rows.reduce((sum, r) => sum + r.frontGross, 0);
-  return {...range, rows, totals: {dealsSold: rows.length, totalFrontGross, totalFiGross: rows.reduce((sum, r) => sum + r.fiGross, 0), averageGross: rows.length ? Math.round(totalFrontGross / rows.length) : 0}};
+  const counts = new Map<string, number>();
+  for (const row of rows) counts.set(row.soldDate, (counts.get(row.soldDate) ?? 0) + 1);
+  // Bounded windows include zero days. Open ranges span the observed dates.
+  const first = range.from ?? rows[0]?.soldDate, last = range.to ?? rows.at(-1)?.soldDate;
+  if (first && last) for (let day = Date.parse(first); day <= Date.parse(last); day += 86400000) {
+    const date = new Date(day).toISOString().slice(0, 10);
+    if (!counts.has(date)) counts.set(date, 0);
+  }
+  const trend = [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({date, count}));
+  return {...range, rows, trend, totals: {dealsSold: rows.length, totalFrontGross, totalFiGross: rows.reduce((sum, r) => sum + r.fiGross, 0), averageGross: rows.length ? Math.round(totalFrontGross / rows.length) : 0}};
 }
 export async function leadReport(repo: TenantRepository): Promise<LeadReport> {
   return repo.leadSummary();
@@ -60,7 +69,7 @@ export function leadCsv(data: LeadReport): string {
   return toCsv([['dimension', 'value', 'count'], ...data.byStage.map(r => ['stage', r.stage, String(r.count)]), ...data.bySource.map(r => ['source', r.source, String(r.count)]), ['total', 'all', String(data.total)]]);
 }
 export async function reports(request: ApiRequest, repo: TenantRepository, now: Date, track: Track = async () => {}) {
-  const match = /^\/reports\/(inventory|sales|leads|accounting|fixed-ops)(\.csv)?$/.exec(request.path.replace(/\/$/, ''));
+  const match = /^\/reports\/(overview|inventory|sales|leads|accounting|fixed-ops)(\.csv)?$/.exec(request.path.replace(/\/$/, ''));
   if (!match || (match[1] === 'accounting' && !match[2])) throw missing();
   if (request.method.toUpperCase() !== 'GET') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
   const name = match[1], csv = Boolean(match[2]);
@@ -69,6 +78,7 @@ export async function reports(request: ApiRequest, repo: TenantRepository, now: 
     try { await track({event: 'report_exported', report: name === 'inventory' ? 'aging' : name === 'leads' ? 'pipeline' : name as 'sales' | 'accounting'}); } catch { /* Export remains usable. */ }
     return result;
   };
+  if (name === 'overview') { if (csv) throw missing(); return response(200, {data: await overviewReport(repo, now, dateRange(request.query))}); }
   if (name === 'fixed-ops') { if (csv) throw missing(); return response(200, {data:await fixedOpsReport(repo, dateRange(request.query))}); }
   if (name === 'sales' || name === 'accounting') {
     const data = await salesReport(repo, dateRange(request.query));
@@ -89,4 +99,17 @@ export async function fixedOpsReport(repo: TenantRepository, range: ReturnType<t
   for (const sale of sales) { const part = await repo.crmGet('part',sale.partId); if (!part) throw missing(); partsCostCents += sale.quantity * part.costCents; }
   const counterTotalCents = sales.reduce((s,r) => s+r.totalCents,0);
   return {...range, roCount:ros.length, laborCents, partsCents, roTotalCents:laborCents+partsCents, counterSaleCount:sales.length, counterTotalCents, partsCostCents, laborGrossCents:laborCents, partsGrossCents:partsCents+counterTotalCents-partsCostCents};
+}
+
+export async function overviewReport(repo: TenantRepository, now: Date, range: ReturnType<typeof dateRange>): Promise<OverviewReport> {
+  const section = async <T>(load: () => Promise<T>): Promise<OverviewSection<T>> => {
+    try { return {status: 'fulfilled', value: await load()}; }
+    catch { return {status: 'rejected', reason: 'The report could not be loaded. Please retry.'}; }
+  };
+  const [inventory, sales, leads] = await Promise.all([
+    section(async () => { const {totals, buckets} = await inventoryReport(repo, now); return {totals, buckets}; }),
+    section(async () => { const {totals, trend, from, to} = await salesReport(repo, range); return {totals, trend, from, to}; }),
+    section(async () => { const {byStage, total} = await leadReport(repo); return {byStage, total}; }),
+  ]);
+  return {inventory, sales, leads};
 }

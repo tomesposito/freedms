@@ -81,15 +81,59 @@ test('Revoked grant refuses the next MCP tool request with exact challenge while
   await assert.rejects(repo.saveMcpGrant({...revoked, revokedAt: null, version: 2}, 1), {code: 'CONFLICT'});
   assert.ok((await repo.mcpGrant(grant.id))?.revokedAt);
 });
-test('Grant save/read and registration lookup failures are best effort; unauthorized users record nothing', async () => {
+test('Grant save and registration lookup failures are best effort; unauthorized users record nothing', async () => {
   const s = await setup();
-  for (const method of ['saveMcpGrant', 'mcpGrants', 'mcpRegistration']) {
+  for (const method of ['saveMcpGrant', 'mcpRegistration']) {
     const repos: RepositoryFactory = {tenantForSubject: sub => s.repositories.tenantForSubject(sub), forTenant: tenant => ({...s.repositories.forTenant(tenant), [method]: async () => {throw Error('Storage unavailable');}})};
     const result = await s.use('staff-A', 'freedms/mcp.read', s.config.clientId, s.handler(repos));
     assert.ok(JSON.parse(result.body).result.tools.length > 0);
   }
   const result = await s.use('unknown'); assert.deepEqual(JSON.parse(result.body).result.tools, []);
   assert.ok(!(await s.repositories.forTenant('A').mcpGrants()).some(g => g.userId === 'unknown'));
+});
+test('Unreadable revocation state refuses MCP requests with the revoked challenge', async () => {
+  const s = await setup(); await s.use();
+  const [grant] = await s.repositories.forTenant('A').mcpGrants();
+  let writes = 0;
+  const repos: RepositoryFactory = {tenantForSubject: sub => s.repositories.tenantForSubject(sub), forTenant: tenant => ({...s.repositories.forTenant(tenant),
+    mcpGrants: async () => {throw Error('Storage unavailable');},
+    saveMcpGrant: async () => {writes++; throw Error('Unexpected bookkeeping');}})};
+  for (const revoked of [false, true]) {
+    if (revoked) await s.rest(`/ai-connections/${grant.id}/revoke`, 'POST');
+    for (const method of ['tools/list', 'tools/call']) {
+      const denied = await s.use('staff-A', 'freedms/mcp.read', s.config.clientId, s.handler(repos), method);
+      assert.equal(denied.statusCode, 401);
+      assert.deepEqual(JSON.parse(denied.body), {error: {code: 'UNAUTHORIZED', message: 'Sign in to continue.'}});
+      assert.equal(denied.headers['www-authenticate'], 'Bearer resource_metadata="https://app.example.test/api/.well-known/oauth-protected-resource"');
+    }
+  }
+  assert.equal(writes, 0);
+});
+test('Bookkeeping conflicts reread revocation and fail closed if the reread fails', async () => {
+  for (const outcome of ['revoked', 'active', 'unreadable']) {
+    const s = await setup(); await s.use(); s.advance(3_600_000);
+    const repo = s.repositories.forTenant('A'), [grant] = await repo.mcpGrants();
+    let reads = 0, writes = 0;
+    const repos: RepositoryFactory = {tenantForSubject: sub => s.repositories.tenantForSubject(sub), forTenant: tenant => ({...s.repositories.forTenant(tenant),
+      mcpGrants: async () => {
+        reads++;
+        if (reads === 2 && outcome === 'unreadable') throw Error('Storage unavailable');
+        return repo.mcpGrants();
+      },
+      saveMcpGrant: async () => {
+        writes++;
+        if (outcome === 'revoked') await s.rest(`/ai-connections/${grant.id}/revoke`, 'POST');
+        throw Object.assign(Error('Version conflict'), {code: 'CONFLICT'});
+      }})};
+    const result = await s.use('staff-A', 'freedms/mcp.read', s.config.clientId, s.handler(repos));
+    assert.equal(reads, 2); assert.equal(writes, 1);
+    if (outcome === 'active') assert.ok(JSON.parse(result.body).result.tools.length > 0);
+    else {
+      assert.equal(result.statusCode, 401);
+      assert.deepEqual(JSON.parse(result.body), {error: {code: 'UNAUTHORIZED', message: 'Sign in to continue.'}});
+      assert.equal(result.headers['www-authenticate'], 'Bearer resource_metadata="https://app.example.test/api/.well-known/oauth-protected-resource"');
+    }
+  }
 });
 test('Grant repositories reject scope/conflicting writes; Dynamo writes grants and audit atomically and refreshes without audit', async () => {
   const s = await setup(); await s.use(); const repo = s.repositories.forTenant('A'), [grant] = await repo.mcpGrants();

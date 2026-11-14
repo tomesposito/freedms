@@ -35,3 +35,58 @@ test('command search: session auth, staff visibility, grouped caps, tenant isola
   assert.equal(repositories.eventsForTest('A').length, events, 'search never writes or charges');
   assert.equal((await handler({method: 'GET', path: '/search', query: {q: 'match'}, claims: {sub: 'outsider', 'custom:tenant_id': 'A'} as AuthClaims})).statusCode, 403);
 });
+
+test('bounded command search never invokes full lists and empty queries perform no reads', async () => {
+  const {searchRecords} = await import('../src/repository.js');
+  const repo = new MemoryRepositories().forTenant('A');
+  let reads = 0;
+  const bounded = new Proxy(repo, {get(target, key, receiver) {
+    if (key === 'crmList' || key === 'list') return () => { throw Error('unbounded search read'); };
+    if (key === 'commandSearch' || key === 'listPage') return async (...args: unknown[]) => {
+      reads++;
+      return (Reflect.get(target, key, receiver) as (...args: unknown[]) => unknown)(...args);
+    };
+    return Reflect.get(target, key, receiver);
+  }});
+  assert.deepEqual(await searchRecords(bounded, '  '), {vehicles: [], people: [], deals: []});
+  assert.equal(reads, 0);
+  assert.deepEqual(await searchRecords(bounded, 'absent'), {vehicles: [], people: [], deals: []});
+  assert.equal(reads, 2);
+});
+
+test('Dynamo bounded command search stops prefix paging at five and resolves joins with point Gets', async () => {
+  const {DynamoRepositories} = await import('../src/dynamo.js');
+  const {GetCommand, QueryCommand} = await import('@aws-sdk/lib-dynamodb');
+  const queries: string[] = [], gets: string[] = [];
+  const customers = Array.from({length: 6}, (_, i) => ({kind: 'customer', tenantId: 'A', id: `c${i}`, name: `Match ${i}`, phone: '', email: ''}));
+  const deals = customers.map((c, i) => ({kind: 'deal', tenantId: 'A', id: `d${i}`, customerId: c.id, vehicleId: `v${i}`, status: 'working'}));
+  const leads = customers.map((c, i) => ({kind: 'lead', tenantId: 'A', id: `l${i}`, customerId: c.id}));
+  const vehicles = customers.map((_, i) => ({tenantId: 'A', id: `v${i}`, stockNumber: `stock${i}`}));
+  const client = {send: async (command: InstanceType<typeof GetCommand> | InstanceType<typeof QueryCommand>) => {
+    if (command instanceof GetCommand) {
+      assert.equal(command.input.Key?.PK, 'TENANT#A');
+      const key = String(command.input.Key?.SK); gets.push(key);
+      const data = [...customers, ...deals, ...leads, ...vehicles].find(r => `${'kind' in r ? r.kind.toUpperCase() : 'VEHICLE'}#${r.id}` === key);
+      return data ? {Item: {data}} : {};
+    }
+    assert.ok(command instanceof QueryCommand);
+    assert.equal(command.input.ExpressionAttributeValues?.[':pk'], 'TENANT#A');
+    const prefix = String(command.input.ExpressionAttributeValues?.[':prefix']);
+    queries.push(prefix);
+    const page = command.input.ExclusiveStartKey ? 1 : 0;
+    const rows = prefix === 'CUSTOMER#' ? customers : prefix === 'LEAD#' ? leads : deals;
+    // Three pages exist, but the third must never be fetched.
+    assert.equal(page === 1 && command.input.ExclusiveStartKey?.SK === 'third', false);
+    return {Items: rows.slice(page * 3, page * 3 + 3).map(data => ({data})), LastEvaluatedKey: {PK: 'TENANT#A', SK: page ? 'third' : 'second'}};
+  }} as unknown as import('@aws-sdk/lib-dynamodb').DynamoDBDocumentClient;
+  const rows = await new DynamoRepositories('table', client).forTenant('A').commandSearch('match');
+  assert.deepEqual(rows.people.map(p => p.customer.id), customers.slice(0, 5).map(c => c.id));
+  assert.deepEqual(rows.people.map(p => p.lead?.id), leads.slice(0, 5).map(l => l.id));
+  assert.deepEqual(rows.people.map(p => p.deal?.id), deals.slice(0, 5).map(d => d.id));
+  assert.deepEqual(rows.deals.map(p => p.deal.id), deals.slice(0, 5).map(d => d.id));
+  assert.equal(queries.filter(p => p === 'CUSTOMER#').length, 2);
+  assert.equal(queries.filter(p => p === 'LEAD#').length, 2);
+  assert.equal(queries.filter(p => p === 'DEAL#').length, 4, 'two bounded passes: person hrefs and matching deals');
+  assert.equal(gets.length, 20);
+  assert.ok(gets.every(key => !key.endsWith('5')));
+});
