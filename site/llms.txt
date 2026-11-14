@@ -21,6 +21,7 @@ The hosted service at app.freedms.co is in an invite-only pilot. The code is pub
 - Tracking reconditioning in freeDMS: https://freedms.co/recon.html
 - Deal paperwork and the title file in freeDMS: https://freedms.co/paperwork.html
 - Which states does freeDMS support? None, and all of them: https://freedms.co/states.html
+- Switching dealer management software — what moves, what does not: https://freedms.co/switching.html
 - Homepage: https://freedms.co/
 - What dealer management software costs: https://freedms.co/dms-cost.html
 - Free dealer management software for independent dealers: https://freedms.co/free-dealer-management-software.html
