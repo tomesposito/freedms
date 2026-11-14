@@ -93,6 +93,7 @@ Resources:
                   - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/paperwork.html'
                   - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/recon.html'
                   - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/states.html'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/switching.html'
 Outputs:
   OperationsBucket: {Value: !Ref Operations}
   DeployRoleArn: {Value: !GetAtt DeployRole.Arn}
