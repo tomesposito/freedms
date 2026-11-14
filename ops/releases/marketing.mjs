@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync} from 'node:fs';
 
 export const marketingPages = ['index.html', 'dms-cost.html', 'free-dealer-management-software.html',
-  'bhph.html', 'compare.html', 'paperwork.html', 'recon.html', 'states.html'];
+  'bhph.html', 'compare.html', 'paperwork.html', 'recon.html', 'states.html', 'switching.html'];
 export const marketingDocuments = ['robots.txt', 'sitemap.xml', 'llms.txt', ...marketingPages.filter(page => page !== 'index.html')];
 
 // Content-addressed assets let CloudFront cache screenshots without serving an old

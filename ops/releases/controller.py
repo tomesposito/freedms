@@ -18,7 +18,7 @@ import zipfile
 MARKETING_DOCUMENTS = {f'marketing/{name}': content_type for name, content_type in [
     ('robots.txt', 'text/plain'), ('sitemap.xml', 'application/xml'), ('llms.txt', 'text/plain'),
     ('dms-cost.html', 'text/html'), ('free-dealer-management-software.html', 'text/html')]}
-MARKETING_DOCUMENTS.update({f'marketing/{name}.html': 'text/html' for name in ['bhph', 'compare', 'paperwork', 'recon', 'states']})
+MARKETING_DOCUMENTS.update({f'marketing/{name}.html': 'text/html' for name in ['bhph', 'compare', 'paperwork', 'recon', 'states', 'switching']})
 
 
 def require(condition, message):

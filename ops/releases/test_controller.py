@@ -63,7 +63,7 @@ class PackageTests(unittest.TestCase):
             c.frontend_files(b'', entries)
 
     def test_unlisted_marketing_files_and_app_copies_are_rejected(self):
-        for path in ['robots.txt', 'sitemap.xml', 'llms.txt', 'dms-cost.html', 'free-dealer-management-software.html', 'bhph.html', 'compare.html', 'paperwork.html', 'recon.html', 'states.html', 'marketing/unknown.html', 'marketing/assets/image.gif']:
+        for path in ['robots.txt', 'sitemap.xml', 'llms.txt', 'dms-cost.html', 'free-dealer-management-software.html', 'bhph.html', 'compare.html', 'paperwork.html', 'recon.html', 'states.html', 'switching.html', 'marketing/unknown.html', 'marketing/assets/image.gif']:
             with self.subTest(path=path), self.assertRaisesRegex(RuntimeError, 'Unsafe frontend path'):
                 c.frontend_files(b'', [{'path': name, 'size': 1, 'sha256': c.digest(b'x')} for name in ['index.html', path]])
 
