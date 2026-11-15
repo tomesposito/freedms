@@ -65,9 +65,11 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
 }
 export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {stripe?: StripeBilling; appBaseUrl?: string; assistantSeedLocalPlan?: boolean; assistantProvider?: AssistantProvider; assistantEntitlement?: AssistantEntitlement; registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
   const sender = options.hosted ? guardHostedWebhookSender(webhookSender ?? hostedWebhookSender()) : webhookSender ?? fetchWebhookSender;
-  const postCommit = async (repo: TenantRepository) => {
+  const postCommit = async (repo: TenantRepository, defer = false) => {
     try {
-      if (options.hosted) await dispatchWebhooks(repo, sender, now(), {maxDeliveries: 5});
+      // Mutations already committed their outbox atomically. Dispatch claims deliveries
+      // durably; the scheduled EventBridge drain covers missed in-process schedules.
+      if (options.hosted && !defer) await dispatchWebhooks(repo, sender, now(), {maxDeliveries: 5});
       else scheduleWebhookDispatch(repo, sender, now());
     } catch (error) { console.error('Webhook dispatch failed', error instanceof Error ? error.name : 'UnknownError'); }
   };
@@ -261,7 +263,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       };
       const result = await execute();
       if (result.statusCode >= 200 && result.statusCode < 300 && ['POST', 'PUT', 'DELETE'].includes(method) && !/^\/webhooks(\/|$)/.test(path) && !/^\/(account|admin)\/mfa(\/|$)/.test(path)) {
-        try { await postCommit(repository); } catch { /* Delivery failures must never fail a committed mutation. */ }
+        try { await postCommit(repository, request.agent === true || (method === 'POST' && path === '/assistant/chat')); } catch { /* Delivery failures must never fail a committed mutation. */ }
       }
       return compressResponse(result, request.acceptEncoding);
     } catch (error) { return errorResponse(error); }

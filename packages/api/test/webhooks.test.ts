@@ -483,3 +483,26 @@ test('hosted schedule routes through the API Lambda to the bounded drain without
   assert.match(lambda, /return webhookDrainHandler\(\)/);
   assert.match(lambda, /webhookDrainHandler = async \(\) => drainWebhooks\(repositories, hostedWebhookSender\(\), new Date\(\)\)/);
 });
+
+test('hosted agent write returns before webhook sender and leaves durable drainable delivery', {timeout: 2000}, async () => {
+  const started = deferred(), release = deferred();
+  let attempts = 0;
+  const {endpoint, handler, repositories} = await setup(async () => {
+    attempts++; started.resolve(); await release.promise; return {status: 204};
+  }, true);
+  await endpoint('A', 'https://example.invalid/hook');
+  const tokens = new LocalTokens('test-secret-must-be-at-least-32-characters', () => now.getTime());
+  const result = await handler({method: 'POST', path: '/vehicles', agent: true,
+    claims: tokens.verify(tokens.issue('user', 'A')), body: JSON.stringify(input)});
+  assert.equal(result.statusCode, 201);
+  const repo = repositories.forTenant('A');
+  assert.equal((await repo.events()).filter(event => event.type === 'vehicle.created').length, 1);
+  assert.equal((await repositories.forTenant('B').webhookDeliveries()).length, 0);
+  await started.promise;
+  assert.equal(attempts, 1);
+  assert.equal((await repo.webhookDeliveries())[0].status, 'pending');
+  release.resolve();
+  await waitFor(async () => (await repo.webhookDeliveries())[0]?.status === 'delivered');
+  await dispatchWebhooks(repo, async () => { assert.fail('Durable delivery must not be repeated'); }, now);
+  assert.equal((await repo.webhookDeliveries())[0].status, 'delivered');
+});

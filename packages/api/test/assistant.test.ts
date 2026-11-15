@@ -5,6 +5,8 @@ import { BedrockAssistantProvider, UnconfiguredAssistantProvider, assistantProvi
 import { ASSISTANT_TURN_BUDGET_MS, ASSISTANT_SETTLEMENT_RESERVE_MS, assistantToolSpecs, runAssistant } from '../src/assistant.js';
 import { createHandler } from '../src/handler.js';
 import { MemoryRepositories } from '../src/memory.js';
+import { executeTool } from '../src/mcp/execute.js';
+import { tools } from '../src/mcp/tools.js';
 import { LocalAssistantProvider } from '../src/local-assistant.js';
 
 test('Assistant template defaults off and scopes invocation to the configured model', async () => {
@@ -289,4 +291,67 @@ test('Bedrock caps each call at 15s or the shorter caller timeout without waitin
   const provider = new BedrockAssistantProvider('offline', {send: async () => ({$metadata: {}, stopReason: 'end_turn', usage: {inputTokens: 0, outputTokens: 0, totalTokens: 0}, metrics: {latencyMs: 0}, output: {message: reply()}})});
   for (const options of [undefined, {timeoutMs: 20000}, {timeoutMs: 1234}]) await provider.converse(user, assistantToolSpecs, options);
   assert.deepEqual(durations, [15000, 15000, 1234]);
+});
+
+test('outstanding tool is bounded by a real deadline and late rejection is observed', {timeout: 2000}, async () => {
+  let now = 0, reject!: (error: Error) => void;
+  const meter = trackingMeter();
+  const provider = new ScriptedProvider([{role: 'assistant', content: [...call().content!, ...call('search_vehicles', {}, 'second').content!]}]);
+  let executions = 0;
+  const result = await runAssistant(user, provider, claims, async () => {
+    executions++;
+    if (executions === 1) { now = workBudget - 10; return {statusCode: 200, headers: {}, body: '{}'}; }
+    return new Promise((_resolve, fail) => { reject = fail; });
+  }, meter, {now: () => now});
+  assert.match(result.reply, /ran out of time/);
+  assert.deepEqual(result.transcript, [{tool: 'search_vehicles', ok: true}]); assert.equal(result.creditsUsed, 1);
+  assert.deepEqual(meter.charges, ['search_vehicles']); assert.equal(meter.finishes, 1);
+  reject(Error('late private failure'));
+  await new Promise(resolve => setImmediate(resolve));
+});
+test('hanging action and answer settlement stop at total deadline and finish once', {timeout: 2000}, async () => {
+  for (const answer of [false, true]) {
+    let now = 0, attempts = 0;
+    const meter = trackingMeter();
+    meter.charge = async () => { attempts++; return new Promise(() => {}); };
+    const provider: AssistantProvider = {configured: true, converse: async () => answer ? reply() : call()};
+    if (answer) meter.beforeWrite = async () => { now = ASSISTANT_TURN_BUDGET_MS - 10; return undefined; };
+    const result = await runAssistant(user, provider, claims, async () => {
+      now = workBudget;
+      return {statusCode: 200, headers: {}, body: '{}'};
+    }, meter, {now: () => {
+      const value = now;
+      // Complete the tool at the work boundary, then leave 10ms for settlement.
+      if (!answer && now === workBudget) now = ASSISTANT_TURN_BUDGET_MS - 10;
+      return value;
+    }});
+    assert.match(result.reply, answer ? /answer.*withheld/ : /settlement could not be confirmed/);
+    assert.equal(attempts, 1); assert.equal(meter.finishes, 1); assert.equal(result.creditsUsed, 0);
+  }
+});
+test('hanging finish falls back to locally tracked settled credits', {timeout: 2000}, async () => {
+  let now = 0, finishes = 0;
+  const meter = trackingMeter();
+  meter.finish = async () => { finishes++; return new Promise(() => {}); };
+  const provider = new ScriptedProvider([call(), reply()]);
+  const originalCharge = meter.charge;
+  meter.charge = async action => { now = ASSISTANT_TURN_BUDGET_MS - 10; return originalCharge(action); };
+  const result = await runAssistant(user, provider, claims, async () => ({statusCode: 200, headers: {}, body: '{}'}), meter, {now: () => now});
+  assert.equal(result.creditsUsed, 1); assert.equal(finishes, 1);
+});
+
+test('aborted tools skip initial dispatch and follow-up writes', async () => {
+  const tool = tools.find(tool => tool.name === 'set_vehicle_status')!;
+  for (const initiallyAborted of [false, true]) {
+    const controller = new AbortController();
+    let requests = 0;
+    if (initiallyAborted) controller.abort();
+    const result = await executeTool(tool, {id: 'vehicle', status: 'sold', version: 1}, claims, async () => {
+      requests++; controller.abort();
+      return {statusCode: 200, headers: {}, body: '{"data":{}}'};
+    }, {signal: controller.signal});
+    assert.equal(requests, initiallyAborted ? 0 : 1);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /aborted/);
+  }
 });
