@@ -6,7 +6,8 @@ import { tools } from './mcp/tools.js';
 import { object, onlyKeys, invalid } from './validation.js';
 import { ApiError } from './errors.js';
 
-export const DEFAULT_ASSISTANT_OVERAGE_CAP = 500;
+import { DEFAULT_ASSISTANT_OVERAGE_CAP } from './assistant-settlement.js';
+export { DEFAULT_ASSISTANT_OVERAGE_CAP } from './assistant-settlement.js';
 export const DEFAULT_ASSISTANT_CREDIT_CAP = 25;
 export const PHOTO_PRICE = {actionClass: 'photo', credits: 3} as const;
 export const ANSWER_PRICE = {actionClass: 'answer', credits: 1} as const;
