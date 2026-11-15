@@ -427,7 +427,7 @@ export function assertAssistantCycle(tenantId: string, record: AssistantCycle, e
 }
 export function assertAssistantLedger(tenantId: string, record: AssistantLedgerEntry) {
   assertScope(tenantId, record);
-  const prices = {read: 1, write: 2, photo: 3, answer: 1};
+  const prices = {read: 1, write: 2, photo: 3, answer: 1, usage: 0};
   if (prices[record.actionClass] !== record.credits || !record.action || !record.actorId ||
       !Number.isFinite(Date.parse(record.cycleStart)) || !Number.isFinite(Date.parse(record.createdAt)) ||
       [record.inputTokens, record.outputTokens, record.cacheReadTokens, record.cacheWriteTokens].some(n => !Number.isSafeInteger(n) || n < 0)) throw new Error('Invalid assistant ledger');

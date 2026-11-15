@@ -38,6 +38,7 @@ export interface AssistantMeter {
   stop(price: {credits: number}): string | undefined;
   beforeWrite(price: {credits: number}): Promise<string | undefined>;
   charge(action: string, price: Pick<AssistantLedgerEntry, 'actionClass' | 'credits'>, usage?: AssistantTokenUsage): Promise<string | undefined>;
+  recordUsage?(usage: AssistantTokenUsage): Promise<void>;
   finish(): Promise<number>;
 }
 export class AssistantBilling implements AssistantEntitlement {
@@ -121,7 +122,7 @@ export class AssistantBilling implements AssistantEntitlement {
       ? 'The assistant hit the credit cap for this message. Please send another message to continue.'
       : pool.balanceCredits + (pool.overageEnabled ? pool.overageCapCredits : 0) < price.credits
         ? pool.overageEnabled ? 'The assistant reached the monthly overage cap. Raise the cap or wait for the next cycle to continue.' : 'The assistant credit pool is exhausted. Add credits or wait for the next cycle to continue.' : undefined;
-    return {
+    const meter: AssistantMeter = {
       // Reads use the last balance, reduced after each settlement. Writes refresh the fence.
       stop,
       beforeWrite: async price => {
@@ -161,8 +162,13 @@ export class AssistantBilling implements AssistantEntitlement {
             : `The action ${action} DID execute successfully, but its credit settlement could not be confirmed. No further actions ran. Review the completed action before retrying.`;
         }
       },
+      recordUsage: async usage => {
+        if (Object.values(usage).some(tokens => tokens !== 0))
+          await meter.charge('provider-usage', {actionClass: 'usage', credits: 0}, usage);
+      },
       finish: async () => total,
     };
+    return meter;
   }
 
   async admin(actor: Actor, waitingListOnly = false) {
@@ -234,8 +240,9 @@ export class AssistantBilling implements AssistantEntitlement {
       if (actor.role !== 'admin' && row.actorId !== actor.userId) continue;
       const sum = byUser.get(row.actorId) ?? {userId: row.actorId, name: names.get(row.actorId) ?? row.actorId, lastUsedAt: null, actions: 0, credits: 0, skills: {}, ...zeroUsage};
       if (!sum.lastUsedAt || row.createdAt > sum.lastUsedAt) sum.lastUsedAt = row.createdAt;
-      sum.actions++; sum.credits += row.credits;
-      if (row.action.startsWith('skill:')) {
+      if (row.actionClass !== 'usage') sum.actions++;
+      sum.credits += row.credits;
+      if (row.actionClass !== 'usage' && row.action.startsWith('skill:')) {
         const skill = row.action.split(':')[1];
         const usage = sum.skills[skill] ?? {actions: 0, credits: 0};
         usage.actions++; usage.credits += row.credits; sum.skills[skill] = usage;

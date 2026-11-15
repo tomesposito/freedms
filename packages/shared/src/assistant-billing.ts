@@ -25,5 +25,5 @@ export interface AssistantCycle {
 export interface AssistantTokenUsage { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
 export interface AssistantLedgerEntry extends AssistantTokenUsage {
   id: string; tenantId: string; actorId: string; action: string;
-  actionClass: 'read' | 'write' | 'photo' | 'answer'; credits: number; cycleStart: string; createdAt: string;
+  actionClass: 'read' | 'write' | 'photo' | 'answer' | 'usage'; credits: number; cycleStart: string; createdAt: string;
 }

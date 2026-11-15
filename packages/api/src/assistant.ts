@@ -45,6 +45,13 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
   };
   const totalRemaining = () => deadline - now();
   let settledCredits = 0;
+  let usage = zeroUsage;
+  const recordUsage = async () => {
+    const pending = usage; usage = zeroUsage;
+    if (!meter?.recordUsage || !Object.values(pending).some(tokens => tokens !== 0)) return;
+    // Cost telemetry is best effort, using only the remaining settlement budget.
+    try { await bounded(() => meter.recordUsage!(pending), totalRemaining()); } catch { /* Preserve delivery. */ }
+  };
   const charge = async (action: string, price: Parameters<AssistantMeter['charge']>[1], usage: typeof zeroUsage) => {
     if (!meter) return;
     const result = await bounded(() => meter.charge(action, price, usage), totalRemaining());
@@ -61,6 +68,7 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
   };
   const history = structuredClone(messages), transcript: {tool: string; ok: boolean}[] = [];
   const finish = async (reply: string) => {
+    await recordUsage();
     // Call once even when no budget remains; never wait beyond the total deadline.
     const pending = meter?.finish();
     if (pending) void pending.catch(() => {});
@@ -79,9 +87,9 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
         if (remainingWork() <= 0) return finish(timeLimit);
         throw error;
       }
+      usage = provider.lastUsage ? {...provider.lastUsage} : zeroUsage;
       if (remainingWork() <= 0) return finish(timeLimit);
       const calls = answer.content?.flatMap(block => block.toolUse ? [block.toolUse] : []) ?? [];
-      let usage = provider.lastUsage ? {...provider.lastUsage} : zeroUsage;
       if (!calls.length) {
         // D-16 (2026-11-13): per-action pricing only. The final answer is charged
         // as a no-tool answer (1 credit) only when no action charge settled this
@@ -90,7 +98,7 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
         if (!settledActions) {
           const stop = await beforeWrite(ANSWER_PRICE);
           if (stop) return finish(stop);
-          const settlement = await charge('answer', ANSWER_PRICE, usage);
+          const settlement = await charge('answer', ANSWER_PRICE, usage); usage = zeroUsage;
           if (settlement) return finish(settlement);
         }
         return finish(answer.content?.map(block => block.text ?? '').join('\n') ?? '');
@@ -121,10 +129,11 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
         const text = raw.length > 16000 ? raw.slice(0, 16000) + '\n[Tool result truncated]' : raw;
         results.push({toolResult: {toolUseId: call.toolUseId!, status: result.isError ? 'error' : 'success', content: [{text}]}});
       }
+      await recordUsage();
       history.push({role: 'user', content: results});
     }
     return finish(stepLimit);
-  } finally { clearTimeout(workTimer); }
+  } finally { clearTimeout(workTimer); await recordUsage(); }
 }
 export async function assistantChat(request: ApiRequest, principal: Principal, provider: AssistantProvider,
   entitlement: AssistantEntitlement, execute: (request: ApiRequest) => Promise<ApiResponse>) {
