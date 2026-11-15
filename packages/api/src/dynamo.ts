@@ -450,8 +450,9 @@ export class DynamoRepositories implements RepositoryFactory {
       },
       commandSearch: async search => {
         const client = this.client, table = this.table;
-        // Sparse/no matches still walk all pages. Retention is bounded, and each
-        // iterator stops requesting pages as soon as its selection is full.
+        // Each pass examines at most COMMAND_SEARCH_MAX_EXAMINED_PER_PASS rows;
+        // the deals pass performs at most COMMAND_SEARCH_MAX_JOIN_GETS point Gets.
+        // Iterators stop requesting pages once the selection stops pulling.
         async function* rows(kind: 'customer' | 'lead' | 'deal') {
           let cursor: Record<string, unknown> | undefined;
           do {
@@ -534,7 +535,8 @@ export class DynamoRepositories implements RepositoryFactory {
       tenant: () => get<Tenant>('PROFILE'),
       get: id => get<Vehicle>(`VEHICLE#${requireId(id)}`),
       list,
-      // Still reads every VEHICLE# query page; pagination only bounds the returned rows.
+      // Still reads every VEHICLE# query page to preserve total counts. Bounding
+      // the vehicle scan needs a different query strategy and is out of scope here.
       listPage: async query => vehiclePage(await list(query), query),
       create: async (v, event) => {
         assertScope(tenantId, v); assertEvent(v.id, v.version, event, 'vehicle.created');

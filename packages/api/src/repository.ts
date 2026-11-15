@@ -453,7 +453,10 @@ export interface CommandSearchRows {
   deals: {deal: Deal; customer?: Customer; vehicle?: Vehicle}[];
 }
 
-/** Consume repository order without retaining rejected rows or full join tables. */
+export const COMMAND_SEARCH_MAX_EXAMINED_PER_PASS = 100;
+export const COMMAND_SEARCH_MAX_JOIN_GETS = 50;
+
+/** Consume bounded repository order, retaining only bounded join caches. */
 export async function commandSearchSelection(
   search: string,
   rows: (kind: 'customer' | 'lead' | 'deal') => AsyncIterable<CrmEntity> | Iterable<CrmEntity>,
@@ -462,7 +465,18 @@ export async function commandSearchSelection(
   relatedGet: (kind: 'lead' | 'deal', id: string) => Promise<Lead | Deal | undefined>,
 ): Promise<CommandSearchRows> {
   const result: CommandSearchRows = {people: [], deals: []};
-  for await (const row of rows('customer')) {
+  // Without a search index, bounded passes deliberately return partial results.
+  async function* boundedRows(kind: 'customer' | 'lead' | 'deal') {
+    let examined = 0;
+    for await (const row of rows(kind)) {
+      yield row;
+      if (++examined === COMMAND_SEARCH_MAX_EXAMINED_PER_PASS) break;
+    }
+  }
+  const customers = new Map<string, Customer | undefined>();
+  const vehicles = new Map<string, Vehicle | undefined>();
+  for await (const row of boundedRows('customer')) {
+    if (row.kind === 'customer') customers.set(row.id, row);
     if (row.kind !== 'customer' || ![row.name, row.phone, row.email].join(' ').toLowerCase().includes(search)) continue;
     result.people.push({customer: row});
     if (result.people.length === 5) break;
@@ -470,7 +484,7 @@ export async function commandSearchSelection(
   for (const kind of ['lead', 'deal'] as const) {
     const pending = new Set(result.people.map(p => p.customer.id));
     if (!pending.size) continue;
-    for await (const row of rows(kind)) {
+    for await (const row of boundedRows(kind)) {
       if ((row.kind !== 'lead' && row.kind !== 'deal') || !pending.has(row.customerId)) continue;
       const person = result.people.find(p => p.customer.id === row.customerId)!;
       // Discover the first reference in list order, then resolve only that row.
@@ -481,13 +495,28 @@ export async function commandSearchSelection(
       if (!pending.size) break;
     }
   }
-  for await (const row of rows('deal')) {
+  let joinGets = 0;
+  // Deals carry neither customer name nor stock number, so joins must precede
+  // matching. Reuse examined customers and cache even missing joins within budget.
+  for await (const row of boundedRows('deal')) {
     if (row.kind !== 'deal') continue;
-    const customer = await customerGet(row.customerId);
-    const vehicle = await vehicleGet(row.vehicleId);
-    if (![customer?.name, vehicle?.stockNumber].join(' ').toLowerCase().includes(search)) continue;
-    result.deals.push({deal: row, customer, vehicle});
-    if (result.deals.length === 5) break;
+    if (!customers.has(row.customerId)) {
+      if (joinGets === COMMAND_SEARCH_MAX_JOIN_GETS) break;
+      joinGets++;
+      customers.set(row.customerId, await customerGet(row.customerId));
+    }
+    if (!vehicles.has(row.vehicleId)) {
+      if (joinGets === COMMAND_SEARCH_MAX_JOIN_GETS) break;
+      joinGets++;
+      vehicles.set(row.vehicleId, await vehicleGet(row.vehicleId));
+    }
+    const customer = customers.get(row.customerId);
+    const vehicle = vehicles.get(row.vehicleId);
+    if ([customer?.name, vehicle?.stockNumber].join(' ').toLowerCase().includes(search)) {
+      result.deals.push({deal: row, customer, vehicle});
+      if (result.deals.length === 5) break;
+    }
+    if (joinGets === COMMAND_SEARCH_MAX_JOIN_GETS) break;
   }
   return result;
 }

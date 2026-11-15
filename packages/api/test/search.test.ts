@@ -87,6 +87,79 @@ test('Dynamo bounded command search stops prefix paging at five and resolves joi
   assert.equal(queries.filter(p => p === 'CUSTOMER#').length, 2);
   assert.equal(queries.filter(p => p === 'LEAD#').length, 2);
   assert.equal(queries.filter(p => p === 'DEAL#').length, 4, 'two bounded passes: person hrefs and matching deals');
-  assert.equal(gets.length, 20);
+  assert.equal(gets.length, 15, 'examined customers are reused without point Gets');
   assert.ok(gets.every(key => !key.endsWith('5')));
+});
+
+import {commandSearchSelection, COMMAND_SEARCH_MAX_EXAMINED_PER_PASS as MAX_ROWS, COMMAND_SEARCH_MAX_JOIN_GETS as MAX_GETS} from '../src/repository.js';
+import type {CrmEntity, Customer, Deal} from '@freedms/shared';
+
+const searchCustomer = (i: number, name = 'Other') => ({kind: 'customer', tenantId: 'A', id: `c${i}`, name, phone: '', email: ''} as Customer);
+const searchDeal = (i: number, customerId = `c${i}`) => ({kind: 'deal', tenantId: 'A', id: `d${i}`, customerId, vehicleId: `v${i}`, status: 'working'} as Deal);
+
+test('sparse search bounds every pass and total join Gets', async () => {
+  for (const [search, size] of [['absent', 100], ['needle', 150]] as const) {
+    const customers = Array.from({length: size}, (_, i) => searchCustomer(i, i === 0 ? 'Needle' : 'Other'));
+    const deals = Array.from({length: size}, (_, i) => searchDeal(i, `outside${i}`));
+    const examined: number[] = [];
+    let gets = 0;
+    function* rows(kind: 'customer' | 'lead' | 'deal') {
+      const pass = examined.push(0) - 1;
+      for (const row of kind === 'customer' ? customers : deals.map(d => kind === 'lead' ? {kind: 'lead', tenantId: 'A', id: d.id, customerId: d.customerId} as import('@freedms/shared').Lead : d)) {
+        examined[pass]++;
+        yield row;
+      }
+    }
+    const result = await commandSearchSelection(search, rows,
+      async () => { gets++; return undefined; }, async id => { gets++; return {tenantId: 'A', id, stockNumber: 'Other'} as import('@freedms/shared').Vehicle; }, async () => undefined);
+    assert.equal(result.deals.length, 0);
+    assert.equal(result.people.length, search === 'needle' ? 1 : 0);
+    assert.equal(gets, MAX_GETS);
+    assert.ok(gets < 200);
+    assert.ok(examined.every(n => n <= MAX_ROWS));
+    assert.equal(examined[0], MAX_ROWS);
+    if (search === 'needle') assert.deepEqual(examined.slice(0, 3), [MAX_ROWS, MAX_ROWS, MAX_ROWS]);
+  }
+});
+
+test('search finds matches inside bounds and reuses examined and missing joins', async () => {
+  const customers = Array.from({length: 100}, (_, i) => searchCustomer(i, i === 60 ? 'Needle' : 'Other'));
+  const deals = Array.from({length: 10}, (_, i) => searchDeal(i, i < 3 ? 'missing' : 'c60'));
+  let customerGets = 0, vehicleGets = 0;
+  const result = await commandSearchSelection('needle', kind => kind === 'customer' ? customers : kind === 'deal' ? deals : [],
+    async () => { customerGets++; return undefined; },
+    async () => { vehicleGets++; return undefined; }, async () => undefined);
+  assert.deepEqual(result.people.map(p => p.customer.id), ['c60']);
+  assert.deepEqual(result.deals.map(p => p.deal.id), ['d3', 'd4', 'd5', 'd6', 'd7']);
+  assert.equal(customerGets, 1, 'missing customer cached; examined matching customer reused');
+  assert.equal(vehicleGets, 8);
+
+  let sharedGets = 0;
+  const shared = await commandSearchSelection('needle', kind => kind === 'deal' ? deals.map(d => ({...d, customerId: 'shared', vehicleId: 'shared'})) : [],
+    async () => { sharedGets++; return searchCustomer(999, 'Needle'); },
+    async () => { sharedGets++; return undefined; }, async () => undefined);
+  assert.equal(shared.deals.length, 5);
+  assert.equal(sharedGets, 2, 'shared customer and missing vehicle each fetched once');
+});
+
+test('Dynamo sparse search stops requesting pages at examined and join budgets', async () => {
+  const {DynamoRepositories} = await import('../src/dynamo.js');
+  const {GetCommand, QueryCommand} = await import('@aws-sdk/lib-dynamodb');
+  const pageSize = 10, queries: string[] = [];
+  let gets = 0;
+  const client = {send: async (command: InstanceType<typeof GetCommand> | InstanceType<typeof QueryCommand>) => {
+    if (command instanceof GetCommand) { gets++; return {}; }
+    assert.equal(command.input.ExpressionAttributeValues?.[':pk'], 'TENANT#A');
+    const prefix = String(command.input.ExpressionAttributeValues?.[':prefix']);
+    queries.push(prefix);
+    const start = Number(command.input.ExclusiveStartKey?.offset ?? 0);
+    const data: CrmEntity[] = Array.from({length: pageSize}, (_, i) => prefix === 'CUSTOMER#' ? searchCustomer(start + i) : searchDeal(start + i));
+    return {Items: data.map(data => ({data})), LastEvaluatedKey: {offset: start + pageSize}};
+  }} as unknown as import('@aws-sdk/lib-dynamodb').DynamoDBDocumentClient;
+  const result = await new DynamoRepositories('table', client).forTenant('A').commandSearch('absent');
+  assert.deepEqual(result, {people: [], deals: []});
+  assert.equal(queries.filter(p => p === 'CUSTOMER#').length, Math.ceil(MAX_ROWS / pageSize));
+  assert.equal(queries.filter(p => p === 'DEAL#').length, Math.ceil(MAX_GETS / pageSize), 'examined customers avoid customer Gets');
+  assert.equal(queries.filter(p => p === 'LEAD#').length, 0);
+  assert.equal(gets, MAX_GETS);
 });
