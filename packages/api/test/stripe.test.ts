@@ -318,3 +318,30 @@ test('a later subscription event cannot undo reassignment of already paid seats'
   await s.deliver({id: 'evt_later_subscription', customerId: 'cus_A', subscription: subscription({tier: 'assistant', quantity: 1})});
   assert.deepEqual((await repo.assistantPlan())!.licensedUserIds, ['staff']);
 });
+
+for (const action of ['answer', 'search_vehicles'] as const) test(`Stripe renewal fences an in-flight ${action} settlement and conserves carried credits`, async () => {
+  const s = await setup(); await s.activate();
+  const repo = s.repos.forTenant('A'), actor = {tenantId: 'A', userId: 'user-A', role: 'admin' as const};
+  await s.deliver({id: 'evt_boundary_topup', customerId: 'cus_A', payment: {id: 'cs_boundary', credits: 20}});
+  const billing = new AssistantBilling(repo, () => new Date('2026-02-01T00:00:00Z'));
+  const before = new AssistantBilling(repo, () => time);
+  const meter = await before.meter(actor), oldCycle = (await repo.assistantCycle(subscription().periodStart))!;
+  s.setDate('2026-02-01T00:00:00Z');
+  const renewal = subscription({periodStart: subscription().periodEnd, periodEnd: '2026-03-01T00:00:00.000Z', invoiceId: 'in_boundary'});
+  assert.equal((await s.deliver({id: 'evt_boundary_renewal', customerId: 'cus_A', subscription: renewal})).statusCode, 200);
+  const committed = (await repo.assistantCycle(renewal.periodStart))!;
+  const pool = await billing.pool(actor);
+  assert.equal(pool.topUpCredits, 20); assert.equal(pool.balanceCredits, 370);
+  const failure = await meter.charge(action, {actionClass: action === 'answer' ? 'answer' : 'read', credits: 1});
+  assert.match(failure!, action === 'answer' ? /answer has been withheld/ : /DID execute successfully.*settlement could not be confirmed/);
+  assert.equal(await meter.finish(), 0);
+  assert.deepEqual(await repo.assistantLedger(oldCycle.cycleStart), []);
+  assert.deepEqual(await repo.assistantCycle(oldCycle.id), oldCycle);
+  assert.deepEqual(await repo.assistantCycle(committed.id), committed);
+  assert.deepEqual(await repo.assistantLedger(committed.cycleStart), []);
+  assert.deepEqual(await billing.pool(actor), pool);
+  const current = await billing.meter(actor);
+  assert.equal(await current.charge('answer', {actionClass: 'answer', credits: 1}), undefined);
+  assert.equal((await repo.assistantLedger(committed.cycleStart)).length, 1);
+  assert.equal((await billing.pool(actor)).balanceCredits, 369);
+});

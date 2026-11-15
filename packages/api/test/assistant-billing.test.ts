@@ -382,7 +382,8 @@ async function settlementSetup(kind: 'memory' | 'dynamo', credits: number, overa
   }} as unknown as import('@aws-sdk/lib-dynamodb').DynamoDBDocumentClient;
   const dynamo = new DynamoRepositories('offline', client).forTenant('A');
   const repo = {...s.repo, assistantPlan: dynamo.assistantPlan, assistantCycle: dynamo.assistantCycle,
-    assistantLedger: dynamo.assistantLedger, commitAssistantLedger: dynamo.commitAssistantLedger};
+    assistantLedger: dynamo.assistantLedger, commitAssistantLedger: dynamo.commitAssistantLedger,
+    saveAssistantPlan: dynamo.saveAssistantPlan, saveAssistantCycle: dynamo.saveAssistantCycle};
   return {...s, repo, billing: new AssistantBilling(repo, () => new Date('2026-01-01T12:00:00Z'))};
 }
 
@@ -444,3 +445,21 @@ for (const kind of ['memory', 'dynamo'] as const) {
     assert.equal((await s.billing.pool(s.actor)).balanceCredits, 0);
   });
 }
+
+for (const kind of ['memory', 'dynamo'] as const) test(`${kind}: paid renewal rejects superseded ledger commits without writes and accepts the current cycle`, async () => {
+  const s = await settlementSetup(kind, 75);
+  const oldCycle = (await s.repo.assistantCycle('2026-01-01'))!, oldPlan = (await s.repo.assistantPlan())!;
+  const plan = {...oldPlan, stripeSubscriptionId: 'sub_A', paidPeriodStart: '2026-02-01', paidPeriodEnd: '2026-03-01', version: oldPlan.version + 1};
+  await s.repo.saveAssistantPlan(plan, oldPlan.version, {id: randomUUID(), tenantId: 'A', actorId: 'stripe', type: 'assistant-plan.updated', aggregateId: plan.id, aggregateVersion: plan.version, occurredAt: '2026-02-01T00:00:00Z', deliveryStatus: 'pending'});
+  const cycle = {...oldCycle, id: plan.paidPeriodStart, cycleStart: plan.paidPeriodStart, cycleEnd: plan.paidPeriodEnd, topUpCredits: 2, version: 1};
+  await s.repo.saveAssistantCycle(cycle, 0);
+  const entry = {id: 'late-debit', tenantId: 'A', actorId: 'user-A', action: 'answer', actionClass: 'answer' as const, credits: 1,
+    inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cycleStart: oldCycle.cycleStart, createdAt: '2026-02-01T00:00:00Z'};
+  await assert.rejects(s.repo.commitAssistantLedger([entry], oldCycle, plan.version), {status: 409, code: 'CONFLICT'});
+  assert.deepEqual(await s.repo.assistantLedger(oldCycle.cycleStart), []);
+  assert.deepEqual(await s.repo.assistantCycle(oldCycle.id), oldCycle);
+  assert.deepEqual(await s.repo.assistantCycle(cycle.id), cycle);
+  assert.deepEqual(await s.repo.assistantLedger(cycle.cycleStart), []);
+  await s.repo.commitAssistantLedger([{...entry, cycleStart: cycle.cycleStart}], cycle, plan.version);
+  assert.equal((await s.repo.assistantLedger(cycle.cycleStart)).length, 1);
+});

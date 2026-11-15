@@ -236,7 +236,9 @@ export class DynamoRepositories implements RepositoryFactory {
         assertAssistantCommit(tenantId, entries, cycle);
         for (const entry of entries) requireId(entry.id);
         const plan = await get<AssistantPlan>('ASSISTANTPLAN');
-        if (!plan || plan.version !== planVersion) throw conflict();
+        // Renewal has already carried unused top-ups forward; the old cycle cannot spend them.
+        if (!plan || plan.version !== planVersion ||
+            (plan.stripeSubscriptionId && plan.paidPeriodStart && cycle.cycleStart !== plan.paidPeriodStart)) throw conflict();
         const ledger = (await listRows<AssistantLedgerEntry | {entries: AssistantLedgerEntry[]}>(`ASSISTANTLEDGER#${requireCycleStart(cycle.cycleStart)}#`))
           .flatMap(row => 'entries' in row ? row.entries : [row]);
         // Strong reads follow the caller's cycle read; a competing debit moves
