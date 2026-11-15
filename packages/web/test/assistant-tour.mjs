@@ -29,9 +29,9 @@ async function setup(state, provider=new LocalAssistantProvider()) {
   handle=createHandler(repositories,{decode:async()=>{throw new Error('Offline tour');}},()=>now,undefined,undefined,undefined,undefined,{assistantProvider:state==='unconfigured'?new UnconfiguredAssistantProvider():provider,assistantSeedLocalPlan:state!=='paywall'});
   if(state!=='paywall') {
     const pool=await call('/assistant/pool');
-    if(state==='disabled') {
+    if(state==='disabled' || state==='past-due') {
       const plan=await repo.assistantPlan();
-      await repo.saveAssistantPlan({...plan,disabled:true,version:plan.version+1},plan.version,{id:'disable',tenantId:'mobile-demo',actorId:'admin',aggregateId:plan.id,aggregateVersion:plan.version+1,type:'assistant-plan.updated',occurredAt:now.toISOString(),deliveryStatus:'pending'});
+      await repo.saveAssistantPlan({...plan,...(state==='disabled'?{disabled:true}:{status:'past_due'}),version:plan.version+1},plan.version,{id:'disable',tenantId:'mobile-demo',actorId:'admin',aggregateId:plan.id,aggregateVersion:plan.version+1,type:'assistant-plan.updated',occurredAt:now.toISOString(),deliveryStatus:'pending'});
     }
     if(state==='exhausted') {
       const cycle=await repo.assistantCycle(pool.cycleStart);
@@ -61,7 +61,8 @@ try {
   });
   let visit=0;
   const goto=()=>page.goto(`http://127.0.0.1:5199/?tour=${++visit}#/`,{waitUntil:'networkidle'});
-  const open=()=>page.locator('#assistant-trigger').click();
+  const settle=()=>page.evaluate(async()=>{await Promise.all(document.getAnimations().map(a=>a.finished.catch(()=>{})));});
+  const open=async()=>{await page.locator('#assistant-trigger').click();await settle();};
   const shot=async name=>{await page.evaluate(async()=>{await Promise.all(document.getAnimations().map(animation=>animation.finished.catch(()=>{})));});await page.screenshot({path:`${out}/${name}.png`,fullPage:false});};
   const input=page.locator('#assistant-input');
   await goto();
@@ -95,12 +96,12 @@ try {
   await page.locator('#command-results [data-skill="vehicle_summary"]').click();
   await page.locator('.assistant-receipt').waitFor();
   await shot('skills'); await copyFile(`${out}/skills.png`, 'docs/screenshots/ai-assistant-skills.png');
-  await page.keyboard.press('Escape');
+  await page.locator('#assistant-close').click();
   await page.locator('#command-prompt').click(); await page.locator('#command-input').fill('Find stock STOCK-100');
   await page.locator('#command-results [data-ask]').click();
   await page.locator('.assistant-user').filter({hasText:'Find stock STOCK-100'}).waitFor();
   await page.locator('.assistant-receipt').nth(1).waitFor();
-  await page.keyboard.press('Escape');
+  await page.locator('#assistant-close').click();
   await page.locator('#command-prompt').click(); await page.locator('#command-input').press('Escape');
   assert.equal(await page.locator('#command-prompt').evaluate(el=>el===document.activeElement),true);
   assert.equal(await page.locator('#command-palette').isVisible(),false);
@@ -116,8 +117,38 @@ try {
   assert.equal(await input.isEnabled(),true);
   assert.equal(await input.evaluate(el=>el===document.activeElement),true);
   assert.equal(await page.locator('#assistant-tray').evaluate(el=>el.getBoundingClientRect().width),400);
+  const tray=page.locator('#assistant-tray');
+  assert.equal(await tray.evaluate(el=>el.tagName),'ASIDE');
+  assert.equal(await tray.getAttribute('aria-modal'),null);
+  assert.equal(await tray.evaluate(el=>el.getBoundingClientRect().top),42);
+  assert.equal(await tray.evaluate(el=>getComputedStyle(el).boxShadow),'none');
+  assert.equal(await page.locator('.app-main').evaluate(el=>getComputedStyle(el).marginRight),'400px');
+  assert.equal(await page.locator('.app-main').evaluate(el=>el.getBoundingClientRect().right),1040);
+  assert.equal(await bar.evaluate(el=>el.getBoundingClientRect().right),1440);
+  assert.equal(await page.locator('#assistant-trigger').getAttribute('aria-expanded'),'true');
+  assert.equal(await page.locator('.assistant-header').evaluate(el=>el.getBoundingClientRect().height),49);
+  assert.equal(await page.getByText('Works in this workspace',{exact:false}).count(),0);
+  assert.match(await page.locator('.assistant-header-credit').textContent(),/credits/);
+  assert.ok(await page.evaluate(()=>[document.documentElement,document.body].every(el=>getComputedStyle(el).overflow!=='hidden')));
+  // Actual wheel scrolling and record navigation work beside the dock.
+  await page.locator('.app-main').hover(); await page.mouse.wheel(0,500);
+  await page.waitForFunction(()=>scrollY>0);
+  await page.getByRole('link',{name:/2003 Honda Accord/}).click();
+  await page.getByRole('link',{name:'Edit vehicle',exact:true}).waitFor();
+  assert.equal(await tray.isVisible(),true);
+  await page.getByRole('link',{name:'Edit vehicle',exact:true}).focus();
+  await page.keyboard.press('Escape'); // Focus outside the dock leaves it open.
+  assert.equal(await page.locator('#assistant-trigger').getAttribute('aria-expanded'),'true');
+  await input.focus();
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#assistant-trigger').evaluate(el=>el===document.activeElement),true);
+  await settle();
+  assert.equal(await tray.isVisible(),false);
+  assert.equal(await page.locator('.app-main').evaluate(el=>getComputedStyle(el).marginRight),'0px');
+  await open(); await page.locator('#assistant-trigger').click(); await settle();
+  assert.equal(await tray.isVisible(),false);
+  await page.getByRole('link',{name:'Inventory',exact:true}).click();
+
   await page.locator('#sidebar-toggle').click();
   await open(); await shot('empty');
   await input.fill('Find stock STOCK-100'); await input.press('Enter');
@@ -134,9 +165,14 @@ try {
   await page.getByRole('heading',{name:'Leads',exact:true}).waitFor();
   await page.locator('.assistant-receipt').waitFor();
   assert.equal(await page.locator('#assistant-tray').isVisible(),true);
-  await page.setViewportSize({width:390,height:844});
+  await page.setViewportSize({width:390,height:844}); await settle();
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   assert.ok(Math.abs(await page.locator('#assistant-tray').evaluate(el=>el.getBoundingClientRect().width)-390)<1);
+  assert.equal(await page.locator('#assistant-tray').evaluate(el=>el.getBoundingClientRect().top),0);
+  assert.equal(await input.evaluate(el=>getComputedStyle(el).fontSize),'16px');
+  assert.equal(await page.locator('body').evaluate(el=>getComputedStyle(el).overflow),'hidden');
+  assert.equal(await page.locator('.app-main').evaluate(el=>getComputedStyle(el).marginRight),'0px');
+  await input.focus();
   await shot('mobile');
   assert.equal(await page.locator('.sidebar-heading .command-bar').count(), 1);
   assert.equal(await page.locator('.command-bar .assistant-balance').isVisible(), false);
@@ -154,7 +190,7 @@ try {
   await page.reload({waitUntil:'networkidle'}); await open();
   assert.equal(await page.locator('.assistant-user').count(),0);
   await page.setViewportSize({width:1440,height:1000});
-  for(const state of ['paywall','disabled','exhausted','unconfigured']) {
+  for(const state of ['paywall','past-due','disabled','exhausted','unconfigured']) {
     await setup(state); await goto();
     if(state==='disabled') {
       // Since the #100 follow-up (184b71b) a disabled assistant is absent entirely:
@@ -172,9 +208,10 @@ try {
     }
     await open();
     if(state==='unconfigured') {await input.fill('Hello');await input.press('Enter');}
-    const text={paywall:'The assistant is a paid add-on.',exhausted:'You are out of credits.',unconfigured:"The AI assistant isn't set up."}[state];
+    const text={'past-due':'The assistant is a paid add-on.',paywall:'The assistant is a paid add-on.',exhausted:'You are out of credits.',unconfigured:"The AI assistant isn't set up."}[state];
     await page.getByRole('heading',{name:text,exact:true}).waitFor();
     assert.equal(await input.isDisabled(),true);
+    if(state==='paywall' || state==='past-due') assert.equal(await page.locator('#assistant-title span').textContent(),'PAID');
     if(state==='paywall') assert.equal(await page.locator('.assistant-balance').count(),0);
     if(state==='exhausted') assert.match(await page.locator('.assistant-body').textContent(),/December 4, 2026/);
     if(state==='unconfigured') {
@@ -182,6 +219,9 @@ try {
       assert.equal(await input.isDisabled(),true);
     }
     await shot(state);
+    assert.equal(await page.locator('#assistant-close').evaluate(el=>el===document.activeElement),true);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#assistant-trigger').getAttribute('aria-expanded'),'false');
   }
   // A provider failure stays visible and retry uses valid alternating history.
   let fail=true;
@@ -202,7 +242,10 @@ try {
   // Since 184b71b the disabled state removes the assistant entirely instead of showing a locked tray.
   await page.locator('#assistant-trigger').waitFor({state:'hidden'});
   assert.equal(await page.locator('#assistant-tray').isVisible(),false);
-  assert.equal(await page.locator('.assistant-receipt').count(),1);
+  assert.equal(await page.locator('.assistant-receipt').count(),0);
+  assert.equal(await page.locator('#assistant-tray').count(),0);
+  assert.equal(await page.locator('#assistant-trigger').count(),0);
+  assert.equal(await page.locator('body').evaluate(el=>el.classList.contains('assistant-dock-open')),false);
   await setup('ready');
   const balance=await call('/assistant/pool'), cycle=await repo.assistantCycle(balance.cycleStart);
   await repo.saveAssistantCycle({...cycle,allotmentCredits:1,version:cycle.version+1},cycle.version);

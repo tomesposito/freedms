@@ -258,7 +258,7 @@ test('assistant Dynamo billing keys, pagination, conditional writes and atomic t
   const { GetCommand, QueryCommand, TransactWriteCommand } = await import('@aws-sdk/lib-dynamodb');
   type Command = InstanceType<typeof GetCommand> | InstanceType<typeof QueryCommand> | InstanceType<typeof TransactWriteCommand>;
   const commands: Command[] = [];
-  const s = await setup(); await s.plan(); await s.chat();
+  const s = await setup(); await s.plan(); await s.balance(250); await s.chat();
   const plan = (await s.repo.assistantPlan())!, cycle = (await s.repo.assistantCycle('2026-01-01'))!, row = (await s.repo.assistantLedger('2026-01-01'))[0];
   let pages = 0;
   const client = {send: async (command: Command) => {
@@ -267,6 +267,7 @@ test('assistant Dynamo billing keys, pagination, conditional writes and atomic t
       pages++;
       return {Items: [{data: pages === 1 ? row : {entries: [{...row, id: 'batch-entry'}]}}], ...(pages === 1 ? {LastEvaluatedKey: {PK: 'TENANT#A', SK: 'cursor'}} : {})};
     }
+    if (command instanceof GetCommand && command.input.Key?.SK === 'ASSISTANTPLAN') return {Item: {data: plan}};
     return {};
   }} as unknown as import('@aws-sdk/lib-dynamodb').DynamoDBDocumentClient;
   const repo = new DynamoRepositories('offline', client).forTenant('A');
@@ -345,4 +346,120 @@ test('legacy plan normalizes missing overage cap and repository rejects invalid 
   assert.equal((await s.get('/assistant/pool')).data.overageCapCredits, 500);
   assert.equal((await s.get('/assistant/admin')).data.controls.overageCapCredits, 500);
   for (const value of [-1, 1.5, NaN]) await assert.rejects(s.plan({overageCapCredits: value}), /Invalid assistant plan/);
+});
+
+// An offline Dynamo transport applies the actual repository's version conditions
+// atomically. The same settlement scenarios run against both implementations.
+async function settlementSetup(kind: 'memory' | 'dynamo', credits: number, overage = 0) {
+  const s = await setup(); await s.plan({overageEnabled: overage > 0, overageCapCredits: overage}); await s.balance(credits);
+  if (kind === 'memory') return s;
+  const { DynamoRepositories } = await import('../src/dynamo.js');
+  const { GetCommand, QueryCommand, TransactWriteCommand } = await import('@aws-sdk/lib-dynamodb');
+  const rows = new Map<string, unknown>([
+    ['ASSISTANTPLAN', await s.repo.assistantPlan()], ['ASSISTANTCYCLE#2026-01-01', await s.repo.assistantCycle('2026-01-01')],
+  ]);
+  const client = {send: async (command: InstanceType<typeof GetCommand> | InstanceType<typeof QueryCommand> | InstanceType<typeof TransactWriteCommand>) => {
+    if (command instanceof GetCommand) {
+      assert.equal(command.input.ConsistentRead, true);
+      const data = rows.get(command.input.Key!.SK);
+      return data ? {Item: {data: structuredClone(data)}} : {};
+    }
+    if (command instanceof QueryCommand) {
+      assert.equal(command.input.ConsistentRead, true);
+      const prefix = command.input.ExpressionAttributeValues![':prefix'];
+      return {Items: [...rows].filter(([key]) => key.startsWith(prefix)).map(([, data]) => ({data: structuredClone(data)}))};
+    }
+    for (const item of command.input.TransactItems!) {
+      const operation = item.ConditionCheck ?? item.Put!;
+      const key = item.ConditionCheck?.Key?.SK ?? item.Put?.Item?.SK;
+      const old = rows.get(key) as {version: number} | undefined;
+      const expected = operation.ExpressionAttributeValues?.[':v'];
+      if (expected !== undefined ? old?.version !== expected : rows.has(key))
+        throw Object.assign(new Error('conflict'), {name: 'TransactionCanceledException', CancellationReasons: [{Code: 'ConditionalCheckFailed'}]});
+    }
+    for (const item of command.input.TransactItems!) if (item.Put) rows.set(item.Put.Item!.SK, structuredClone(item.Put.Item!.data));
+    return {};
+  }} as unknown as import('@aws-sdk/lib-dynamodb').DynamoDBDocumentClient;
+  const dynamo = new DynamoRepositories('offline', client).forTenant('A');
+  const repo = {...s.repo, assistantPlan: dynamo.assistantPlan, assistantCycle: dynamo.assistantCycle,
+    assistantLedger: dynamo.assistantLedger, commitAssistantLedger: dynamo.commitAssistantLedger,
+    saveAssistantPlan: dynamo.saveAssistantPlan, saveAssistantCycle: dynamo.saveAssistantCycle};
+  return {...s, repo, billing: new AssistantBilling(repo, () => new Date('2026-01-01T12:00:00Z'))};
+}
+
+for (const kind of ['memory', 'dynamo'] as const) {
+  for (const overage of [0, 1]) test(`${kind}: concurrent settlement refuses the debit beyond the prepaid/overage ceiling (${overage})`, async () => {
+    const s = await settlementSetup(kind, overage ? 0 : 1, overage);
+    const meters = await Promise.all([s.billing.meter(s.actor), s.billing.meter(s.actor)]);
+    assert.ok(meters.every(meter => meter.stop({credits: 1}) === undefined));
+    // Force both attempts to reach the same cycle version before either commit.
+    const commit = s.repo.commitAssistantLedger;
+    let arrived = 0, release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    s.repo.commitAssistantLedger = async (...args) => {
+      if (++arrived <= 2) { if (arrived === 2) release(); await gate; }
+      return commit(...args);
+    };
+    const results = await Promise.all(meters.map(meter => meter.charge('answer', {actionClass: 'answer', credits: 1})));
+    assert.equal(results.filter(result => result === undefined).length, 1);
+    assert.match(results.find(result => result !== undefined)!, /answer has been withheld/);
+    assert.equal((await s.repo.assistantLedger('2026-01-01')).length, 1);
+    assert.equal((await s.billing.pool(s.actor)).balanceCredits, overage ? -overage : 0);
+    assert.equal((await Promise.all(meters.map(meter => meter.finish()))).reduce((a, b) => a + b), 1);
+  });
+
+  test(`${kind}: stale preflight cannot settle a larger action and lost acknowledgements remain paid once`, async () => {
+    const s = await settlementSetup(kind, 2);
+    const stale = await s.billing.meter(s.actor), winner = await s.billing.meter(s.actor);
+    assert.equal(stale.stop({credits: 2}), undefined);
+    const commit = s.repo.commitAssistantLedger;
+    s.repo.commitAssistantLedger = async (...args) => { await commit(...args); throw new Error('lost acknowledgement'); };
+    assert.equal(await winner.charge('answer', {actionClass: 'answer', credits: 1}), undefined);
+    s.repo.commitAssistantLedger = commit;
+    assert.match((await stale.charge('create_customer', {actionClass: 'write', credits: 2}))!, /DID execute successfully.*No further actions ran/);
+    assert.equal(await winner.finish(), 1); assert.equal(await stale.finish(), 0);
+    assert.equal((await s.repo.assistantLedger('2026-01-01')).length, 1);
+    assert.equal((await s.billing.pool(s.actor)).balanceCredits, 1);
+  });
+
+  test(`${kind}: ample concurrent debits and a lost acknowledgement at zero settle exactly once`, async () => {
+    const s = await settlementSetup(kind, 2);
+    const meters = await Promise.all([s.billing.meter(s.actor), s.billing.meter(s.actor)]);
+    const commit = s.repo.commitAssistantLedger;
+    s.repo.commitAssistantLedger = async (...args) => { await commit(...args); throw new Error('lost acknowledgement'); };
+    assert.deepEqual(await Promise.all(meters.map(meter => meter.charge('answer', {actionClass: 'answer', credits: 1}))), [undefined, undefined]);
+    assert.equal((await s.repo.assistantLedger('2026-01-01')).length, 2);
+    assert.equal((await s.billing.pool(s.actor)).balanceCredits, 0);
+    assert.deepEqual(await Promise.all(meters.map(meter => meter.finish())), [1, 1]);
+  });
+
+  test(`${kind}: batch settlement checks the sum and preserves the 201-debit path`, async () => {
+    const s = await settlementSetup(kind, 201);
+    const plan = (await s.repo.assistantPlan())!, cycle = (await s.repo.assistantCycle('2026-01-01'))!;
+    const entries = Array.from({length: 201}, (_, i) => ({id: `debit-${i}`, tenantId: 'A', actorId: 'user-A', action: 'search_vehicles', actionClass: 'read' as const,
+      credits: 1, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cycleStart: cycle.cycleStart, createdAt: '2026-01-01T12:00:00Z'}));
+    await assert.rejects(s.repo.commitAssistantLedger(entries.map((entry, i) => i === 0 ? {...entry, actionClass: 'write' as const, credits: 2} : entry), cycle, plan.version), {code: 'ASSISTANT_CREDITS_EXHAUSTED'});
+    assert.equal((await s.repo.assistantLedger(cycle.cycleStart)).length, 0);
+    await s.repo.commitAssistantLedger(entries, cycle, plan.version);
+    assert.equal((await s.repo.assistantLedger(cycle.cycleStart)).length, 201);
+    assert.equal((await s.billing.pool(s.actor)).balanceCredits, 0);
+  });
+}
+
+for (const kind of ['memory', 'dynamo'] as const) test(`${kind}: paid renewal rejects superseded ledger commits without writes and accepts the current cycle`, async () => {
+  const s = await settlementSetup(kind, 75);
+  const oldCycle = (await s.repo.assistantCycle('2026-01-01'))!, oldPlan = (await s.repo.assistantPlan())!;
+  const plan = {...oldPlan, stripeSubscriptionId: 'sub_A', paidPeriodStart: '2026-02-01', paidPeriodEnd: '2026-03-01', version: oldPlan.version + 1};
+  await s.repo.saveAssistantPlan(plan, oldPlan.version, {id: randomUUID(), tenantId: 'A', actorId: 'stripe', type: 'assistant-plan.updated', aggregateId: plan.id, aggregateVersion: plan.version, occurredAt: '2026-02-01T00:00:00Z', deliveryStatus: 'pending'});
+  const cycle = {...oldCycle, id: plan.paidPeriodStart, cycleStart: plan.paidPeriodStart, cycleEnd: plan.paidPeriodEnd, topUpCredits: 2, version: 1};
+  await s.repo.saveAssistantCycle(cycle, 0);
+  const entry = {id: 'late-debit', tenantId: 'A', actorId: 'user-A', action: 'answer', actionClass: 'answer' as const, credits: 1,
+    inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cycleStart: oldCycle.cycleStart, createdAt: '2026-02-01T00:00:00Z'};
+  await assert.rejects(s.repo.commitAssistantLedger([entry], oldCycle, plan.version), {status: 409, code: 'CONFLICT'});
+  assert.deepEqual(await s.repo.assistantLedger(oldCycle.cycleStart), []);
+  assert.deepEqual(await s.repo.assistantCycle(oldCycle.id), oldCycle);
+  assert.deepEqual(await s.repo.assistantCycle(cycle.id), cycle);
+  assert.deepEqual(await s.repo.assistantLedger(cycle.cycleStart), []);
+  await s.repo.commitAssistantLedger([{...entry, cycleStart: cycle.cycleStart}], cycle, plan.version);
+  assert.equal((await s.repo.assistantLedger(cycle.cycleStart)).length, 1);
 });

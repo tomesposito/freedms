@@ -1,3 +1,4 @@
+import { assertAssistantBalance } from './assistant-settlement.js';
 import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry, AssistantWaitlistEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
 import type { McpGrant, Idea } from '@freedms/shared';
@@ -234,6 +235,15 @@ export class DynamoRepositories implements RepositoryFactory {
       commitAssistantLedger: async (entries, cycle, planVersion) => {
         assertAssistantCommit(tenantId, entries, cycle);
         for (const entry of entries) requireId(entry.id);
+        const plan = await get<AssistantPlan>('ASSISTANTPLAN');
+        // Renewal has already carried unused top-ups forward; the old cycle cannot spend them.
+        if (!plan || plan.version !== planVersion ||
+            (plan.stripeSubscriptionId && plan.paidPeriodStart && cycle.cycleStart !== plan.paidPeriodStart)) throw conflict();
+        const ledger = (await listRows<AssistantLedgerEntry | {entries: AssistantLedgerEntry[]}>(`ASSISTANTLEDGER#${requireCycleStart(cycle.cycleStart)}#`))
+          .flatMap(row => 'entries' in row ? row.entries : [row]);
+        // Strong reads follow the caller's cycle read; a competing debit moves
+        // that cycle version and makes the transaction below conflict.
+        assertAssistantBalance(entries, cycle, plan, ledger);
         // A bounded turn can contain 201 debits, exceeding Dynamo's 100-item transaction limit.
         // Store its independent debit records in one immutable batch and flatten on reads.
         await transact([

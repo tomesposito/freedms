@@ -81,9 +81,9 @@ function stateBody(state: AssistantState, pool?: AssistantPool): string {
   }
 }
 export function trayHtml(state: AssistantState, turns: AssistantTurn[] = [], pool?: AssistantPool, busy = false, draft = '', skills: AssistantSkill[] = []): string {
-  // Disabled means absent: the shell hides entirely (see paint), and there is no tray to render.
+  // Disabled means absent: paint removes the panel and trigger entirely.
   if (state === 'disabled') return '';
-  return `<header class="assistant-header"><div><h2 id="assistant-title">AI assistant${(state === 'paywall' || state === 'past-due') ? '<span>PAID</span>' : ''}</h2><button type="button" id="assistant-close" aria-label="Close AI assistant">✕</button></div><p>Works in this workspace as you · ${(state === 'paywall' || state === 'past-due') ? 'billed to the dealership' : 'every action is recorded as yours'}</p>${pool ? `<p class="assistant-header-balance">${e(pool.balanceCredits.toLocaleString('en-US'))} credits</p>` : ''}</header><div class="assistant-body" aria-live="polite">${state === 'ready' ? skillChipsHtml(skills, busy) : ''}${turns.map((turn, i) => `<div class="assistant-user">${e(turn.text)}</div>${turn.result ? `${turn.result.transcript.map(row => `<div class="assistant-tool ${row.ok ? 'done' : 'failed'}"><i aria-hidden="true"></i>${e(toolLabel(row.tool))}<small>${row.ok ? 'done' : 'failed'}</small></div>`).join('')}<div class="assistant-reply">${renderMarkdown(turn.result.reply)}</div><div class="assistant-receipt">${e(receipt(turn.result.creditsUsed))}</div>${turn.result.proposals ? proposalsHtml(turn.result.proposals, i, busy || state !== 'ready' || !!turn.applied) : ''}` : ''}${turn.error ? `<div class="assistant-error" role="alert">${e(turn.error)}${state === 'ready' && !busy && !turn.skill ? `<button type="button" data-assistant-retry="${e(i)}">Retry</button>` : ''}</div>` : ''}`).join('')}${busy ? '<div class="assistant-working" role="status">● ● ● <span>Working…</span></div>' : ''}${state !== 'ready' || !turns.length ? stateBody(state, pool) : ''}</div><form class="assistant-composer"><textarea id="assistant-input" aria-label="Message AI assistant" rows="2" maxlength="16000" placeholder="${e(locked[state])}" ${state !== 'ready' || busy ? 'disabled' : ''}>${e(draft)}</textarea><button class="primary" type="submit" ${state !== 'ready' || busy ? 'disabled' : ''}>Send</button></form>`;
+  return `<header class="assistant-header"><h2 id="assistant-title">AI assistant${(state === 'paywall' || state === 'past-due') ? '<span>PAID</span>' : ''}</h2><div class="assistant-header-actions">${pool ? `<span class="assistant-header-credit">${e(pool.balanceCredits.toLocaleString('en-US'))} credits</span>` : ''}<button type="button" id="assistant-close" aria-label="Close AI assistant">✕</button></div></header><div class="assistant-body" aria-live="polite">${state === 'ready' ? skillChipsHtml(skills, busy) : ''}${turns.map((turn, i) => `<div class="assistant-user">${e(turn.text)}</div>${turn.result ? `${turn.result.transcript.map(row => `<div class="assistant-tool ${row.ok ? 'done' : 'failed'}"><i aria-hidden="true"></i>${e(toolLabel(row.tool))}<small>${row.ok ? 'done' : 'failed'}</small></div>`).join('')}<div class="assistant-reply">${renderMarkdown(turn.result.reply)}</div><div class="assistant-receipt">${e(receipt(turn.result.creditsUsed))}</div>${turn.result.proposals ? proposalsHtml(turn.result.proposals, i, busy || state !== 'ready' || !!turn.applied) : ''}` : ''}${turn.error ? `<div class="assistant-error" role="alert">${e(turn.error)}${state === 'ready' && !busy && !turn.skill ? `<button type="button" data-assistant-retry="${e(i)}">Retry</button>` : ''}</div>` : ''}`).join('')}${busy ? '<div class="assistant-working" role="status">● ● ● <span>Working…</span></div>' : ''}${state !== 'ready' || !turns.length ? stateBody(state, pool) : ''}</div><form class="assistant-composer"><textarea id="assistant-input" aria-label="Message AI assistant" rows="2" maxlength="16000" placeholder="${e(locked[state])}" ${state !== 'ready' || busy ? 'disabled' : ''}>${e(draft)}</textarea><button class="primary" type="submit" ${state !== 'ready' || busy ? 'disabled' : ''}>Send</button></form>`;
 }
 
 type Api = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
@@ -95,36 +95,42 @@ let skills: AssistantSkill[] = [], skillContext: AssistantContext | null = null,
 export function resetAssistant(): void {
   generation++; poolRequest++; skillsRequest++; skills = []; skillContext = null; skillsError = ''; owner = ''; open = false; turns = []; pool = undefined;
   state = 'loading'; unconfigured = false; busy = false; draft = '';
-  root?.querySelector<HTMLDialogElement>('dialog')?.close();
+  document.body.classList.remove('assistant-dock-open');
+  const panel = root?.querySelector<HTMLElement>('#assistant-tray');
+  if (panel) panel.inert = true;
 }
 function paint(focus = false): void {
   if (!root?.isConnected) return;
   const input = root.querySelector<HTMLTextAreaElement>('#assistant-input');
   const hadFocus = document.activeElement === input;
+  const hadCloseFocus = document.activeElement === root.querySelector('#assistant-close');
   const selection = input?.selectionStart;
-  const dialog = root.querySelector<HTMLDialogElement>('dialog')!;
-  if (state === 'disabled') { open = false; if (dialog.open) dialog.close(); root.style.display = 'none'; cluster.style.display = 'none'; return; }
-  root.style.display = ''; cluster.style.display = '';
+  let panel = root.querySelector<HTMLElement>('#assistant-tray');
+  if (state === 'disabled') {
+    open = false; document.body.classList.remove('assistant-dock-open');
+    root.replaceChildren(); cluster.replaceChildren(); return;
+  }
+  if (!panel) { buildShell(); panel = root.querySelector<HTMLElement>('#assistant-tray')!; }
   trigger.setAttribute('aria-expanded', String(open));
   trigger.innerHTML = '<span class="assistant-spark" aria-hidden="true">✦</span><span class="assistant-label">AI assistant</span>';
   cluster.querySelector('#assistant-credit')!.innerHTML = pool ? `<span class="assistant-balance">${e(pool.balanceCredits.toLocaleString('en-US'))} credits</span>` : '';
-  dialog.innerHTML = trayHtml(state, turns, pool, busy, draft, skills);
-  if (skillsError) { const note = document.createElement('p'); note.className = 'assistant-error'; note.textContent = skillsError; dialog.querySelector('.assistant-body')?.prepend(note); }
-  if (open && !dialog.open) dialog.showModal();
-  if (!open && dialog.open) dialog.close();
-  if (open && (focus || hadFocus)) {
-    const next = dialog.querySelector<HTMLTextAreaElement>('#assistant-input')!;
-    if (!next.disabled) { next.focus(); if (hadFocus && selection !== undefined) next.setSelectionRange(selection, selection); }
-    else dialog.querySelector<HTMLButtonElement>('#assistant-close')!.focus();
+  panel.innerHTML = trayHtml(state, turns, pool, busy, draft, skills);
+  if (skillsError) { const note = document.createElement('p'); note.className = 'assistant-error'; note.textContent = skillsError; panel.querySelector('.assistant-body')?.prepend(note); }
+  document.body.classList.toggle('assistant-dock-open', open);
+  panel.inert = !open;
+  if (open && (focus || hadFocus || hadCloseFocus)) {
+    const next = panel.querySelector<HTMLTextAreaElement>('#assistant-input')!;
+    if (!next.disabled && (focus || !hadCloseFocus)) { next.focus(); if (hadFocus && selection !== undefined) next.setSelectionRange(selection, selection); }
+    else panel.querySelector<HTMLButtonElement>('#assistant-close')!.focus();
   }
-  dialog.querySelector('#assistant-close')!.addEventListener('click', close);
-  dialog.querySelector('form')!.addEventListener('submit', event => { event.preventDefault(); void send(draft); });
-  const next = dialog.querySelector<HTMLTextAreaElement>('#assistant-input')!;
+  panel.querySelector('#assistant-close')!.addEventListener('click', close);
+  panel.querySelector('form')!.addEventListener('submit', event => { event.preventDefault(); void send(draft); });
+  const next = panel.querySelector<HTMLTextAreaElement>('#assistant-input')!;
   next.addEventListener('input', () => { draft = next.value; });
   next.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void send(draft); } });
-  dialog.querySelectorAll<HTMLButtonElement>('[data-assistant-retry]').forEach(button => button.addEventListener('click', () => { void send(turns[Number(button.dataset.assistantRetry)].text); }));
-  dialog.querySelectorAll<HTMLButtonElement>('[data-assistant-skill]').forEach(button => button.addEventListener('click', () => { void runSkill(button.dataset.assistantSkill!); }));
-  dialog.querySelectorAll<HTMLElement>('[data-proposals]').forEach(list => {
+  panel.querySelectorAll<HTMLButtonElement>('[data-assistant-retry]').forEach(button => button.addEventListener('click', () => { void send(turns[Number(button.dataset.assistantRetry)].text); }));
+  panel.querySelectorAll<HTMLButtonElement>('[data-assistant-skill]').forEach(button => button.addEventListener('click', () => { void runSkill(button.dataset.assistantSkill!); }));
+  panel.querySelectorAll<HTMLElement>('[data-proposals]').forEach(list => {
     const turn = turns[Number(list.dataset.proposals)];
     const button = list.querySelector<HTMLButtonElement>('[data-assistant-apply]');
     if (!button) return;
@@ -136,7 +142,7 @@ function paint(focus = false): void {
     });
     button.addEventListener('click', () => { void runSkill(turn.skill!, turn, selected()); });
   });
-  if (busy || turns.length) { const body = dialog.querySelector('.assistant-body')!; body.scrollTop = body.scrollHeight; }
+  if (busy || turns.length) { const body = panel.querySelector('.assistant-body')!; body.scrollTop = body.scrollHeight; }
 }
 function close(): void { open = false; paint(); trigger?.focus(); }
 async function refreshPool(): Promise<void> {
@@ -239,15 +245,19 @@ export function mountAssistant(container: HTMLElement, request: Api, identity: s
   skillsRequest++; skills = []; skillsError = ''; skillContext = null;
   api = request;
   root = document.createElement('div'); root.className = 'assistant-shell';
-  root.innerHTML = '<dialog id="assistant-tray" aria-labelledby="assistant-title"></dialog>';
-  // Keep the modal outside responsive chrome: moving an open dialog exits the top layer.
   cluster = container;
-  cluster.innerHTML = '<span id="assistant-credit"></span><button type="button" id="assistant-trigger" aria-label="AI assistant" aria-controls="assistant-tray" aria-expanded="false"></button>';
   (container.closest('#app') ?? container).append(root);
+  buildShell();
+  paint(open); void refreshPool().then(() => { if (open) void loadSkills(); });
+}
+
+function buildShell(): void {
+  root.innerHTML = '<aside id="assistant-tray" aria-labelledby="assistant-title" inert></aside>';
+  // Keep the dock independent of the responsive command bar.
+  cluster.innerHTML = '<span id="assistant-credit"></span><button type="button" id="assistant-trigger" aria-label="AI assistant" aria-controls="assistant-tray" aria-expanded="false"></button>';
   trigger = cluster.querySelector<HTMLButtonElement>('#assistant-trigger')!;
   trigger.addEventListener('click', () => { if (open) close(); else void openTray(); });
-  const dialog = root.querySelector('dialog')!;
-  dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
-  dialog.addEventListener('click', event => { if (event.target === dialog && (event.clientX < dialog.getBoundingClientRect().left || event.clientY > dialog.getBoundingClientRect().bottom)) close(); });
-  paint(open); void refreshPool().then(() => { if (open) void loadSkills(); });
+  root.querySelector('#assistant-tray')!.addEventListener('keydown', event => {
+    if ((event as KeyboardEvent).key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
+  });
 }

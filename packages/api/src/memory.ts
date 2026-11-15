@@ -1,3 +1,4 @@
+import { assertAssistantBalance } from './assistant-settlement.js';
 import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry, AssistantWaitlistEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
 import type { McpGrant, Idea } from '@freedms/shared';
@@ -114,8 +115,11 @@ export class MemoryRepositories implements RepositoryFactory {
       commitAssistantLedger: async (entries, cycle, planVersion) => {
         assertAssistantCommit(tenantId, entries, cycle);
         for (const entry of entries) requireId(entry.id);
-        if (s.assistantPlan?.version !== planVersion || s.assistantCycles.get(cycle.id)?.version !== cycle.version ||
+        // Renewal has already carried unused top-ups forward; the old cycle cannot spend them.
+        if ((s.assistantPlan?.stripeSubscriptionId && s.assistantPlan.paidPeriodStart && cycle.cycleStart !== s.assistantPlan.paidPeriodStart) ||
+            s.assistantPlan?.version !== planVersion || s.assistantCycles.get(cycle.id)?.version !== cycle.version ||
             entries.some(entry => s.assistantLedger.has(entry.id))) throw conflict();
+        assertAssistantBalance(entries, cycle, s.assistantPlan!, [...s.assistantLedger.values()]);
         for (const entry of entries) s.assistantLedger.set(entry.id, structuredClone(entry));
         s.assistantCycles.set(cycle.id, structuredClone({...cycle, version: cycle.version + 1}));
       },
