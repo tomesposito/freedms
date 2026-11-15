@@ -1,11 +1,11 @@
 import { lookup } from 'node:dns/promises';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
-import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { webhookEventTypes, type OutboxEvent, type Principal, type PublicWebhookEndpoint, type WebhookDelivery, type WebhookEndpoint, type WebhookEventType } from '@freedms/shared';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
-import type { RepositoryFactory, TenantRepository } from './repository.js';
+import { deliveryId, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { invalid, onlyKeys, version } from './validation.js';
 export type WebhookSender = (url: string, init: {headers: Record<string, string>; body: string}) => Promise<{status: number}>;
 export const fetchWebhookSender: WebhookSender = async (url, init) => {
@@ -110,48 +110,35 @@ export function scheduleWebhookDispatch(repo: TenantRepository, sender: WebhookS
     } finally { tenants.delete(tenantId); }
   });
 }
-function deliveryId(endpointId: string, eventId: string): string {
-  const bytes = createHash('sha256').update(JSON.stringify([endpointId, eventId])).digest().subarray(0, 16);
-  bytes[6] = (bytes[6] & 0x0f) | 0x80; // UUID v8: application-defined hash.
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = bytes.toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
 export async function dispatchWebhooks(repo: TenantRepository, sender: WebhookSender, now: Date, options: {maxDeliveries?: number} = {}) {
   const limit = options.maxDeliveries ?? MAX_DELIVERIES_PER_PASS;
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_DELIVERIES_PER_PASS) throw new RangeError('Invalid delivery pass limit');
   const summary = {created: 0, delivered: 0, failed: 0, remaining: 0};
   const endpoints = (await repo.webhookEndpoints()).filter(endpoint => endpoint.enabled).sort((a, b) => a.id.localeCompare(b.id));
   if (!endpoints.length) return summary;
-  const existing = new Map((await repo.webhookDeliveries()).map(d => [JSON.stringify([d.endpointId, d.eventId]), d]));
-  for (const event of (await repo.events()).sort((a, b) => a.occurredAt.localeCompare(b.occurredAt) || a.id.localeCompare(b.id))) {
-    if (!webhookEventTypes.includes(event.type as WebhookEventType)) continue;
-    for (const endpoint of endpoints) {
-      const pair = JSON.stringify([endpoint.id, event.id]);
-      const previous = existing.get(pair);
-      if (!endpoint.eventTypes.includes(event.type as WebhookEventType) || (previous && (previous.status !== 'pending' || !(Date.parse(previous.updatedAt) < now.getTime() - 15 * 60_000)))) continue;
-      if (summary.created >= limit) { summary.remaining++; continue; }
-      const date = now.toISOString();
-      const delivery: WebhookDelivery = {id: deliveryId(endpoint.id, event.id), tenantId: endpoint.tenantId, endpointId: endpoint.id, eventId: event.id, eventType: event.type as WebhookEventType, status: 'pending', attempts: 0, lastStatusCode: null, lastError: null, createdAt: date, updatedAt: date};
-      if (!await repo.claimWebhookDelivery(delivery, previous?.updatedAt)) continue;
-      summary.created++;
-      delivery.status = 'failed';
-      const {id, type, tenantId, aggregateId, aggregateVersion, occurredAt, actorId} = event;
-      const body = JSON.stringify({id, type, tenantId, aggregateId, aggregateVersion, occurredAt, actorId});
-      const headers = {'content-type': 'application/json', 'x-freedms-event': type, 'x-freedms-delivery': delivery.id, 'x-freedms-signature': `sha256=${createHmac('sha256', endpoint.secret).update(body).digest('hex')}`};
-      // Retries are immediate, bounded, and terminal for this pair.
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        delivery.attempts = attempt; delivery.lastStatusCode = null; delivery.lastError = null;
-        try {
-          const result = await sender(endpoint.url, {headers, body});
-          delivery.lastStatusCode = result.status;
-          if (result.status >= 200 && result.status < 300) { delivery.status = 'delivered'; break; }
-          delivery.lastError = 'HTTP failure';
-        } catch { delivery.lastError = 'Network or timeout failure'; }
-      }
-      await repo.saveWebhookDelivery(delivery);
-      existing.set(pair, delivery); summary[delivery.status]++;
+  for (const {event, endpointId, previous} of await repo.webhookDispatchCandidates(endpoints, now)) {
+    const endpoint = endpoints.find(endpoint => endpoint.id === endpointId)!;
+    if (summary.created >= limit) { summary.remaining++; continue; }
+    const date = now.toISOString();
+    const delivery: WebhookDelivery = {id: deliveryId(endpoint.id, event.id), tenantId: endpoint.tenantId, endpointId: endpoint.id, eventId: event.id, eventType: event.type as WebhookEventType, status: 'pending', attempts: 0, lastStatusCode: null, lastError: null, createdAt: date, updatedAt: date};
+    if (!await repo.claimWebhookDelivery(delivery, previous?.updatedAt)) continue;
+    summary.created++;
+    delivery.status = 'failed';
+    const {id, type, tenantId, aggregateId, aggregateVersion, occurredAt, actorId} = event;
+    const body = JSON.stringify({id, type, tenantId, aggregateId, aggregateVersion, occurredAt, actorId});
+    const headers = {'content-type': 'application/json', 'x-freedms-event': type, 'x-freedms-delivery': delivery.id, 'x-freedms-signature': `sha256=${createHmac('sha256', endpoint.secret).update(body).digest('hex')}`};
+    // Retries are immediate, bounded, and terminal for this pair.
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      delivery.attempts = attempt; delivery.lastStatusCode = null; delivery.lastError = null;
+      try {
+        const result = await sender(endpoint.url, {headers, body});
+        delivery.lastStatusCode = result.status;
+        if (result.status >= 200 && result.status < 300) { delivery.status = 'delivered'; break; }
+        delivery.lastError = 'HTTP failure';
+      } catch { delivery.lastError = 'Network or timeout failure'; }
     }
+    await repo.saveWebhookDelivery(delivery);
+    summary[delivery.status]++;
   }
   return summary;
 }

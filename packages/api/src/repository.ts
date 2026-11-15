@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry, AssistantWaitlistEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
 import type { McpGrant, Idea } from '@freedms/shared';
@@ -62,6 +63,7 @@ export interface TenantRepository {
   webhookEndpoints(): Promise<WebhookEndpoint[]>;
   webhookEndpoint(id: string): Promise<WebhookEndpoint | undefined>;
   saveWebhookEndpoint(record: WebhookEndpoint, expectedVersion: number, event: OutboxEvent): Promise<void>;
+  webhookDispatchCandidates(endpoints: WebhookEndpoint[], now: Date): Promise<WebhookDispatchCandidate[]>;
   webhookDeliveries(): Promise<WebhookDelivery[]>;
   /** Atomically create, or replace the exact stale pending claim read by the caller. */
   claimWebhookDelivery(record: WebhookDelivery, staleUpdatedAt?: string): Promise<boolean>;
@@ -535,4 +537,28 @@ export async function searchRecords(repo: TenantRepository, query: string) {
       href: lead ? `#/leads/${lead.id}` : deal ? `#/deals/${deal.id}` : `#/leads?customerId=${encodeURIComponent(c.id)}`})),
     deals: rows.deals.map(({deal: d, customer, vehicle}) => ({id: d.id, title: customer?.name ?? 'Customer unavailable', meta: `${vehicle?.stockNumber ?? 'Vehicle unavailable'} · ${d.status}`, href: `#/deals/${d.id}`})),
   };
+}
+
+export function deliveryId(endpointId: string, eventId: string): string {
+  const bytes = createHash('sha256').update(JSON.stringify([endpointId, eventId])).digest().subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x80; // UUID v8: application-defined hash.
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export interface WebhookDispatchCandidate {event: OutboxEvent; endpointId: string; previous?: WebhookDelivery}
+
+/** Keep only claimable pairs; exact remaining requires examining every candidate,
+ * even after the send limit is filled. Never retain terminal history. */
+export async function webhookCandidates(events: AsyncIterable<OutboxEvent> | Iterable<OutboxEvent>, endpoints: WebhookEndpoint[], now: Date,
+  lookup: (id: string) => Promise<WebhookDelivery | undefined>): Promise<WebhookDispatchCandidate[]> {
+  const pairs: WebhookDispatchCandidate[] = [];
+  for await (const event of events) for (const endpoint of endpoints) {
+    if (!endpoint.enabled || !endpoint.eventTypes.includes(event.type as import('@freedms/shared').WebhookEventType)) continue;
+    const previous = await lookup(deliveryId(endpoint.id, event.id));
+    if (previous && (previous.status !== 'pending' || !(Date.parse(previous.updatedAt) < now.getTime() - 15 * 60_000))) continue;
+    pairs.push({event, endpointId: endpoint.id, ...(previous ? {previous} : {})});
+  }
+  return pairs.sort((a, b) => a.event.occurredAt.localeCompare(b.event.occurredAt) || a.event.id.localeCompare(b.event.id) || a.endpointId.localeCompare(b.endpointId));
 }

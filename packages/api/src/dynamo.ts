@@ -1,3 +1,4 @@
+import { webhookCandidates } from './repository.js';
 import { assertAssistantBalance } from './assistant-settlement.js';
 import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry, AssistantWaitlistEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
@@ -10,7 +11,7 @@ import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, QueryCommand, ScanCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, QueryCommand, ScanCommand, TransactWriteCommand, type TransactWriteCommandInput, type ScanCommandOutput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
 import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantWaitlist, assertAssistantWaitlistRemoved, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, commandSearchSelection, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId, requireCycleStart } from './errors.js';
@@ -56,19 +57,46 @@ export class DynamoRepositories implements RepositoryFactory {
     } while (cursor);
     return rows;
   }
-  /** Existing endpoints predate a registry: enumerate only enabled webhook rows in this table. */
+  /** Per-endpoint rows avoid lost updates between endpoints in the same tenant.
+   * A durable migration marker also covers empty registries and mixed old/new data. */
   async webhookTenantIds(): Promise<string[]> {
+    const registry = {PK: 'OPERATOR#WEBHOOKS'};
     const tenants = new Set<string>(); let cursor: Record<string, unknown> | undefined;
+    let migrated = false;
     do {
-      const result = await this.client.send(new ScanCommand({TableName: this.table,
-        FilterExpression: 'begins_with(SK, :prefix) AND #d.#enabled = :enabled',
-        ProjectionExpression: '#d.#tenant',
-        ExpressionAttributeNames: {'#d': 'data', '#enabled': 'enabled', '#tenant': 'tenantId'},
-        ExpressionAttributeValues: {':prefix': 'WEBHOOK#', ':enabled': true},
+      const result = await this.client.send(new QueryCommand({TableName: this.table,
+        KeyConditionExpression: 'PK = :pk', ExpressionAttributeValues: {':pk': registry.PK},
         ConsistentRead: true, ExclusiveStartKey: cursor}));
-      for (const item of result.Items ?? []) tenants.add(requireId(item.data.tenantId));
+      for (const item of result.Items ?? []) {
+        if (item.SK === 'MIGRATED') migrated = true;
+        else tenants.add(requireId(item.data.tenantId));
+      }
       cursor = result.LastEvaluatedKey;
     } while (cursor);
+    if (migrated) return [...tenants].sort();
+    // One-time compatibility migration. Conditional checks prevent a concurrent
+    // disable from being resurrected by a stale scan result. Retry next invocation
+    // if a concurrent endpoint write interrupts migration.
+    do {
+      const result: ScanCommandOutput = await this.client.send(new ScanCommand({TableName: this.table,
+        FilterExpression: 'begins_with(SK, :prefix) AND #d.#enabled = :enabled',
+        ProjectionExpression: 'PK, SK, #d.#tenant, #d.#id, #d.#version',
+        ExpressionAttributeNames: {'#d': 'data', '#enabled': 'enabled', '#tenant': 'tenantId', '#id': 'id', '#version': 'version'},
+        ExpressionAttributeValues: {':prefix': 'WEBHOOK#', ':enabled': true},
+        ConsistentRead: true, ExclusiveStartKey: cursor}));
+      for (const item of result.Items ?? []) {
+        const {tenantId, id, version} = item.data;
+        requireId(tenantId); requireId(id);
+        await this.client.send(new TransactWriteCommand({TransactItems: [
+          {ConditionCheck: {TableName: this.table, Key: {PK: `TENANT#${tenantId}`, SK: `WEBHOOK#${id}`},
+            ConditionExpression: '#d.#v = :v AND #d.#e = :e', ExpressionAttributeNames: {'#d': 'data', '#v': 'version', '#e': 'enabled'}, ExpressionAttributeValues: {':v': version, ':e': true}}},
+          {Put: {TableName: this.table, Item: {...registry, SK: `${tenantId}#${id}`, data: {tenantId, endpointId: id}}}}
+        ]}));
+        tenants.add(tenantId);
+      }
+      cursor = result.LastEvaluatedKey;
+    } while (cursor);
+    await this.client.send(new TransactWriteCommand({TransactItems: [{Put: {TableName: this.table, Item: {...registry, SK: 'MIGRATED'}}}]}));
     return [...tenants].sort();
   }
   async tenantForSubject(subject: string): Promise<string | undefined> {
@@ -308,7 +336,44 @@ export class DynamoRepositories implements RepositoryFactory {
       webhookEndpoint: id => get<WebhookEndpoint>(`WEBHOOK#${requireId(id)}`),
       saveWebhookEndpoint: async (record, expectedVersion, event) => {
         assertWebhookEndpoint(tenantId, record, expectedVersion, event);
-        await transact([put(`WEBHOOK#${requireId(record.id)}`, record, expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined), eventPut(event)]);
+        const registryKey = {PK: 'OPERATOR#WEBHOOKS', SK: `${tenantId}#${record.id}`};
+        await transact([put(`WEBHOOK#${requireId(record.id)}`, record, expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined), eventPut(event),
+          record.enabled ? {Put: {TableName: this.table, Item: {...registryKey, data: {tenantId, endpointId: record.id}}}} : {Delete: {TableName: this.table, Key: registryKey}}]);
+      },
+      webhookDispatchCandidates: async (endpoints, now) => {
+        for (const endpoint of endpoints) assertScope(tenantId, endpoint);
+        endpoints = endpoints.filter(endpoint => endpoint.enabled);
+        if (!endpoints.length) return [];
+        const names: Record<string, string> = {'#d': 'data', '#type': 'type'};
+        const values: Record<string, unknown> = {':pk': PK, ':prefix': 'EVENT#'};
+        const clauses = endpoints.map((endpoint, i) => {
+          names[`#done${i}`] = `DONE#${endpoint.id}`;
+          const types = endpoint.eventTypes.map((type, j) => { values[`:t${i}_${j}`] = type; return `:t${i}_${j}`; });
+          return `(attribute_not_exists(#done${i}) AND #d.#type IN (${types.join(', ')}))`;
+        });
+        const client = this.client, table = this.table;
+        async function* candidates() {
+          let cursor: Record<string, unknown> | undefined;
+          // Exact remaining counts require all candidate pages. Dynamo discards
+          // non-webhook/terminal history server-side; only candidates cross the wire.
+          do {
+            const result = await client.send(new QueryCommand({TableName: table,
+              KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+              FilterExpression: clauses.join(' OR '), ExpressionAttributeNames: names,
+              ExpressionAttributeValues: values, Limit: 100, ConsistentRead: true, ExclusiveStartKey: cursor}));
+            for (const item of result.Items ?? []) yield item.data as OutboxEvent;
+            cursor = result.LastEvaluatedKey;
+          } while (cursor);
+        }
+        return webhookCandidates(candidates(), endpoints, now, async id => {
+          const previous = await get<WebhookDelivery>(`DELIVERY#${id}`);
+          // Legacy terminal deliveries have no completion attribute yet. Point
+          // reads preserve exact accounting and lazily suppress future transfers.
+          if (previous && previous.status !== 'pending') await transact([{Update: {TableName: this.table,
+            Key: key(`EVENT#${requireId(previous.eventId)}`), UpdateExpression: 'SET #done = :done',
+            ExpressionAttributeNames: {'#done': `DONE#${requireId(previous.endpointId)}`}, ExpressionAttributeValues: {':done': true}}}]);
+          return previous;
+        });
       },
       webhookDeliveries: () => listRows<WebhookDelivery>('DELIVERY#'),
       claimWebhookDelivery: async (record, staleUpdatedAt) => {
@@ -333,7 +398,21 @@ export class DynamoRepositories implements RepositoryFactory {
       },
       saveWebhookDelivery: async record => {
         assertScope(tenantId, record);
-        await transact([{Put: {TableName: this.table, Item: {...key(`DELIVERY#${requireId(record.id)}`), data: record}}}]);
+        const deliveryPut = {Put: {TableName: this.table, Item: {...key(`DELIVERY#${requireId(record.id)}`), data: record}}};
+        try {
+          await this.client.send(new TransactWriteCommand({TransactItems: [deliveryPut,
+            {Update: {TableName: this.table, Key: key(`EVENT#${requireId(record.eventId)}`),
+              ConditionExpression: 'attribute_exists(#d)',
+              UpdateExpression: record.status === 'pending' ? 'REMOVE #done' : 'SET #done = :done',
+              ExpressionAttributeNames: {'#d': 'data', '#done': `DONE#${requireId(record.endpointId)}`},
+              ...(record.status === 'pending' ? {} : {ExpressionAttributeValues: {':done': true}})}}]}));
+        } catch (error) {
+          // Preserve the generic delivery upsert contract even for imported/test
+          // deliveries without an event; never create a phantom EVENT# row.
+          if (!(error instanceof Error && error.name === 'TransactionCanceledException' &&
+            (error as Error & {CancellationReasons?: {Code?: string}[]}).CancellationReasons?.[1]?.Code === 'ConditionalCheckFailed')) throw error;
+          await transact([deliveryPut]);
+        }
       },
       feedConfig: () => get<FeedConfig>('FEEDCONFIG#feed-config'),
       saveFeedConfig: async (record, expectedVersion, event) => { assertFeedConfig(tenantId, record, expectedVersion, event); await transact([put('FEEDCONFIG#feed-config', record, expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined), eventPut(event)]); },

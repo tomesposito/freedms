@@ -164,11 +164,11 @@ test('Dynamo webhook writes have tenant keys, conditional versions, paired event
   const delivery: WebhookDelivery = {id: 'delivery', tenantId: 'A', endpointId: record.id, eventId: 'vehicle', eventType: 'vehicle.created', status: 'delivered', attempts: 1, lastStatusCode: 204, lastError: null, createdAt: date, updatedAt: date};
   await repo.saveWebhookDelivery(delivery); await repo.webhookEndpoint('hook'); await repo.webhookEndpoints(); await repo.webhookDeliveries();
   const first = (commands[0] as TransactWriteCommand).input.TransactItems!;
-  assert.deepEqual(first.map(item => item.Put?.Item?.SK), ['WEBHOOK#hook', 'EVENT#create']);
-  assert.ok(first.every(item => item.Put?.Item?.PK === 'TENANT#A' && item.Put.ConditionExpression === 'attribute_not_exists(PK)'));
+  assert.deepEqual(first.map(item => item.Put?.Item?.SK), ['WEBHOOK#hook', 'EVENT#create', 'A#hook']);
+  assert.ok(first.slice(0, 2).every(item => item.Put?.Item?.PK === 'TENANT#A' && item.Put.ConditionExpression === 'attribute_not_exists(PK)'));
   const update = (commands[1] as TransactWriteCommand).input.TransactItems![0].Put!;
   assert.equal(update.ConditionExpression, '#d.#v = :v'); assert.deepEqual(update.ExpressionAttributeValues, {':v': 1});
-  const upsert = (commands[2] as TransactWriteCommand).input.TransactItems!; assert.equal(upsert.length, 1);
+  const upsert = (commands[2] as TransactWriteCommand).input.TransactItems!; assert.equal(upsert.length, 2);
   assert.equal(upsert[0].Put?.Item?.PK, 'TENANT#A'); assert.equal(upsert[0].Put?.Item?.SK, 'DELIVERY#delivery'); assert.equal(upsert[0].Put?.ConditionExpression, undefined);
   assert.deepEqual((commands[3] as GetCommand).input.Key, {PK: 'TENANT#A', SK: 'WEBHOOK#hook'});
   assert.deepEqual((commands[4] as QueryCommand).input.ExpressionAttributeValues, {':pk': 'TENANT#A', ':prefix': 'WEBHOOK#'});
@@ -265,9 +265,9 @@ test('scheduling during an empty final pass requests another pass; drain errors 
   await add(); await endpoint();
   const repo = repositories.forTenant('A'); const read = deferred(); const release = deferred();
   let first = true;
-  const wrapper = {...repo, events: async () => {
+  const wrapper = {...repo, webhookDispatchCandidates: async (...args: Parameters<typeof repo.webhookDispatchCandidates>) => {
     if (first) { first = false; read.resolve(); await release.promise; return []; }
-    return repo.events();
+    return repo.webhookDispatchCandidates(...args);
   }};
   scheduleWebhookDispatch(wrapper, async () => ({status: 204}), now);
   await read.promise;
@@ -459,18 +459,43 @@ test('Dynamo claims condition creation and exact stale timestamps, and propagate
   await assert.rejects(repo.claimWebhookDelivery(record), /storage unavailable/);
 });
 
-test('Dynamo webhook tenant enumeration paginates enabled endpoint rows and deduplicates tenants', async () => {
-  const commands: ScanCommand[] = [];
-  const cursor = {PK: 'TENANT#A', SK: 'WEBHOOK#hook'};
-  const client = {send: async (command: ScanCommand) => {
-    commands.push(command);
-    return commands.length === 1 ? {Items: [{data: {tenantId: 'A'}}], LastEvaluatedKey: cursor} : {Items: [{data: {tenantId: 'A'}}, {data: {tenantId: 'B'}}]};
+test('Dynamo webhook tenant registry paginates without scanning after migration', async () => {
+  const commands: QueryCommand[] = [];
+  const cursor = {PK: 'OPERATOR#WEBHOOKS', SK: 'A#hook'};
+  const client = {send: async (command: QueryCommand) => {
+    assert.ok(command instanceof QueryCommand); commands.push(command);
+    return commands.length === 1 ? {Items: [{SK: 'MIGRATED'}, {data: {tenantId: 'A'}}], LastEvaluatedKey: cursor}
+      : {Items: [{data: {tenantId: 'A'}}, {data: {tenantId: 'B'}}]};
   }} as unknown as DynamoDBDocumentClient;
   assert.deepEqual(await new DynamoRepositories('table', client).webhookTenantIds(), ['A', 'B']);
-  assert.equal(commands[0].input.FilterExpression, 'begins_with(SK, :prefix) AND #d.#enabled = :enabled');
+  assert.deepEqual(commands[0].input.ExpressionAttributeValues, {':pk': 'OPERATOR#WEBHOOKS'});
   assert.deepEqual(commands[1].input.ExclusiveStartKey, cursor);
 });
 
+test('pre-registry endpoints backfill once, including paginated scans and empty migrations', async () => {
+  for (const empty of [false, true]) {
+    const registry = new Map<string, Record<string, unknown>>(); let scans = 0;
+    const cursor = {PK: 'TENANT#A', SK: 'WEBHOOK#one'};
+    const client = {send: async (command: QueryCommand | ScanCommand | TransactWriteCommand) => {
+      if (command instanceof QueryCommand) return {Items: [...registry.values()]};
+      if (command instanceof ScanCommand) {
+        scans++;
+        if (empty) return {Items: []};
+        if (scans === 1) return {Items: [{data: {tenantId: 'A', id: 'one', version: 1}}], LastEvaluatedKey: cursor};
+        assert.deepEqual(command.input.ExclusiveStartKey, cursor);
+        return {Items: [{data: {tenantId: 'A', id: 'two', version: 1}}, {data: {tenantId: 'B', id: 'three', version: 2}}]};
+      }
+      for (const item of command.input.TransactItems ?? []) if (item.Put) registry.set(item.Put.Item!.SK, item.Put.Item!);
+      return {};
+    }} as unknown as DynamoDBDocumentClient;
+    const repositories = new DynamoRepositories('table', client);
+    assert.deepEqual(await repositories.webhookTenantIds(), empty ? [] : ['A', 'B']);
+    const firstScans = scans;
+    assert.deepEqual(await repositories.webhookTenantIds(), empty ? [] : ['A', 'B']);
+    assert.equal(scans, firstScans); assert.equal(scans, empty ? 1 : 2);
+    assert.ok([...registry.values()].every(item => !JSON.stringify(item).includes('secret')));
+  }
+});
 
 test('hosted schedule routes through the API Lambda to the bounded drain without gateway auth', () => {
   const template = readFileSync('infra/template.yaml', 'utf8');
@@ -505,4 +530,103 @@ test('hosted agent write returns before webhook sender and leaves durable draina
   await waitFor(async () => (await repo.webhookDeliveries())[0]?.status === 'delivered');
   await dispatchWebhooks(repo, async () => { assert.fail('Durable delivery must not be repeated'); }, now);
   assert.equal((await repo.webhookDeliveries())[0].status, 'delivered');
+});
+
+test('dispatch transfers only pending pairs with hundreds of terminal and unrelated events', async () => {
+  const {repositories, add, endpoint} = await setup(undefined);
+  for (let i = 0; i < 320; i++) await add();
+  await endpoint();
+  const repo = repositories.forTenant('A');
+  const original = (await repo.webhookEndpoints())[0];
+  for (let i = 0; i < 320; i++) await repo.saveWebhookEndpoint({...original, version: i + 2}, i + 1, event('A', `config${i}`, 'webhook.updated', original.id, i + 2));
+  // Drain historical pairs without triggering handler scheduling.
+  while ((await dispatchWebhooks(repo, async () => ({status: 204}), now)).remaining) {}
+  for (let i = 0; i < 4; i++) {
+    const id = `pending${i}`;
+    await repo.create({...input, status: 'available', id, tenantId: 'A', version: 1, createdAt: date, updatedAt: date}, event('A', id, 'vehicle.created'));
+  }
+  let events = 0, deliveries = 0;
+  const counted = {...repo,
+    events: async () => { assert.fail('full event history read'); },
+    webhookDeliveries: async () => { assert.fail('full delivery history read'); },
+    webhookDispatchCandidates: async (...args: Parameters<typeof repo.webhookDispatchCandidates>) => {
+      const candidates = await repo.webhookDispatchCandidates(...args);
+      events += candidates.length; deliveries += candidates.filter(pair => pair.previous).length;
+      return candidates;
+    }
+  };
+  assert.deepEqual(await dispatchWebhooks(counted, async () => ({status: 204}), now, {maxDeliveries: 2}), {created: 2, delivered: 2, failed: 0, remaining: 2});
+  assert.equal(events, 4); assert.equal(deliveries, 0);
+});
+
+test('Dynamo candidate queries filter types and terminal pairs server-side and page only pending results', async () => {
+  const queries: QueryCommand[] = []; let gets = 0;
+  const client = {send: async (command: QueryCommand | GetCommand) => {
+    if (command instanceof GetCommand) { gets++; return {}; }
+    queries.push(command);
+    assert.equal(command.input.Limit, 100);
+    assert.match(command.input.FilterExpression!, /attribute_not_exists\(#done0\).*#d\.#type IN/);
+    assert.equal(command.input.ExpressionAttributeNames!['#done0'], 'DONE#hook');
+    assert.equal(command.input.ExpressionAttributeValues![':pk'], 'TENANT#A');
+    assert.equal(command.input.ExpressionAttributeValues![':t0_0'], 'vehicle.created');
+    if (queries.length === 1) return {Items: [], LastEvaluatedKey: {PK: 'TENANT#A', SK: 'EVENT#old'}};
+    return {Items: [{data: event('A', 'pending', 'vehicle.created')}]};
+  }} as unknown as DynamoDBDocumentClient;
+  const repo = new DynamoRepositories('table', client).forTenant('A');
+  const endpoint: WebhookEndpoint = {id: 'hook', tenantId: 'A', version: 1, createdAt: date, updatedAt: date, url: 'http://localhost', eventTypes: ['vehicle.created'], enabled: true, secret: 'secret'};
+  assert.equal((await repo.webhookDispatchCandidates([endpoint], now)).length, 1);
+  assert.equal(queries.length, 2); assert.equal(gets, 1);
+});
+
+test('registry stays enabled-only across multiple endpoints, disable, enable and secret rotation', async () => {
+  const {repositories, endpoint, call} = await setup();
+  const first = (await endpoint()).data, second = (await endpoint()).data;
+  assert.deepEqual(await repositories.webhookTenantIds(), ['A']);
+  await call(`/webhooks/endpoints/${first.id}`, 'PUT', {version: 1, enabled: false});
+  assert.deepEqual(await repositories.webhookTenantIds(), ['A']);
+  await call(`/webhooks/endpoints/${second.id}`, 'PUT', {version: 1, enabled: false});
+  assert.deepEqual(await repositories.webhookTenantIds(), []);
+  await call(`/webhooks/endpoints/${first.id}/rotate-secret`, 'POST', {version: 2});
+  assert.deepEqual(await repositories.webhookTenantIds(), []);
+  await call(`/webhooks/endpoints/${first.id}`, 'PUT', {version: 3, enabled: true});
+  assert.deepEqual(await repositories.webhookTenantIds(), ['A']);
+});
+
+test('Dynamo endpoint registry changes share the endpoint and event transaction, without secrets', async () => {
+  const commands: TransactWriteCommand[] = [];
+  const client = {send: async (command: TransactWriteCommand) => { commands.push(command); return {}; }} as unknown as DynamoDBDocumentClient;
+  const repo = new DynamoRepositories('table', client).forTenant('A');
+  for (const [i, enabled] of [true, false, false, true].entries()) {
+    const record: WebhookEndpoint = {id: 'hook', tenantId: 'A', version: i + 1, createdAt: date, updatedAt: date, url: 'http://localhost', eventTypes: ['vehicle.created'], enabled, secret: `secret${i}`};
+    await repo.saveWebhookEndpoint(record, i, event('A', `config${i}`, i ? 'webhook.updated' : 'webhook.created', 'hook', i + 1));
+    const items = commands[i].input.TransactItems!;
+    assert.equal(items.length, 3);
+    assert.equal(items[0].Put!.Item!.data.version, i + 1);
+    assert.equal(items[1].Put!.Item!.SK, `EVENT#config${i}`);
+    if (enabled) assert.deepEqual(items[2].Put!.Item, {PK: 'OPERATOR#WEBHOOKS', SK: 'A#hook', data: {tenantId: 'A', endpointId: 'hook'}});
+    else assert.deepEqual(items[2].Delete!.Key, {PK: 'OPERATOR#WEBHOOKS', SK: 'A#hook'});
+  }
+});
+
+test('legacy terminal pair point lookup backfills completion and is never transferred again', async () => {
+  let done = false, gets = 0, transfers = 0;
+  const client = {send: async (command: QueryCommand | GetCommand | TransactWriteCommand) => {
+    if (command instanceof QueryCommand) {
+      const items = done ? [] : [{data: event('A', 'old', 'vehicle.created')}]; transfers += items.length;
+      return {Items: items};
+    }
+    if (command instanceof GetCommand) {
+      gets++;
+      return {Item: {data: {id: 'delivery', tenantId: 'A', endpointId: 'hook', eventId: 'old', status: 'delivered', updatedAt: date}}};
+    }
+    const update = command.input.TransactItems![0].Update!;
+    assert.deepEqual(update.Key, {PK: 'TENANT#A', SK: 'EVENT#old'});
+    assert.equal(update.ExpressionAttributeNames!['#done'], 'DONE#hook');
+    done = true; return {};
+  }} as unknown as DynamoDBDocumentClient;
+  const repo = new DynamoRepositories('table', client).forTenant('A');
+  const endpoint: WebhookEndpoint = {id: 'hook', tenantId: 'A', version: 1, createdAt: date, updatedAt: date, url: 'http://localhost', eventTypes: ['vehicle.created'], enabled: true, secret: 'secret'};
+  assert.deepEqual(await repo.webhookDispatchCandidates([endpoint], now), []);
+  assert.deepEqual(await repo.webhookDispatchCandidates([endpoint], now), []);
+  assert.equal(gets, 1); assert.equal(transfers, 1);
 });
