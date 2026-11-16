@@ -50,6 +50,17 @@ Real captures from the local app on the current build — the same screens the
 verification tours use. The sample dealership data is local-only; the app itself
 always starts empty.
 
+**Dealer website**
+
+The tenant's public site includes home, inventory, vehicle, about, and contact
+pages. Prices and available vehicles render live; inquiries land in that dealer's
+CRM. These captures use the real local API and a seeded Demo Motors tenant with
+no photos, showing the intentional photo placeholders. Website controls live in
+Deals → Workspace settings → Website; sites are free with the DMS.
+
+![Demo Motors public home](docs/screenshots/dealer-site-home.png)
+![Demo Motors public inventory](docs/screenshots/dealer-site-inventory.png)
+
 **Lot overview**
 
 Current inventory and lead snapshots alongside trailing 30-day sales, using the

@@ -1,3 +1,4 @@
+import { websiteRoute } from './website';
 import { fetchAllVehicles } from './vehicles.js';
 import { mountSharePanel } from './retail';
 import { leaseSummary } from './lease';
@@ -14,7 +15,7 @@ const title = (v: Vehicle) => `${v.year} ${v.make} ${v.model} · ${v.stockNumber
 let filter = '';
 export async function dealsRoute(parts: string[], ui: UI): Promise<void> {
   ui.shell('<p>Loading deals…</p>');
-  if (parts[1] === 'settings') { await settings(ui); return; }
+  if (parts[1] === 'settings') { if (parts[2] === 'website') await websiteRoute(ui); else await settings(ui); return; }
   if (parts[1] === 'new') { await startDeal(parts, ui); return; }
   if (parts[1]) { const d = await ui.api<DealView>(`/deals/${encodeURIComponent(parts[1])}`); const products = await ui.api<FiProduct[]>('/fi-products'); if (ui.current()) worksheet(d, ui, products); return; }
   const deals = await ui.api<DealView[]>(`/deals?${new URLSearchParams({status: filter})}`); if (!ui.current()) return;
@@ -35,7 +36,7 @@ async function startDeal(parts: string[], ui: UI) {
 async function settings(ui: UI) {
   if (!ui.admin) { ui.shell('<h1>Workspace settings</h1><p>Only administrators can change workspace settings.</p>'); return; }
   const s = await ui.api<TaxSettings & {version: number; commissionRateBps?: number; shareExpiryDays: number}>('/settings'); if (!ui.current()) return;
-  ui.shell(`<a class="back" href="#/deals">← Deals</a><h1>Workspace settings</h1><p class="muted">Defaults apply to new deals. Existing deals retain their tax rule and doc fee.</p><form id="settings" class="card"><div class="form-grid">${input('Share link expiry (days)', 'shareExpiryDays', s.shareExpiryDays, 'type="number" min="1" max="90" step="1" required')}${input('Sales tax (%)', 'taxRate', (s.taxRateBps / 100).toFixed(2), 'type="number" min="0" max="100" step="0.01" required')}${amount('Default doc fee', 'docFee', s.docFee)}${input('Commission (% of front gross)', 'commissionRate', ((s.commissionRateBps ?? 0) / 100).toFixed(2), 'type="number" min="0" max="100" step="0.01" required')}</div><label class="check"><input type="checkbox" name="difference" ${s.taxTradeDifference ? 'checked' : ''}> Tax price minus trade allowance</label><p class="muted">Tax applies to selling price, or price minus trade allowance (minimum zero). Doc fees and payoff are excluded from the taxable base.</p><button class="primary">Save settings</button><p id="settings-saved" role="status"></p></form>`);
+  ui.shell(`<a class="back" href="#/deals">← Deals</a><h1>Workspace settings</h1><a class="button" href="#/deals/settings/website">Website</a><p class="muted">Defaults apply to new deals. Existing deals retain their tax rule and doc fee.</p><form id="settings" class="card"><div class="form-grid">${input('Share link expiry (days)', 'shareExpiryDays', s.shareExpiryDays, 'type="number" min="1" max="90" step="1" required')}${input('Sales tax (%)', 'taxRate', (s.taxRateBps / 100).toFixed(2), 'type="number" min="0" max="100" step="0.01" required')}${amount('Default doc fee', 'docFee', s.docFee)}${input('Commission (% of front gross)', 'commissionRate', ((s.commissionRateBps ?? 0) / 100).toFixed(2), 'type="number" min="0" max="100" step="0.01" required')}</div><label class="check"><input type="checkbox" name="difference" ${s.taxTradeDifference ? 'checked' : ''}> Tax price minus trade allowance</label><p class="muted">Tax applies to selling price, or price minus trade allowance (minimum zero). Doc fees and payoff are excluded from the taxable base.</p><button class="primary">Save settings</button><p id="settings-saved" role="status"></p></form>`);
   document.querySelector<HTMLFormElement>('#settings')!.addEventListener('submit', async event => {
     event.preventDefault(); const form = event.currentTarget as HTMLFormElement, data = new FormData(form), button = form.querySelector('button')!; button.disabled = true;
     try { const saved = await ui.api<WorkspaceSettings>('/settings', 'PUT', {version: s.version, shareExpiryDays: Number(data.get('shareExpiryDays')), commissionRateBps: cents(String(data.get('commissionRate'))), taxRateBps: cents(String(data.get('taxRate'))), taxTradeDifference: data.has('difference'), docFee: cents(String(data.get('docFee')))}); s.version = saved.version; if (ui.current()) document.querySelector('#settings-saved')!.textContent = 'Settings saved. Commission rate applies to all sold deals. Tax and fee defaults apply to new deals.'; }

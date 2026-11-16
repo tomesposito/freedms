@@ -27,7 +27,7 @@ export function buildPublicInventory(dealer: string, vehicles: Vehicle[]) {
       })),
   };
 }
-const escapeHtml = (value: string | number) => String(value).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]!));
+export const escapeHtml = (value: string | number) => String(value).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]!));
 export function publicInventoryHtml(dealer: string, document: ReturnType<typeof buildPublicInventory>): string {
   const list = document.itemListElement.map(({item: offer}) => {
     const car = offer.itemOffered;
@@ -69,7 +69,7 @@ export function createPublicInventoryHandler() {
       result.body = publicInventoryHtml(tenant.name, document);
     } else if (format === 'llms.txt') {
       result.headers['content-type'] = 'text/plain; charset=utf-8';
-      result.body = `# ${tenant.name}\n\nInventory:\n- /public/${tenantId}/inventory.json\n- /public/${tenantId}/inventory.html\n`;
+      result.body = `# ${tenant.name}\n\nInventory:\n- /public/${tenantId}/inventory.json\n- /public/${tenantId}/inventory.html\n- /public/${tenantId}/site/\n`;
     }
     return result;
   };

@@ -31,13 +31,14 @@ const server = createServer(async (req, res) => {
     const isAccessRequest = req.method === 'POST' && url.pathname.replace(/\/$/, '') === '/access-requests';
     // Loopback only, host/origin allowlist to prevent websites/DNS rebinding from minting local tokens.
     if (!['127.0.0.1:3001', 'localhost:3001'].includes(req.headers.host ?? '') ||
-        (!isAccessRequest && req.headers.origin && !['http://127.0.0.1:5173', 'http://localhost:5173'].includes(req.headers.origin))) throw new ApiError(403, 'FORBIDDEN', 'Local origin not allowed.');
+        (!isAccessRequest && req.headers.origin && !['http://127.0.0.1:5173', 'http://localhost:5173', 'http://127.0.0.1:3001', 'http://localhost:3001'].includes(req.headers.origin))) throw new ApiError(403, 'FORBIDDEN', 'Local origin not allowed.');
     const chunks: Buffer[] = []; let bytes = 0;
     for await (const chunk of req) { bytes += chunk.length; if (bytes > bodyLimit(req.method ?? 'GET', url.pathname)) throw new ApiError(413, 'TOO_LARGE', 'Body exceeds the limit for this endpoint.'); chunks.push(chunk); }
     const body = Buffer.concat(chunks).toString('utf8');
     const isIntake = req.method === 'POST' && url.pathname.replace(/\/$/, '') === '/intake/adf';
     if (isIntake && !['application/xml', 'text/xml'].includes((req.headers['content-type'] ?? '').split(';')[0])) throw new ApiError(415, 'CONTENT_TYPE', 'Use application/xml.');
-    if (!isIntake && ['POST', 'PUT', 'DELETE'].includes(req.method ?? '') && !req.headers['content-type']?.startsWith('application/json')) throw new ApiError(415, 'CONTENT_TYPE', 'Use application/json.');
+    const isSiteForm = req.method === 'POST' && /^\/public\/[\w-]+\/site\/(contact|vehicles\/[\w-]+)\/?$/.test(url.pathname) && req.headers['content-type']?.startsWith('application/x-www-form-urlencoded');
+    if (!isIntake && !isSiteForm && ['POST', 'PUT', 'DELETE'].includes(req.method ?? '') && !req.headers['content-type']?.startsWith('application/json')) throw new ApiError(415, 'CONTENT_TYPE', 'Use application/json.');
     if (req.method === 'POST' && url.pathname === '/local/session') {
       result = await localSession(body, repositories, tokens);
     } else {

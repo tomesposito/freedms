@@ -1,3 +1,4 @@
+import { createDealerSiteHandler, websiteSettings } from './dealer-site.js';
 import { createPublicInventoryHandler } from './public-inventory.js';
 import { searchRecords } from './repository.js';
 import { assistantSkillsEndpoint } from './assistant-skills.js';
@@ -66,6 +67,7 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
 }
 export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {stripe?: StripeBilling; appBaseUrl?: string; assistantSeedLocalPlan?: boolean; assistantProvider?: AssistantProvider; assistantEntitlement?: AssistantEntitlement; registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
   const publicInventory = createPublicInventoryHandler();
+  const dealerSite = createDealerSiteHandler();
   const sender = options.hosted ? guardHostedWebhookSender(webhookSender ?? hostedWebhookSender()) : webhookSender ?? fetchWebhookSender;
   const postCommit = async (repo: TenantRepository, defer = false) => {
     try {
@@ -94,6 +96,13 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         const {result, tenantId} = await publicShare(request, repositories, now(), documents);
         if (request.method.toUpperCase() === 'POST' && result.statusCode >= 200 && result.statusCode < 300) {
           try { await postCommit(repositories.forTenant(tenantId)); } catch { /* Preserve the committed buyer mutation. */ }
+        }
+        return compressResponse(result, request.acceptEncoding);
+      }
+      if (/^\/public\/[^/]+\/site(?:\/|$)/.test(request.path)) {
+        const result = await dealerSite(request, repositories, now());
+        if (request.method.toUpperCase() === 'POST' && result.statusCode === 200) {
+          try { await postCommit(repositories.forTenant(request.path.split('/')[2])); } catch { /* Keep committed lead successful. */ }
         }
         return compressResponse(result, request.acceptEncoding);
       }
@@ -126,6 +135,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       }}) : repository;
 
       const execute = async (): Promise<ApiResponse> => {
+        if (path === '/settings/website') return websiteSettings(request, principal, repo, now());
         if (!sandboxAllowed && path.startsWith('/assistant/') &&
             !(path === '/assistant/admin' && method === 'GET') &&
             !(path === '/assistant/admin/waitlist' && ['POST', 'DELETE'].includes(method))) throw sandboxDenied();
@@ -260,7 +270,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
           return response(200, {data: {id}});
         }
         const {version: _version, ...fields} = body;
-        const vehicle: Vehicle = {...vehicleInput(fields, date), id: existing.id, tenantId: principal.tenantId, version: expected + 1, createdAt: existing.createdAt, updatedAt: date.toISOString()};
+        const vehicle: Vehicle = {...vehicleInput(fields, date), ...(fields.photoUrls === undefined && existing.photoUrls ? {photoUrls: existing.photoUrls} : {}), id: existing.id, tenantId: principal.tenantId, version: expected + 1, createdAt: existing.createdAt, updatedAt: date.toISOString()};
         await repository.update(vehicle, expected, event('vehicle.updated', id!, vehicle.version));
         return response(200, {data: view(vehicle, date)});
       };
