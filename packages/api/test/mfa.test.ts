@@ -68,16 +68,60 @@ test('setup replaces pending secret; enabling reveals recovery codes once and se
   const codes = enabled.data.recoveryCodes as string[]; assert.equal(new Set(codes).size, 8);
   const stored = (await s.memory.forTenant('A').mfa('admin'))!;
   assert.equal(stored.pendingSecret, null); assert.equal(stored.secret, second.secret); assert.equal(stored.failedAttempts, 0);
+  for (const entry of stored.recoveryHashes) assert.match(entry, /^scrypt:v1:[0-9a-f]{32}:[0-9a-f]{64}$/);
+  assert.equal(new Set(stored.recoveryHashes.map(entry => entry.split(':')[2])).size, 8);
   for (const code of codes) {
     assert.match(code, /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/);
     assert.ok(!JSON.stringify(stored).includes(code));
-    assert.ok(stored.recoveryHashes.includes(createHash('sha256').update(code.replace('-', '')).digest('hex')));
+    assert.ok(!JSON.stringify(stored).includes(code.replace('-', '')));
+    assert.ok(!stored.recoveryHashes.includes(createHash('sha256').update(code.replace('-', '')).digest('hex')));
   }
   assert.equal((await s.post('setup')).status, 409);
   assert.equal((await s.call('/session')).data.mfaEnabled, true);
   const publicJson = JSON.stringify([await s.call('/account/mfa'), await s.call('/admin/mfa'), await s.call('/session'), await s.memory.forTenant('A').events()]);
   for (const value of [first.secret, second.secret, ...codes, ...stored.recoveryHashes]) assert.ok(!publicJson.includes(value));
   assert.deepEqual((await s.memory.forTenant('A').events()).filter(e => e.type.startsWith('mfa.')).map(e => e.type), ['mfa.setup', 'mfa.setup', 'mfa.verified', 'mfa.enabled']);
+});
+test('legacy recovery codes verify once and regeneration migrates all remaining hashes', async () => {
+  const s = await setup(); const {secret, codes} = await s.enable();
+  const repo = s.memory.forTenant('A'), old = (await repo.mfa('admin'))!;
+  const record = {...old, version: old.version + 1, recoveryHashes: codes.map(code => createHash('sha256').update(code.replace('-', '')).digest('hex'))};
+  await repo.saveMfa(record, old.version, {id: 'legacy-fixture', tenantId: 'A', actorId: 'admin', aggregateId: 'admin', aggregateVersion: record.version, type: 'mfa.recovery_regenerated', occurredAt: s.now().toISOString(), deliveryStatus: 'pending'});
+  assert.equal((await s.post('verify', codes[0].toLowerCase().replace('-', ' '))).status, 200);
+  assert.equal((await repo.mfa('admin'))!.lastTotpStep, old.lastTotpStep);
+  assert.equal((await s.call('/account/mfa')).data.recoveryCodesRemaining, 7);
+  assert.equal((await s.post('verify', codes[0])).status, 401);
+  assert.equal((await s.call('/account/mfa')).data.recoveryCodesRemaining, 7);
+  s.advance(); assert.equal((await s.post('recovery-codes', totp(secret, s.now()))).status, 200);
+  const migrated = (await repo.mfa('admin'))!;
+  assert.equal(migrated.recoveryHashes.length, 8);
+  for (const entry of migrated.recoveryHashes) assert.match(entry, /^scrypt:v1:[0-9a-f]{32}:[0-9a-f]{64}$/);
+  assert.equal((await s.post('verify', codes[1])).status, 401);
+});
+test('wrong recovery-shaped code persists a failed attempt', async () => {
+  const s = await setup(); const {codes} = await s.enable();
+  const bad = ['AAAA-AAAA', 'BBBB-BBBB', 'CCCC-CCCC', 'DDDD-DDDD', 'EEEE-EEEE', 'FFFF-FFFF', 'GGGG-GGGG', 'HHHH-HHHH', 'JJJJ-JJJJ'].find(code => !codes.includes(code))!;
+  assert.equal((await s.post('verify', bad)).status, 401);
+  const record = (await s.memory.forTenant('A').mfa('admin'))!;
+  assert.equal(record.failedAttempts, 1); assert.equal(record.lockedUntil, null);
+  assert.equal(record.recoveryHashes.length, 8);
+});
+test('malformed recovery entries are skipped and fresh TOTP does not consume recovery entries', async () => {
+  const s = await setup(); const {secret, codes} = await s.enable(); s.advance();
+  const repo = s.memory.forTenant('A'), old = (await repo.mfa('admin'))!;
+  const code = totp(secret, s.now());
+  const record = {...old, version: old.version + 1, recoveryHashes: [
+    '', 'scrypt:v2:bad', `scrypt:v1:${'00'.repeat(16)}:ff`,
+    `scrypt:v1:${'zz'.repeat(16)}:${'00'.repeat(32)}`, 'f'.repeat(63),
+    createHash('sha256').update(code).digest('hex'), ...old.recoveryHashes,
+  ]};
+  await repo.saveMfa(record, old.version, {id: 'malformed-fixture', tenantId: 'A', actorId: 'admin', aggregateId: 'admin', aggregateVersion: record.version, type: 'mfa.recovery_regenerated', occurredAt: s.now().toISOString(), deliveryStatus: 'pending'});
+  assert.equal((await s.post('verify', code)).status, 200);
+  assert.deepEqual((await repo.mfa('admin'))!.recoveryHashes, record.recoveryHashes);
+  assert.equal((await s.post('verify', codes[0])).status, 200);
+  const verified = (await repo.mfa('admin'))!;
+  assert.equal(verified.recoveryHashes.length, record.recoveryHashes.length - 1);
+  assert.equal(verified.lastTotpStep, Math.floor(s.now().getTime() / 30000));
 });
 test('TOTP rejects replay across operations; normalized recovery code works exactly once, including concurrent calls', async () => {
   const s = await setup(); const {secret, codes} = await s.enable();
