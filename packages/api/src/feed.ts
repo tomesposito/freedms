@@ -1,3 +1,5 @@
+import { feedExclusion, sortedFeedVehicles } from './feed-selection.js';
+import { buildFacebookRows, newestFacebookRun } from './facebook-feed.js';
 import { track } from './analytics.js';
 import { randomUUID } from 'node:crypto';
 import { defaultFeedOptions, vehicleStatuses, type FeedOptions, type FeedRun, type OutboxEvent, type Principal, type Vehicle } from '@freedms/shared';
@@ -9,20 +11,21 @@ import { toCsv } from './reports.js';
 import { invalid, onlyKeys } from './validation.js';
 export const FEED_BODY_LIMIT = 4096;
 export function feedOptions(b: Record<string, unknown>): FeedOptions {
-  onlyKeys(b, ['formats', 'includedStatuses', 'requirePrice', 'schedule']);
+  onlyKeys(b, ['formats', 'includedStatuses', 'requirePrice', 'schedule', 'facebookEnabled']);
   const choices = <T extends string>(value: unknown, allowed: readonly T[]): T[] => {
     if (!Array.isArray(value) || !value.length || value.length > allowed.length || new Set(value).size !== value.length || value.some(v => !allowed.includes(v))) throw invalid('Select distinct supported feed formats/statuses.');
     return value;
   };
   if (typeof b.requirePrice !== 'boolean' || typeof b.schedule !== 'string' || !['manual', 'daily', 'weekly'].includes(b.schedule)) throw invalid('Invalid price requirement or schedule.');
-  return {formats: choices(b.formats, ['csv', 'json']), includedStatuses: choices(b.includedStatuses, vehicleStatuses), requirePrice: b.requirePrice, schedule: b.schedule as FeedOptions['schedule']};
+  if (b.facebookEnabled !== undefined && typeof b.facebookEnabled !== 'boolean') throw invalid('Invalid Facebook enable flag.');
+  return {facebookEnabled: b.facebookEnabled ?? false, formats: choices(b.formats, ['csv', 'json']), includedStatuses: choices(b.includedStatuses, vehicleStatuses), requirePrice: b.requirePrice, schedule: b.schedule as FeedOptions['schedule']};
 }
 export function buildFeed(vehicles: Vehicle[], config: FeedOptions): Pick<FeedRun, 'rows' | 'included' | 'excluded' | 'includedCount' | 'excludedCount'> {
   const rows: FeedRun['rows'] = [], included: FeedRun['included'] = [], excluded: FeedRun['excluded'] = [];
-  for (const v of [...vehicles].sort((a, b) => a.stockNumber.localeCompare(b.stockNumber) || a.id.localeCompare(b.id))) {
+  for (const v of sortedFeedVehicles(vehicles)) {
     const identity = {vehicleId: v.id, stockNumber: v.stockNumber};
-    if (!config.includedStatuses.includes(v.status)) { excluded.push({...identity, reason: v.status === 'sold' ? 'sold' : 'status_not_included', message: `Status not included: ${v.status}.`}); continue; }
-    if (config.requirePrice && v.listPrice <= 0) { excluded.push({...identity, reason: 'missing_price', message: 'Missing price.'}); continue; }
+    const reason = feedExclusion(v, config);
+    if (reason) { excluded.push({...identity, reason, message: reason === 'missing_price' ? 'Missing price.' : `Status not included: ${v.status}.`}); continue; }
     included.push(identity);
     rows.push({stockNumber: v.stockNumber, vin: v.vin, year: v.year, make: v.make, model: v.model, trim: v.trim, status: v.status, listPriceCents: v.listPrice, dateStocked: v.dateStocked, location: v.location});
   }
@@ -47,7 +50,10 @@ export async function feeds(request: ApiRequest, principal: Principal, repo: Ten
   }
   if (path === '/feeds/runs') return response(200, {data: (await repo.feedRuns()).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))});
   const config = await repo.feedConfig();
-  if (method === 'GET') return response(200, {data: {config: config ?? null, defaults: defaultFeedOptions, local}});
+  if (method === 'GET') {
+    const latest = newestFacebookRun(await repo.feedRuns());
+    return response(200, {data: {config: config ?? null, defaults: defaultFeedOptions, local, facebook: {enabled: config?.facebookEnabled ?? false, feedUrl: `/public/${principal.tenantId}/facebook.csv`, lastGeneratedAt: latest?.createdAt ?? null, vehicleCount: latest?.facebookRows?.length ?? null}}});
+  }
   requireWrite(principal, method);
   const body = parseBody(request.body, FEED_BODY_LIMIT), date = now.toISOString();
   const event = (type: OutboxEvent['type'], id: string, version = 1): OutboxEvent => ({id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, type, aggregateId: id, aggregateVersion: version, occurredAt: date, deliveryStatus: 'pending'});
@@ -58,7 +64,8 @@ export async function feeds(request: ApiRequest, principal: Principal, repo: Ten
   }
   onlyKeys(body, []);
   const options = config ?? defaultFeedOptions;
-  const run: FeedRun = {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, createdAt: date, formats: [...options.formats], ...buildFeed(await repo.list({}), options)};
+  const vehicles = await repo.list({});
+  const run: FeedRun = {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, createdAt: date, formats: [...options.formats], ...buildFeed(vehicles, options), ...(options.facebookEnabled ? {facebookRows: buildFacebookRows(vehicles, options, principal.tenantId, (await repo.tenant())!.name)} : {})};
   // Keep the immutable snapshot safely below Dynamo's 400 KB item limit in both adapters.
   if (Buffer.byteLength(JSON.stringify(run)) > 300000) throw invalid('Feed snapshot exceeds the local 300 KB run limit. Narrow the included statuses or reduce inventory before generating.');
   await repo.appendFeedRun(run, event('feed.generated', run.id));

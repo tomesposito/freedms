@@ -990,7 +990,7 @@ Invalid input and unauthenticated requests are not metered. This is a metering s
 only: no billing, prices, credits, or spend limits. Usage contains no prompt/image
 content and has no public listing endpoint. Offline tests use injected fakes.
 
-### Listing feed exports (local only)
+### Listing feed exports
 
 Open **Feeds** at `#/feeds` to save formats, included statuses, price requirements,
 and a manual/daily/weekly cadence preference. Generation happens only when you
@@ -1003,14 +1003,24 @@ USD cents. Public files exclude dealer cost, recon, notes, and aging. Run snapsh
 are limited to 300 KB; oversized generations fail before saving anything.
 Local in-memory configurations and runs are cleared when the API restarts.
 
+Facebook Marketplace vehicle catalog feeds are free with the DMS. Enable the
+Facebook option in Feeds, save, generate, then paste the public feed URL into Meta
+Commerce Manager → Catalog → Data feeds and choose a pull schedule. Sold or
+removed cars drop out on the next generation; sold cars are always excluded.
+Photos are currently unavailable and image fields are empty. Meta controls
+catalog approval, eligibility (including country, account type, and page standing),
+and ranking; placement is never promised. freeDMS holds no Facebook credentials
+and makes no calls to Meta. Meta can pull the URL when the app is hosted.
+
 | Method | Path | Result |
 | --- | --- | --- |
-| GET | `/feeds/config` | Saved config or `null`, defaults, and local-only generation/scheduling flags |
-| PUT | `/feeds/config` | Save formats, includedStatuses, requirePrice, schedule; authenticated write role |
+| GET | `/feeds/config` | Saved config or `null`, defaults, local generation/scheduling flags, and Facebook feed status |
+| PUT | `/feeds/config` | Save formats, includedStatuses, requirePrice, schedule, facebookEnabled; authenticated write role |
 | POST | `/feeds/generate` | Body `{}`; save an immutable run with counts, included identities, excluded identities/reasons, and public snapshot rows |
 | GET | `/feeds/runs` | Tenant run history, newest first |
 | GET | `/feeds/runs/{id}.csv` | Download CSV snapshot if generated for this run |
 | GET | `/feeds/runs/{id}.json` | Download JSON array snapshot if generated for this run |
+| GET | `/public/{tenantId}/facebook.csv` | Public, unauthenticated CSV; 404 unless enabled with a generated Facebook feed |
 
 ### Webhooks (local build)
 

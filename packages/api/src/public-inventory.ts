@@ -1,3 +1,4 @@
+import { facebookCsv, newestFacebookRun } from './facebook-feed.js';
 import type { Vehicle } from '@freedms/shared';
 import { ApiError, missing } from './errors.js';
 import { response, type ApiRequest, type ApiResponse } from './handler.js';
@@ -39,7 +40,7 @@ export function createPublicInventoryHandler() {
   // Best-effort per-process protection only: Lambda instances do not share buckets.
   const buckets = new Map<string, {start: number; count: number}>();
   return async (request: ApiRequest, repositories: RepositoryFactory, now: Date): Promise<ApiResponse> => {
-    const match = /^\/public\/([\w-]{1,128})\/(inventory\.json|inventory\.html|llms\.txt)$/.exec(request.path);
+    const match = /^\/public\/([\w-]{1,128})\/(inventory\.json|inventory\.html|llms\.txt|facebook\.csv)$/.exec(request.path);
     if (!match || Object.keys(request.query ?? {}).length) throw missing();
     if (request.method.toUpperCase() !== 'GET') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
     const [, tenantId, format] = match;
@@ -52,6 +53,15 @@ export function createPublicInventoryHandler() {
     const bucket = buckets.get(key) ?? {start: time, count: 0};
     buckets.set(key, bucket);
     if (++bucket.count > 120) throw new ApiError(429, 'RATE_LIMITED', 'Too many requests. Try again later.');
+    if (format === 'facebook.csv') {
+      if (!(await repo.feedConfig())?.facebookEnabled) throw missing();
+      const latest = newestFacebookRun(await repo.feedRuns());
+      if (!latest) throw missing();
+      const result = response(200, null);
+      result.headers['content-type'] = 'text/csv; charset=utf-8';
+      result.body = facebookCsv(latest.facebookRows!);
+      return result;
+    }
     const document = buildPublicInventory(tenant.name, await repo.list({}));
     const result = response(200, document);
     if (format === 'inventory.html') {
