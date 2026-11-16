@@ -134,6 +134,37 @@ test('RFC 4180 escaping is conditional and round-trips commas, quotes, CR and LF
   assert.deepEqual(parseCsv(toCsv(rows)), rows);
 });
 
+test('toCsv neutralizes formula-leading cells before RFC 4180 escaping', () => {
+  const dangerous = ['=2+5+cmd', '@SUM(1+1)', '+2+2', '-2+2', ' =HYPERLINK(...)', '\t=2+2', '\r=2+2', ' @SUM(1+1)', ' \t=2+2', '\tplain', '\rplain'];
+  for (const cell of dangerous) {
+    const prefixed = `'${cell}`;
+    const expected = cell.includes('\r') ? `"${prefixed}"\r\n` : `${prefixed}\r\n`;
+    assert.equal(toCsv([[cell]]), expected);
+    assert.deepEqual(parseCsv(toCsv([[cell]])), [[prefixed]]);
+  }
+  assert.equal(toCsv([['=SUM(1,2)', '=HYPERLINK("url","label")']]), '"\'=SUM(1,2)","\'=HYPERLINK(""url"",""label"")"\r\n');
+});
+
+test('toCsv preserves plain numbers and ordinary text byte-for-byte', () => {
+  const cells = ['-450.00', '+450', '-450', '+450.00', '-0.50', '450.00', ' -450.00 ', 'plain', '', 'Pat Buyer', 'STOCK-123', '2026-10-01', "'=2+2"];
+  assert.equal(toCsv([cells]), cells.join(',') + '\r\n');
+  assert.deepEqual(parseCsv(toCsv([cells])), [cells]);
+});
+
+test('sales and accounting CSV builders neutralize buyer formulas and preserve JSON data', async () => {
+  const s = await setup();
+  await s.sell('2026-10-01', 1);
+  const data = await s.json<SalesReport>('/reports/sales');
+  data.rows[0].buyer = '=2+5+cmd';
+  data.rows[0].frontGross = -45000;
+  for (const accounting of [false, true]) {
+    const cells = parseCsv(salesCsv(data, accounting));
+    assert.equal(cells[1][2], "'=2+5+cmd");
+    assert.equal(cells[1][accounting ? 9 : 5], '-450.00');
+  }
+  assert.equal(data.rows[0].buyer, '=2+5+cmd');
+});
+
 test('sold date uses the last sold history entry in UTC, falling back to updatedAt', async () => {
   const s = await setup(), deal = await s.sell('2026-10-01', 1);
   assert.equal(soldDate({...deal, updatedAt: '2026-10-15T12:00:00Z'}), '2026-10-01');

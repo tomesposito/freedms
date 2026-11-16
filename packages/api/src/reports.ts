@@ -9,7 +9,11 @@ export { soldDate } from './repository.js';
 import { invalid, onlyKeys, view } from './validation.js';
 
 export function toCsv(rows: string[][]): string {
-  return rows.map(row => row.map(cell => /[,"\r\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell).join(',')).join('\r\n') + '\r\n';
+  return rows.map(row => row.map(cell => {
+    // Keep plain signed amounts numeric, but neutralize spreadsheet formulas before CSV escaping.
+    if (!/^[+-]?\d+(\.\d+)?$/.test(cell.trim()) && (/^[\t\r]/.test(cell) || /^[ \t]*[=+\-@]/.test(cell))) cell = `'${cell}`;
+    return /[,"\r\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell;
+  }).join(',')).join('\r\n') + '\r\n';
 }
 const dollars = (cents: number) => (cents / 100).toFixed(2);
 const description = (v: Vehicle) => `${v.year} ${v.make} ${v.model}`;
