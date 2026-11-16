@@ -147,13 +147,20 @@ export async function drainWebhooks(repositories: RepositoryFactory, sender: Web
   if (!Number.isInteger(budget) || budget < 1) throw new RangeError('Invalid drain budget');
   if (!repositories.webhookTenantIds) throw new Error('Webhook tenant enumeration unavailable');
   const summary = {created: 0, delivered: 0, failed: 0};
-  for (const tenantId of await repositories.webhookTenantIds()) {
-    while (summary.created < budget) {
-      const pass = await dispatchWebhooks(repositories.forTenant(tenantId), sender, now, {maxDeliveries: Math.min(MAX_DELIVERIES_PER_PASS, budget - summary.created)});
+  let active = await repositories.webhookTenantIds();
+  // One claim per tenant per round prevents a busy tenant monopolizing the budget.
+  // Fairness is within each invocation, so it survives stateless Lambda cold starts.
+  while (active.length && summary.created < budget) {
+    const before = summary.created;
+    const next: string[] = [];
+    for (const tenantId of active) {
+      const pass = await dispatchWebhooks(repositories.forTenant(tenantId), sender, now, {maxDeliveries: 1});
       summary.created += pass.created; summary.delivered += pass.delivered; summary.failed += pass.failed;
-      if (!pass.created || !pass.remaining) break;
+      if (pass.remaining) next.push(tenantId);
+      if (summary.created >= budget) break;
     }
-    if (summary.created >= budget) break;
+    if (summary.created === before) break; // Lost claims must not cause an endless round.
+    active = next;
   }
   return summary;
 }

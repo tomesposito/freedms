@@ -411,9 +411,66 @@ test('scheduled drain shares a bounded budget across tenants and resumes on the 
   const sender: WebhookSender = async (_url, init) => { sent.push(JSON.parse(init.body).tenantId); return {status: 204}; };
   assert.deepEqual(await repositories.webhookTenantIds(), ['A', 'B']);
   assert.deepEqual(await drainWebhooks(repositories, sender, now, 3), {created: 3, delivered: 3, failed: 0});
-  assert.deepEqual(sent, ['A', 'A', 'B']);
+  assert.deepEqual(sent, ['A', 'B', 'A']);
   assert.deepEqual(await drainWebhooks(repositories, sender, now, 3), {created: 1, delivered: 1, failed: 0});
-  assert.deepEqual(sent, ['A', 'A', 'B', 'B']);
+  assert.deepEqual(sent, ['A', 'B', 'A', 'B']);
+});
+
+test('scheduled drain advances B on every run while A is continually replenished', async () => {
+  const {repositories, add, endpoint} = await setup();
+  for (let i = 0; i < 3; i++) await add('B');
+  await endpoint('A'); await endpoint('B');
+  const sent: string[] = [];
+  const sender: WebhookSender = async (_url, init) => { sent.push(JSON.parse(init.body).tenantId); return {status: 204}; };
+  const total = {created: 0, delivered: 0, failed: 0};
+  for (let run = 0; run < 3; run++) {
+    for (let i = 0; i < 3; i++) {
+      const id = `replenished-${run}-${i}`;
+      await repositories.forTenant('A').create({...input, status: 'available', id, tenantId: 'A', version: 1, createdAt: date, updatedAt: date}, event('A', id, 'vehicle.created'));
+    }
+    const pass = await drainWebhooks(repositories, sender, now, 3);
+    assert.deepEqual(pass, {created: 3, delivered: 3, failed: 0});
+    total.created += pass.created; total.delivered += pass.delivered; total.failed += pass.failed;
+    const b = await repositories.forTenant('B').webhookDeliveries();
+    assert.equal(b.length, run + 1, 'B progresses starting with the first drain');
+    assert.ok(b.every(delivery => delivery.status === 'delivered'));
+    assert.ok((await repositories.forTenant('A').webhookDispatchCandidates(await repositories.forTenant('A').webhookEndpoints(), now)).length > 0);
+  }
+  assert.deepEqual(total, {created: 9, delivered: 9, failed: 0});
+  assert.equal(sent.filter(tenant => tenant === 'A').length, 6);
+  assert.equal(sent.filter(tenant => tenant === 'B').length, 3);
+});
+
+test('scheduled drain allocates rounds fairly across three backlogged tenants', async () => {
+  const {repositories, add, endpoint} = await setup();
+  await repositories.forTenant('C').provision({id: 'C', name: 'C', createdAt: date}, {id: 'user', name: 'Test'}, {tenantId: 'C', userId: 'user', role: 'admin', active: true}, event('C', 'provision', 'tenant.created', 'C'));
+  for (const tenant of ['A', 'B', 'C']) {
+    for (let i = 0; i < 4; i++) await add(tenant);
+    await endpoint(tenant);
+  }
+  const sent: string[] = [];
+  assert.deepEqual(await drainWebhooks(repositories, async (_url, init) => {
+    sent.push(JSON.parse(init.body).tenantId); return {status: 204};
+  }, now, 5), {created: 5, delivered: 5, failed: 0});
+  assert.deepEqual(sent, ['A', 'B', 'C', 'A', 'B']);
+  const counts = ['A', 'B', 'C'].map(tenant => sent.filter(id => id === tenant).length);
+  assert.ok(Math.min(...counts) >= 1);
+  assert.ok(Math.max(...counts) - Math.min(...counts) <= 1);
+});
+
+test('scheduled drain stops after a full round of lost claims and skips empty tenants', {timeout: 2000}, async () => {
+  const {repositories, add, endpoint} = await setup();
+  await endpoint('A'); // Registered but empty; must not block B or consume budget.
+  await add('B'); await endpoint('B');
+  const original = repositories.forTenant.bind(repositories);
+  let claims = 0;
+  repositories.forTenant = tenant => ({...original(tenant), claimWebhookDelivery: async () => {
+    assert.ok(++claims <= 2, 'must stop after a zero-progress round'); return false;
+  }});
+  assert.deepEqual(await drainWebhooks(repositories, async () => { assert.fail('lost claims must not send'); }, now, 3), {created: 0, delivered: 0, failed: 0});
+  assert.equal(claims, 1);
+  repositories.forTenant = original;
+  assert.deepEqual(await drainWebhooks(repositories, async () => ({status: 204}), now, 3), {created: 1, delivered: 1, failed: 0});
 });
 
 test('hosted mutation awaits the inline attempt and preserves commits when delivery fails', async () => {
