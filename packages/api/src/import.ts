@@ -7,6 +7,7 @@ import type { TenantRepository } from './repository.js';
 import type { VinDecoder } from './vin.js';
 import { dollarCents, invalid, onlyKeys, text, vehicleInput, vin } from './validation.js';
 export const IMPORT_BODY_LIMIT = 1024 * 1024;
+export const MAX_VIN_DECODES_PER_IMPORT = 25;
 
 async function preview(csv: string, enrich: boolean, repo: TenantRepository, now: Date, decoder: VinDecoder): Promise<ImportPreview> {
   let parsed: string[][];
@@ -21,6 +22,7 @@ async function preview(csv: string, enrich: boolean, repo: TenantRepository, now
   const assignedOrProvidedStocks = new Set(stocks);
   const seenVins = new Map<string, number>(), seenStocks = new Map<string, number>();
   const rows: ImportRowResult[] = [];
+  const decodes = new Map<string, Awaited<ReturnType<VinDecoder['decode']>> | null>();
   for (const [index, cells] of data.entries()) {
     const raw: Record<string, string> = {year: '', make: '', model: '', vin: '', stockNumber: '', cost: '', listPrice: ''};
     columns.forEach((key, i) => { if (key) raw[key] = cells[i].trim(); });
@@ -30,8 +32,16 @@ async function preview(csv: string, enrich: boolean, repo: TenantRepository, now
     };
     const validVin = check('vin', () => vin(raw.vin));
     if (enrich && validVin && ['year', 'make', 'model', 'trim'].some(k => !raw[k])) {
-      try { const decoded = await decoder.decode(validVin); for (const key of ['year', 'make', 'model', 'trim'] as const) if (!raw[key]) raw[key] = String(decoded[key] ?? ''); }
-      catch { /* Decoder failure leaves normal row validation in charge. */ }
+      if (!decodes.has(validVin)) {
+        if (decodes.size < MAX_VIN_DECODES_PER_IMPORT) {
+          // Reserve the attempt even on failure so repeated VINs are never retried.
+          decodes.set(validVin, null);
+          try { decodes.set(validVin, await decoder.decode(validVin)); }
+          catch { /* Decoder failure leaves normal row validation in charge. */ }
+        } else result.warnings = ['VIN decode skipped because the per-import decode limit was reached. Fill missing fields manually or split the file.'];
+      }
+      const decoded = decodes.get(validVin);
+      if (decoded) for (const key of ['year', 'make', 'model', 'trim'] as const) if (!raw[key]) raw[key] = String(decoded[key] ?? '');
     }
     // Missing/blank stock numbers use IMP- plus the uppercased VIN's last 8 characters.
     // Reserve earlier rows too; append -2, -3, ... until unique within this tenant/file.
@@ -86,7 +96,7 @@ export async function inventoryImport(request: ApiRequest, principal: Principal,
   const event = (type: OutboxEvent['type'], aggregateId: string): OutboxEvent => ({id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, ...(request.agent ? {actorType: 'agent' as const} : {}), type, aggregateId, aggregateVersion: 1, occurredAt: now.toISOString(), deliveryStatus: 'pending'});
   const result: ImportResult = {importId: randomUUID(), totalRows: p.totalRows, importedCount: 0, errorCount: p.errorCount, duplicateCount: p.duplicateCount, importedVehicleIds: [], skipped: []};
   for (const row of p.rows) {
-    if (row.status !== 'valid') { result.skipped.push({rowNumber: row.rowNumber, status: row.status, errors: row.errors, ...(row.duplicate ? {duplicate: row.duplicate} : {})}); continue; }
+    if (row.status !== 'valid') { result.skipped.push({rowNumber: row.rowNumber, status: row.status, errors: row.errors, ...(row.warnings ? {warnings: row.warnings} : {}), ...(row.duplicate ? {duplicate: row.duplicate} : {})}); continue; }
     const vehicle = {...row.vehicle!, id: randomUUID(), tenantId: principal.tenantId, version: 1, createdAt: now.toISOString(), updatedAt: now.toISOString()};
     await repo.create(vehicle, event('vehicle.created', vehicle.id)); result.importedVehicleIds.push(vehicle.id); result.importedCount++;
   }
