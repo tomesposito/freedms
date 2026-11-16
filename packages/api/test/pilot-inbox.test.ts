@@ -54,9 +54,11 @@ test('operator can review both queues and handle a request without provisioning 
   assert.deepEqual(await s.repositories.forTenant('demo').accessRequests(), []);
 });
 
-test('stale handling cannot overwrite a newer submission or silently handle twice', async () => {
+test('stale handling cannot overwrite a newer record or silently handle twice', async () => {
   const s = await setup();
-  await s.submit({...fields, message: 'New information'});
+  const repository = s.repositories.forTenant('operator');
+  const original = (await repository.accessRequest(fields.email))!;
+  await repository.saveAccessRequest({...original, message: 'New information', version: 2}, original.version);
   assert.equal((await s.call('/admin/access-requests/handled', 'POST', {email: fields.email, version: 1})).statusCode, 409);
   const saved = await s.repositories.forTenant('operator').accessRequest(fields.email);
   assert.equal(saved?.message, 'New information'); assert.equal(saved?.status, 'pending');

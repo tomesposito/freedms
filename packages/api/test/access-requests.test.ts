@@ -62,19 +62,26 @@ test('honeypot drops before required validation, but after unknown keys and body
   assert.deepEqual(await repo.accessRequests(), []);
 });
 
-test('repeated email updates one record and preserves identity, creation and handled status', async () => {
-  const {post, repo, repositories, setNow} = setup();
-  await post(); const first = (await repo.accessRequests())[0];
-  const later = new Date('2026-10-31T12:00:00Z'); setNow(later);
-  assert.equal((await post({...fields, email: fields.email.toUpperCase(), contactName: 'Updated'})).statusCode, 201);
-  const records = await repo.accessRequests(); assert.equal(records.length, 1);
-  assert.equal(records[0].id, first.id); assert.equal(records[0].createdAt, first.createdAt);
-  assert.equal(records[0].version, 2); assert.equal(records[0].contactName, 'Updated'); assert.equal(records[0].updatedAt, later.toISOString());
-  await markAccessRequestHandled(repositories, fields.email, later);
-  await post({...fields, message: 'Again'});
-  const handled = (await repo.accessRequests())[0];
-  assert.equal(handled.status, 'handled'); assert.equal(handled.handledAt, later.toISOString()); assert.equal(handled.version, 4);
-});
+for (const status of ['pending', 'handled'] as const) {
+  test(`repeated email leaves every field of a ${status} access request unchanged`, async () => {
+    const {sent, mail} = fakeMail();
+    const {post, repo, repositories, setNow} = setup(mail);
+    await post();
+    if (status === 'handled') await markAccessRequestHandled(repositories, fields.email, new Date('2026-10-31T12:00:00Z'));
+    const before = await repo.accessRequests();
+    const serialized = JSON.stringify(before);
+    setNow(new Date('2026-11-01T12:00:00Z'));
+    const result = await post({
+      email: fields.email.toUpperCase(), contactName: 'Different Contact', dealershipName: 'Different Motors',
+      phone: '555-0199', inventorySize: '1-25', currentDms: 'Different DMS', message: 'Different message'
+    });
+    assert.equal(result.statusCode, 201);
+    assert.deepEqual(JSON.parse(result.body), {data: {received: true}});
+    assert.deepEqual(await repo.accessRequests(), before);
+    assert.equal(JSON.stringify(await repo.accessRequests()), serialized);
+    assert.equal(sent.length, 1);
+  });
+}
 
 test('operator lists pending newest-first with email tie-break and marks handled', async () => {
   const {post, repositories, setNow} = setup();
@@ -142,7 +149,7 @@ function fakeMail(configured = true) {
 
 test('new access request emails the operator after saving, and repeats never email again', async () => {
   const {sent, mail} = fakeMail();
-  const {post, repo} = setup({...mail, sender: {configured: true, send: async input => {
+  const {post, repo, setNow} = setup({...mail, sender: {configured: true, send: async input => {
     assert.equal((await repo.accessRequests()).length, 1);
     sent.push(input);
   }}});
@@ -150,9 +157,13 @@ test('new access request emails the operator after saving, and repeats never ema
   assert.deepEqual(sent, [{to: notifyTo, replyTo: fields.email,
     subject: `New freeDMS pilot access request — ${fields.dealershipName}`,
     text: `Contact name: ${fields.contactName}\nDealership name: ${fields.dealershipName}\nEmail: ${fields.email}\nPhone: ${fields.phone}\nInventory size: ${fields.inventorySize}\nCurrent DMS: ${fields.currentDms}\nMessage: ${fields.message}\nSubmitted: ${start.toISOString()}`}]);
-  assert.equal((await post({...fields, message: 'Updated'})).statusCode, 201);
+  const first = await repo.accessRequest(fields.email);
+  setNow(new Date('2026-10-31T12:00:00Z'));
+  const repeat = await post({...fields, message: 'Updated'});
+  assert.equal(repeat.statusCode, 201);
+  assert.deepEqual(JSON.parse(repeat.body), {data: {received: true}});
   assert.equal(sent.length, 1);
-  assert.equal((await repo.accessRequest(fields.email))?.message, 'Updated');
+  assert.deepEqual(await repo.accessRequest(fields.email), first);
 });
 
 test('notification labels include blank optional fields', async () => {
