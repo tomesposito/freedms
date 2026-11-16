@@ -2,8 +2,8 @@ import { brandLogoUrl } from './brand';
 import type { Invite } from '@freedms/shared';
 import { escapeHtml as e } from './format';
 export function inviteLink(token: string, base = `${location.origin}${location.pathname}`): string { return `${base}#/invite/${token}`; }
-export function inviteLinksHtml(invites: Invite[], base?: string): string {
-  return invites.length ? invites.map(i => `<article class="card"><h3>${e(i.name)}</h3><p>${e(i.email)} · ${e(i.role)} · ${e(i.status)}${i.status === 'accepted' ? `<br>Accepted ${e(i.acceptedAt ?? '')} as ${e(i.acceptedName ?? i.name)} (${e(i.email)})` : `<br>Expires ${e(i.expiresAt)}`}</p>${i.status === 'pending' ? `<label>Invite link<input readonly value="${e(inviteLink(i.token, base))}"></label><button type="button" data-copy>Copy link</button>` : ''}</article>`).join('') : '<p>No invites.</p>';
+export function inviteLinksHtml(invites: (Invite & {token?: string})[], base?: string): string {
+  return invites.length ? invites.map(i => `<article class="card"><h3>${e(i.name)}</h3><p>${e(i.email)} · ${e(i.role)} · ${e(i.status)}${i.status === 'accepted' ? `<br>Accepted ${e(i.acceptedAt ?? '')} as ${e(i.acceptedName ?? i.name)} (${e(i.email)})` : `<br>Expires ${e(i.expiresAt)}`}</p>${i.status === 'pending' ? i.token ? `<label>Invite link<input readonly value="${e(inviteLink(i.token, base))}"></label><button type="button" data-copy>Copy link</button>` : '<p>Invite link was shown once when created. Reissue to get a new link.</p>' : ''}</article>`).join('') : '<p>No invites.</p>';
 }
 export function bindInviteCopies(root: ParentNode): void {
   root.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach(button => button.addEventListener('click', async () => {

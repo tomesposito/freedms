@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { onboardingError, type Onboarding } from '../src/onboarding.js';
-import { inviteLandingHtml, inviteLink, welcomeHtml, welcomeDismissed, dismissWelcome, invitedEmailMatches } from '../src/invites.js';
+import { inviteLinksHtml, inviteLandingHtml, inviteLink, welcomeHtml, welcomeDismissed, dismissWelcome, invitedEmailMatches } from '../src/invites.js';
 import { usersHtml } from '../src/users.js';
 import type { Invite } from '@freedms/shared';
 const data: Onboarding = {name: 'Owner', email: 'owner@example.test', dealership: 'Motors', address: 'Main St', phone: '555', dealerType: 'other', invites: []};
@@ -18,10 +18,14 @@ test('invite pages escape content and explain pending acceptance and unavailable
   assert.match(inviteLandingHtml({valid: false}), /Ask your admin to reissue a link/);
   assert.equal(inviteLink('token', 'https://example.test/app/'), 'https://example.test/app/#/invite/token');
 });
-test('users show copyable pending links and final revocation without mutation actions', () => {
-  const pending = {id: 'i', name: '<Team>', email: 'team@example.test', role: 'staff', status: 'pending', expiresAt: '2026-11-01', token: 'secret'} as Invite;
-  const html = usersHtml([], true, [pending, {...pending, id: 'revoked', status: 'revoked', token: ''}], 'https://example.test/');
-  assert.match(html, /&lt;Team&gt;/); assert.match(html, /https:\/\/example.test\/#\/invite\/secret/);
+test('users explain one-time pending links and final revocation without mutation actions', () => {
+  const pending = {id: 'i', name: '<Team>', email: 'team@example.test', role: 'staff', status: 'pending', expiresAt: '2026-11-01'} as Invite;
+  const html = usersHtml([], true, [pending, {...pending, id: 'revoked', status: 'revoked'}], 'https://example.test/');
+  assert.match(html, /&lt;Team&gt;/); assert.match(html, /Reissue to get a new link/); assert.doesNotMatch(html, /<input readonly|data-copy/);
+  const once = {...pending, token: 'secret'};
+  assert.match(inviteLinksHtml([once], 'https://example.test/'), /https:\/\/example.test\/#\/invite\/secret/);
+  const responseHtml = usersHtml([], true, [pending], 'https://example.test/', false, once);
+  assert.match(responseHtml, /Copy it now/); assert.match(responseHtml, /data-copy/);
   assert.match(html, /data-action="reissue"/); assert.match(html, /data-action="revoke"/);
   assert.doesNotMatch(html, /data-invite="revoked"/); assert.match(html, /Revocation is final/);
 });
@@ -46,7 +50,7 @@ test('welcome explains roles and dismissal persists per user and tenant', () => 
   assert.equal(welcomeDismissed(storage, 'B', 'user'), false); assert.equal(welcomeDismissed(storage, 'A', 'other'), false);
 });
 test('accepted invite audit shows when and as whom without copy or mutation actions', () => {
-  const html = usersHtml([], true, [{id: 'used', name: 'Original', email: 'team@example.test', role: 'staff', status: 'accepted', acceptedAt: '2026-10-25', acceptedName: '<New Name>', token: '', expiresAt: '2026-11-01'} as Invite], 'https://example.test/');
+  const html = usersHtml([], true, [{id: 'used', name: 'Original', email: 'team@example.test', role: 'staff', status: 'accepted', acceptedAt: '2026-10-25', acceptedName: '<New Name>', expiresAt: '2026-11-01'} as Invite], 'https://example.test/');
   assert.match(html, /Accepted 2026-10-25 as &lt;New Name&gt; \(team@example.test\)/);
   assert.doesNotMatch(html, /data-copy|data-invite="used"/);
 });

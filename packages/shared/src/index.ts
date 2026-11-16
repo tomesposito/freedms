@@ -76,7 +76,7 @@ export interface Lead extends CrmRecord {
 export interface IntakeCredential extends CrmRecord { kind: 'intake'; hash: string }
 export * from './fi.js';
 import type { FiProduct } from './fi.js';
-export interface Invite extends CrmRecord { kind: 'invite'; name: string; email: string; role: Role; token: string; tokenHash: string; expiresAt: string; status: 'pending' | 'revoked' | 'accepted'; closedTokenHash?: string; acceptedAt?: string; acceptedUserId?: string; acceptedName?: string }
+export interface Invite extends CrmRecord { kind: 'invite'; name: string; email: string; role: Role; tokenHash: string; expiresAt: string; status: 'pending' | 'revoked' | 'accepted'; closedTokenHash?: string; acceptedAt?: string; acceptedUserId?: string; acceptedName?: string }
 export type CrmEntity = TermsAcceptance | PartsReservation | PrivacyRequest | SignatureRecord | PartsPurchaseOrder | PartsReturn | PricingMatrix | Technician | LaborRate | Invite | Part | PartsSale | ServiceAppointment | RepairOrder | ComplianceRecord | ComplianceCheck | SavedReport | DealShare | ShareResponse | AccountingLock | BankReconciliation | CreditApplication | PayoffQuote | GlAccount | JournalEntry | FiProduct | Customer | Lead | IntakeCredential | Deal | WorkspaceSettings | DealDocument | DocumentRetention;
 export interface LeadView extends Lead { customer: Customer; overdue: boolean }
 export function isOverdue(task: FollowUp, now: Date): boolean { return !task.done && !task.dismissed && Date.parse(task.dueAt) < now.getTime(); }

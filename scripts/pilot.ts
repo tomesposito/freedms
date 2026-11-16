@@ -29,6 +29,7 @@ if (operation === 'bootstrap') {
   access = {...access, ...result, email: config.email.toLowerCase(), signInUrl: outputs.WebUrl}; await save();
 } else if (operation === 'invite') {
   const invite = await invitePilot(repositories, identity, config);
+  if (!('token' in invite)) throw new Error('Invitation already exists. Reissue in Users to get a new link.');
   access = {...access, email: config.email.toLowerCase(), inviteUrl: `${outputs.WebUrl}#/invite/${invite.token}`}; await save();
 } else {
   if (config.demo !== true || !access.userId || access.tenantId !== config.tenantId) throw new Error('Explicit demo config and matching administrator access file required');
