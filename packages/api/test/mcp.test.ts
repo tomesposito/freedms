@@ -847,7 +847,7 @@ const documentInput = {name: 'Proof.txt', type: 'other', content: Buffer.from('o
 const userInput = {name: 'New user', email: 'new@example.test', role: 'staff'};
 const webhookInput = {url: 'https://receiver.example.test/events', eventTypes: ['vehicle.created']};
 const feedInput = {formats: ['csv', 'json'], includedStatuses: ['available'], requirePrice: true, schedule: 'manual'};
-const reportInput = {name: 'Inventory', dataset: 'inventory', columns: ['stockNumber', 'vehicle'], from: '2020-01-01', to: '2026-10-30'};
+const reportInput = {name: 'Inventory', dataset: 'inventory', columns: ['stockNumber', 'vehicle'], from: '2026-01-01', to: '2026-10-30'};
 async function staffToken(s: Awaited<ReturnType<typeof setup>>) {
   const user = data(await s.call('create_user', {...userInput, email: 'staff76@example.test'}));
   const jwt = token({sub: user.userId});
@@ -961,6 +961,7 @@ test('settings MCP preserves versions, webhook secret visibility, stub dispatch 
 
 test('reports MCP saves definitions and exports every CSV byte for byte as REST', async () => {
   const s = await setup(), repo = s.repositories.forTenant('A'), staff = await staffToken(s), before = (await repo.events()).length;
+  refused(await s.call('create_saved_report', {...reportInput, from: '2020-01-01'}, staff), 'VALIDATION');
   let saved = data(await s.call('create_saved_report', reportInput, staff));
   assert.deepEqual(await repo.crmGet('saved-report', saved.id), saved);
   const update = {...reportInput, name: 'Renamed', id: saved.id, version: 1};

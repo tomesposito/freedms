@@ -13,12 +13,18 @@ export function toCsv(rows: string[][]): string {
 }
 const dollars = (cents: number) => (cents / 100).toFixed(2);
 const description = (v: Vehicle) => `${v.year} ${v.make} ${v.model}`;
+const MAX_REPORT_RANGE_DAYS = 366;
+const DAY_MS = 86400000;
+function checkReportSpan(from: string, to: string) {
+  if (Date.parse(to) - Date.parse(from) > (MAX_REPORT_RANGE_DAYS - 1) * DAY_MS) throw invalid(`Date range must be ${MAX_REPORT_RANGE_DAYS} days or fewer.`);
+}
 export function dateRange(query: ApiRequest['query'] = {}) {
   onlyKeys(query, ['from', 'to']);
   for (const value of [query.from, query.to]) {
     if (value !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value)) throw invalid('Dates must be real calendar dates in YYYY-MM-DD format.');
   }
   if (query.from && query.to && query.from > query.to) throw invalid('From must be on or before to.');
+  if (query.from && query.to) checkReportSpan(query.from, query.to);
   return {from: query.from ?? null, to: query.to ?? null};
 }
 export async function inventoryReport(repo: TenantRepository, now: Date): Promise<InventoryReport> {
@@ -48,9 +54,12 @@ export async function salesReport(repo: TenantRepository, range: ReturnType<type
   for (const row of rows) counts.set(row.soldDate, (counts.get(row.soldDate) ?? 0) + 1);
   // Bounded windows include zero days. Open ranges span the observed dates.
   const first = range.from ?? rows[0]?.soldDate, last = range.to ?? rows.at(-1)?.soldDate;
-  if (first && last) for (let day = Date.parse(first); day <= Date.parse(last); day += 86400000) {
-    const date = new Date(day).toISOString().slice(0, 10);
-    if (!counts.has(date)) counts.set(date, 0);
+  if (first && last) {
+    checkReportSpan(first, last);
+    for (let day = Date.parse(first); day <= Date.parse(last); day += DAY_MS) {
+      const date = new Date(day).toISOString().slice(0, 10);
+      if (!counts.has(date)) counts.set(date, 0);
+    }
   }
   const trend = [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({date, count}));
   return {...range, rows, trend, totals: {dealsSold: rows.length, totalFrontGross, totalFiGross: rows.reduce((sum, r) => sum + r.fiGross, 0), averageGross: rows.length ? Math.round(totalFrontGross / rows.length) : 0}};
