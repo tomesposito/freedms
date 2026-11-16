@@ -19,7 +19,7 @@ export function gatewayHandler(handle: (request: ApiRequest) => Promise<ApiRespo
       const path = event.rawPath.replace(/\/$/, ''), method = event.requestContext.http.method.toUpperCase();
       const claims = event.requestContext.authorizer?.jwt?.claims ?? {};
       const intake = path === '/intake/adf' && method === 'POST';
-      const publicLink = (method === 'GET' && /^\/(share|invite)\/[^/]+$/.test(path)) ||
+      const publicLink = path.startsWith('/public/') || (method === 'GET' && /^\/(share|invite)\/[^/]+$/.test(path)) ||
         (method === 'POST' && /^\/share\/[^/]+\/(respond|documents)$/.test(path)) ||
         (method === 'POST' && ['/access-requests', '/assistant/billing/webhook'].includes(path));
       // Only API Gateway's verified claims are trusted. Invite acceptance requires Cognito.

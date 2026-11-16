@@ -1,3 +1,4 @@
+import { createPublicInventoryHandler } from './public-inventory.js';
 import { searchRecords } from './repository.js';
 import { assistantSkillsEndpoint } from './assistant-skills.js';
 import { billingAction, billingReturnUrl, stripeWebhook } from './assistant-stripe.js';
@@ -64,6 +65,7 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
 export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {stripe?: StripeBilling; appBaseUrl?: string; assistantSeedLocalPlan?: boolean; assistantProvider?: AssistantProvider; assistantEntitlement?: AssistantEntitlement; registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
+  const publicInventory = createPublicInventoryHandler();
   const sender = options.hosted ? guardHostedWebhookSender(webhookSender ?? hostedWebhookSender()) : webhookSender ?? fetchWebhookSender;
   const postCommit = async (repo: TenantRepository, defer = false) => {
     try {
@@ -95,6 +97,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         }
         return compressResponse(result, request.acceptEncoding);
       }
+      if (request.path.startsWith('/public/')) return compressResponse(await publicInventory(request, repositories, now()), request.acceptEncoding);
       if (request.path.startsWith('/invite/')) return compressResponse(await publicInvite(request, repositories, now(), options.hosted), request.acceptEncoding);
       if (request.path.replace(/\/$/, '') === '/access-requests') return compressResponse(await submitAccessRequest(request, repositories, now(), options.mail, options.turnstile), request.acceptEncoding);
       if (request.path.replace(/\/$/, '') === '/assistant/billing/webhook' && request.method.toUpperCase() === 'POST') {
