@@ -42,7 +42,37 @@ test('marketing image references match immutable packaged assets and pilot links
     for (const match of readFileSync(`${destination}/sitemap.xml`, 'utf8').matchAll(/<loc>([^<]+)<\/loc>/g)) {
       const url = new URL(match[1]);
       assert.equal(url.origin, 'https://freedms.co');
-      assert.ok(readFileSync(`${destination}/${url.pathname === '/' ? 'index.html' : url.pathname.slice(1)}`).length, match[1]);
+      const page = readFileSync(`${destination}/${url.pathname === '/' ? 'index.html' : url.pathname.slice(1)}`, 'utf8');
+      const snippet = [...page.split('</head>')[0].matchAll(/<script>([\s\S]*?)<\/script>/g)]
+        .map(match => match[1]).find(script => script.includes('window.posthog'));
+      assert.ok(snippet, url.pathname);
+      const window = {};
+      const scripts = [];
+      const document = {createElement: () => ({}), head: {appendChild: script => scripts.push(script)}};
+      runInNewContext(snippet, {window, document});
+      assert.equal(scripts.length, 1);
+      assert.equal(scripts[0].async, true);
+      const [, config] = window.posthog._i[0];
+      assert.equal(config.capture_pageview, true);
+      assert.equal(config.capture_pageleave, false);
+      assert.equal(config.autocapture, false);
+      assert.equal(config.person_profiles, 'never');
+      assert.equal(config.disable_session_recording, true);
+      assert.equal(config.before_send({event: '$autocapture'}), null);
+      const properties = {
+        token: 'test-project',
+        distinct_id: 'anonymous-id',
+        $process_person_profile: false,
+        $current_url: 'https://freedms.co/',
+        $referrer: 'https://example.com/',
+      };
+      const event = config.before_send({event: '$pageview', properties: {
+        ...properties,
+        $current_url: 'https://freedms.co/?query=private#fragment',
+        $referrer: 'https://example.com/?query=private',
+        $browser: 'unneeded metadata',
+      }});
+      assert.deepEqual({...event.properties}, properties);
     }
     assert.ok(html.includes('https://app.freedms.co/'));
     assert.ok(html.includes('invite-only'));

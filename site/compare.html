@@ -210,6 +210,42 @@ table.cost th{background:var(--wash)}
 .updated{color:var(--muted);font-size:.9rem;margin-top:36px}
 
 </style>
+<script>
+(() => {
+  // Queue initialization for the asynchronously loaded PostHog web SDK.
+  const posthog = window.posthog = [];
+  posthog._i = [['phc_zLdpMfB26g8UzU4FmNVHSP2uyM46vJroS5qmHza4ZnUN', {
+    api_host: 'https://us.i.posthog.com',
+    capture_pageview: true,
+    capture_pageleave: false,
+    autocapture: false,
+    person_profiles: 'never',
+    disable_session_recording: true,
+    disable_external_dependency_loading: true,
+    advanced_disable_flags: true,
+    before_send(event) {
+      if (event.event !== '$pageview') return null;
+
+      // Keep the anonymous event envelope and discard SDK-added metadata.
+      const properties = event.properties;
+      event.properties = {
+        token: properties.token,
+        distinct_id: properties.distinct_id,
+        $process_person_profile: false,
+        $current_url: properties.$current_url?.split(/[?#]/, 1)[0],
+        $referrer: properties.$referrer?.split(/[?#]/, 1)[0],
+      };
+      return event;
+    },
+  }, 'posthog']];
+
+  const script = document.createElement('script');
+  script.src = 'https://us-assets.i.posthog.com/static/array.js';
+  script.async = true;
+  script.crossOrigin = 'anonymous';
+  document.head.appendChild(script);
+})();
+</script>
 </head>
 <body>
 
