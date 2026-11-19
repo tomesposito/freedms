@@ -209,9 +209,15 @@ the record on the Users screen.
 
 ![Invite welcome](docs/screenshots/invite-welcome.png)
 
-**Inventory** — vehicles in pages of 100, with mileage, aging, cost, and status.
+**Inventory** — vehicles in pages of 100, with cover photos, mileage, aging, cost, and status.
 
-![Inventory list with unified search and assistant command bar](docs/screenshots/inventory-list.png)
+![Inventory list with cover thumbnails and no-photo placeholders](docs/screenshots/inventory-list.png)
+
+**Vehicle photos** — upload JPEG, PNG, or WebP files, add photos by URL, and set the cover. The cover leads the inventory list, dealer site, and Facebook feed.
+
+![Vehicle detail with an uploaded cover photo and photo controls](docs/screenshots/vehicle-photos.png)
+
+Truck photos by Kevauto, resized and cropped in the app. [Front photo](https://commons.wikimedia.org/wiki/File:2021_Ford_F-150_SuperCrew,_front_4.28.21.jpg) and [rear photo](https://commons.wikimedia.org/wiki/File:2021_Ford_F-150_SuperCrew,_rear_4.28.21.jpg) are licensed [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
 
 **Slim sidebar** — an icon rail leaves more room for the workspace.
 

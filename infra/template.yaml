@@ -446,6 +446,13 @@ Resources:
             Path: '/invite/{token}'
             Method: GET
             Auth: {Authorizer: NONE}
+        PublicVehiclePhoto:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/public/{tenantId}/photos/{photoId}'
+            Method: GET
+            Auth: {Authorizer: NONE}
         Proxy:
           Type: HttpApi
           Properties:

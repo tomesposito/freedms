@@ -1,3 +1,4 @@
+import { projectedPhotoUrls } from './vehicle-photos.js';
 import type { FacebookFeedRow, FeedOptions, FeedRun, Vehicle } from '@freedms/shared';
 import { feedExclusion, sortedFeedVehicles } from './feed-selection.js';
 import { toCsv } from './reports.js';
@@ -9,8 +10,8 @@ export function facebookRow(v: Vehicle, tenantId: string, dealer: string, imageU
     link: `/public/${tenantId}/inventory.html`, image_link: imageUrls[0] ?? '', additional_image_link: imageUrls.slice(1).join(','),
     make: v.make, model: v.model, year: v.year, trim: v.trim, mileage_value: v.mileage ?? '', mileage_unit: v.mileage === null ? '' : 'MI', dealer_name: dealer, location: v.location};
 }
-export function buildFacebookRows(vehicles: Vehicle[], config: FeedOptions, tenantId: string, dealer: string): FacebookFeedRow[] {
-  return sortedFeedVehicles(vehicles).filter(v => v.status !== 'sold' && !feedExclusion(v, config)).map(v => facebookRow(v, tenantId, dealer, []));
+export function buildFacebookRows(vehicles: Vehicle[], config: FeedOptions, tenantId: string, dealer: string, photoBase = ''): FacebookFeedRow[] {
+  return sortedFeedVehicles(vehicles).filter(v => v.status !== 'sold' && !feedExclusion(v, config)).map(v => facebookRow(v, tenantId, dealer, projectedPhotoUrls(v, photoBase)));
 }
 export const facebookCsv = (rows: FacebookFeedRow[]) => toCsv([[...facebookColumns], ...rows.map(row => facebookColumns.map(key => String(row[key])))]);
 export const newestFacebookRun = (runs: FeedRun[]) => runs.filter(run => run.facebookRows !== undefined).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))[0];

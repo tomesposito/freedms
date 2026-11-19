@@ -4,10 +4,12 @@ type Api = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
 let draftInput: 'text' | 'photo' = 'text';
 let discardReview: (() => void) | undefined;
 let vehicleDraft: VehicleDraft | undefined;
+let vehicleDraftPhoto: File | undefined;
 let leadDraft: LeadDraft | undefined;
 export function takeVehicleDraft() { const draft = vehicleDraft; vehicleDraft = undefined; return draft; }
+export function takeVehicleDraftPhoto() { const photo = vehicleDraftPhoto; vehicleDraftPhoto = undefined; return photo; }
 export function takeLeadDraft() { const draft = leadDraft; leadDraft = undefined; return draft; }
-export function clearDrafts() { discardReview?.(); vehicleDraft = undefined; leadDraft = undefined; }
+export function clearDrafts() { discardReview?.(); vehicleDraft = undefined; vehicleDraftPhoto = undefined; leadDraft = undefined; }
 export const reviewNote = '<p class="warning">Review the AI draft — nothing is saved until you save.</p>';
 export const quickEntryCard = '<section id="quick-entry" class="card"><h2>Quick entry</h2><p class="muted" role="status">Checking AI availability…</p></section>';
 export async function bindQuickEntry(kind: 'vehicle' | 'lead', api: Api, current: () => boolean): Promise<void> {
@@ -27,13 +29,15 @@ export async function bindQuickEntry(kind: 'vehicle' | 'lead', api: Api, current
     if (!status.configured) return;
     busy(false);
   } catch { if (active()) message.textContent = 'AI availability could not be checked. You can still add records manually.'; return; }
-  const draft = async (path: string, body: unknown) => {
+  const draft = async (path: string, body: unknown, sourcePhoto?: File) => {
     busy(true); message.textContent = 'Extracting draft…';
     draftInput = path.endsWith('-photo') ? 'photo' : 'text';
     try {
       if (kind === 'vehicle') {
         const result = await api<{draft: VehicleDraft}>(path, 'POST', body); if (!active()) return;
-        vehicleDraft = result.draft; location.hash = '#/new';
+        vehicleDraft = result.draft;
+        vehicleDraftPhoto = sourcePhoto?.type === 'image/gif' ? undefined : sourcePhoto;
+        location.hash = '#/new';
       } else {
         const result = await api<{draft: LeadDraft}>(path, 'POST', body); if (!active()) return;
         leadDraft = result.draft; location.hash = '#/leads/new';
@@ -48,7 +52,7 @@ export async function bindQuickEntry(kind: 'vehicle' | 'lead', api: Api, current
     busy(true);
     try {
       const dataBase64 = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = () => reject(new Error('The image could not be read.')); reader.readAsDataURL(file); });
-      if (active()) await draft('/quick-entry/vehicle-photo', {mediaType: file.type, dataBase64});
+      if (active()) await draft('/quick-entry/vehicle-photo', {mediaType: file.type, dataBase64}, file);
     } catch { if (active()) message.textContent = 'The image could not be read.'; }
     finally { if (active()) { busy(false); photo.value = ''; } }
   });

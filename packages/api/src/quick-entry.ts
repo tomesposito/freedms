@@ -1,3 +1,4 @@
+import { VEHICLE_PHOTO_BODY_LIMIT } from './vehicle-photos.js';
 import { IMPORT_BODY_LIMIT } from './import.js';
 export { dollarCents } from './validation.js';
 import { randomUUID } from 'node:crypto';
@@ -15,6 +16,7 @@ export function bodyLimit(method: string, path: string): number {
   if (path.replace(/\/$/, '') === '/mcp') return 1100 * 1024;
   if (method.toUpperCase() === 'POST' && (/^\/deals\/[^/]+\/(buyers-order|documents\/[^/]+)\/signatures\/?$/.test(path) || /^\/service\/repair-orders\/[^/]+\/signatures\/?$/.test(path))) return 136 * 1024;
   if (/^\/accounting\/reconciliations\/[^/]+\/(preview|import)\/?$/.test(path)) return IMPORT_BODY_LIMIT;
+  if (method.toUpperCase() === 'POST' && /^\/vehicles\/[^/]+\/photos\/?$/.test(path)) return VEHICLE_PHOTO_BODY_LIMIT;
   if (/^\/vehicles\/imports?(\/|$)/.test(path)) return IMPORT_BODY_LIMIT;
   return method.toUpperCase() === 'POST' && path.replace(/\/$/, '') === '/quick-entry/vehicle-photo' ? PHOTO_BODY_LIMIT : 65536;
 }

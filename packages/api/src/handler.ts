@@ -1,3 +1,4 @@
+import { clearVehiclePhotoParts, projectedPhotoUrls, readVehiclePhotoUpload, removeVehiclePhotos, requireVehiclePhotoStore, selectVehiclePhotos, stageVehiclePhotoPart, VEHICLE_PHOTO_BODY_LIMIT, vehiclePhotoBase, vehiclePhotoPartKeys } from './vehicle-photos.js';
 import { createDealerSiteHandler, websiteSettings } from './dealer-site.js';
 import { createPublicInventoryHandler } from './public-inventory.js';
 import { searchRecords } from './repository.js';
@@ -41,7 +42,7 @@ import type { DocumentStore } from './document-store.js';
 import { desking } from './desking.js';
 import { crm, intake } from './crm.js';
 import { randomUUID } from 'node:crypto';
-import { vehicleStatuses, type Session, type AuthClaims, type OutboxEvent, type Vehicle } from '@freedms/shared';
+import { effectiveVehiclePhotos, MAX_VEHICLE_PHOTOS, vehicleStatuses, type Session, type AuthClaims, type OutboxEvent, type Vehicle } from '@freedms/shared';
 import { authorize, requireWrite } from './auth.js';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import { OPERATOR_TENANT_ID, type RepositoryFactory, type TenantRepository } from './repository.js';
@@ -66,8 +67,9 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
 export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {stripe?: StripeBilling; appBaseUrl?: string; assistantSeedLocalPlan?: boolean; assistantProvider?: AssistantProvider; assistantEntitlement?: AssistantEntitlement; registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
-  const publicInventory = createPublicInventoryHandler();
-  const dealerSite = createDealerSiteHandler();
+  const photoBase = vehiclePhotoBase(options.appBaseUrl);
+  const publicInventory = createPublicInventoryHandler(documents, photoBase);
+  const dealerSite = createDealerSiteHandler(photoBase);
   const sender = options.hosted ? guardHostedWebhookSender(webhookSender ?? hostedWebhookSender()) : webhookSender ?? fetchWebhookSender;
   const postCommit = async (repo: TenantRepository, defer = false) => {
     try {
@@ -134,6 +136,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         return typeof value === 'function' ? value.bind(target) : value;
       }}) : repository;
 
+      const photoRoute = /^\/vehicles\/([^/]+)\/photos$/.exec(path);
       const execute = async (): Promise<ApiResponse> => {
         if (path === '/settings/website') return websiteSettings(request, principal, repo, now());
         if (!sandboxAllowed && path.startsWith('/assistant/') &&
@@ -216,7 +219,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (/^\/analytics(\/|$)/.test(path)) return await analytics(request, principal, repository, record);
         if (/^\/quick-entry(\/|$)/.test(path)) return await quickEntry(request, principal, repository, now(), provider);
         if (/^\/fi-products(\/|$)/.test(path)) return await fiProducts(request, principal, repository, now(), request.agent);
-        if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repo, now());
+        if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repo, now(), photoBase);
         if (/^\/reports\/(technicians|departments|forecasts)([/.]|$)/.test(path)) return await reportsP3(request, repository, now());
         if (/^\/reports\/(turn|fi|custom|saved)([/.]|$)/.test(path)) return await reportsP2(request, principal, repo, now());
         if (/^\/reports(\/|$)/.test(path)) return await reports(request, repository, now(), record);
@@ -240,6 +243,45 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         }
         if (method === 'GET' && path.startsWith('/vin/')) return response(200, {data: await decoder.decode(vin(decodeURIComponent(path.slice(5))))});
         if (/^\/vehicles\/imports?(\/|$)/.test(path)) return await inventoryImport(request, principal, repository, now(), decoder);
+        const date = now();
+        const event = (type: OutboxEvent['type'], aggregateId: string, aggregateVersion: number): OutboxEvent => ({id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, ...(request.agent ? {actorType: 'agent' as const} : {}), type, aggregateId, aggregateVersion, occurredAt: date.toISOString(), deliveryStatus: 'pending'});
+
+        if (photoRoute) {
+          if (method !== 'POST') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+          requireWrite(principal, method);
+          const existing = await repository.get(requireId(photoRoute[1]));
+          if (!existing) throw missing();
+          const input = parseBody(request.body, VEHICLE_PHOTO_BODY_LIMIT);
+          const store = requireVehiclePhotoStore(documents, principal.tenantId);
+          const keys = vehiclePhotoPartKeys(existing.id, principal.userId, input.uploadId);
+          if (input.discard === true) {
+            onlyKeys(input, ['uploadId', 'discard']);
+            await clearVehiclePhotoParts(store, keys);
+            return response(200, {data: null});
+          }
+          const expected = version(input.version);
+          if (existing.version !== expected) throw conflict();
+          const photos = effectiveVehiclePhotos(existing);
+          if (photos.length >= MAX_VEHICLE_PHOTOS) throw invalid('Use at most 20 vehicle photos.');
+          if (input.part !== undefined) {
+            await stageVehiclePhotoPart(store, keys, input);
+            return response(202, {data: null});
+          }
+          const upload = await readVehiclePhotoUpload(input, existing.id, date, store, keys);
+          const vehicle: Vehicle = {...existing, photos: [...photos, upload.photo], version: expected + 1, updatedAt: date.toISOString()};
+          vehicle.photoUrls = projectedPhotoUrls(vehicle, photoBase);
+          try {
+            const writes = await Promise.allSettled(upload.files.map(([key, bytes]) => store.put(key, bytes)));
+            const failed = writes.find(write => write.status === 'rejected');
+            if (failed) throw failed.reason;
+            await repository.update(vehicle, expected, event('vehicle.updated', vehicle.id, vehicle.version));
+          } catch (error) {
+            await removeVehiclePhotos(store, {...vehicle, photos: [upload.photo]});
+            throw error;
+          }
+          await clearVehiclePhotoParts(store, keys);
+          return response(201, {data: view(vehicle, date)});
+        }
         if (path !== '/vehicles' && !/^\/vehicles\/[^/]+$/.test(path)) throw new ApiError(404, 'NOT_FOUND', 'Endpoint not found.');
         const id = path === '/vehicles' ? undefined : requireId(path.split('/')[2]);
         if (method === 'GET') {
@@ -253,11 +295,12 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         }
         if (!((method === 'POST' && !id) || (['PUT', 'DELETE'].includes(method) && id))) throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
         requireWrite(principal, method);
-        const body = parseBody(request.body); const date = now();
-        const event = (type: OutboxEvent['type'], aggregateId: string, aggregateVersion: number): OutboxEvent => ({id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, ...(request.agent ? {actorType: 'agent' as const} : {}), type, aggregateId, aggregateVersion, occurredAt: date.toISOString(), deliveryStatus: 'pending'});
+        const body = parseBody(request.body);
         if (method === 'POST') {
-          const input = vehicleInput(body, date);
+          const {photos, ...fields} = body;
+          const input = vehicleInput(fields, date);
           const vehicle: Vehicle = {...input, id: randomUUID(), tenantId: principal.tenantId, version: 1, createdAt: date.toISOString(), updatedAt: date.toISOString()};
+          if (photos !== undefined) { vehicle.photos = selectVehiclePhotos(photos); vehicle.photoUrls = projectedPhotoUrls(vehicle, photoBase); }
           await repository.create(vehicle, event('vehicle.created', vehicle.id, 1));
           return response(201, {data: view(vehicle, date)});
         }
@@ -267,15 +310,31 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
           onlyKeys(body, ['version']);
           if ((await repository.crmList('deal')).some(d => d.vehicleId === id)) throw conflict();
           await repository.delete(id!, expected, event('vehicle.deleted', id!, expected + 1));
+          await removeVehiclePhotos(documents?.forTenant(principal.tenantId), existing);
           return response(200, {data: {id}});
         }
-        const {version: _version, ...fields} = body;
+        const {version: _version, photos, ...fields} = body;
         const vehicle: Vehicle = {...vehicleInput(fields, date), ...(fields.photoUrls === undefined && existing.photoUrls ? {photoUrls: existing.photoUrls} : {}), id: existing.id, tenantId: principal.tenantId, version: expected + 1, createdAt: existing.createdAt, updatedAt: date.toISOString()};
+        if (photos !== undefined) vehicle.photos = selectVehiclePhotos(photos, existing);
+        else if (existing.photos) {
+          if (fields.photoUrls === undefined) vehicle.photos = existing.photos;
+          else {
+            const uploads = new Map(existing.photos.flatMap((photo, index) =>
+              photo.source === 'upload' ? [[existing.photoUrls?.[index], photo]] : []));
+            vehicle.photos = vehicle.photoUrls!.map(url => {
+              const photo = uploads.get(url);
+              uploads.delete(url);
+              return photo ?? {source: 'url', url};
+            });
+          }
+        }
+        if (vehicle.photos) vehicle.photoUrls = projectedPhotoUrls(vehicle, photoBase);
         await repository.update(vehicle, expected, event('vehicle.updated', id!, vehicle.version));
+        await removeVehiclePhotos(documents?.forTenant(principal.tenantId), existing, vehicle);
         return response(200, {data: view(vehicle, date)});
       };
       const result = await execute();
-      if (result.statusCode >= 200 && result.statusCode < 300 && ['POST', 'PUT', 'DELETE'].includes(method) && !/^\/webhooks(\/|$)/.test(path) && !/^\/(account|admin)\/mfa(\/|$)/.test(path)) {
+      if (result.statusCode >= 200 && result.statusCode < 300 && ['POST', 'PUT', 'DELETE'].includes(method) && (!photoRoute || result.statusCode === 201) && !/^\/webhooks(\/|$)/.test(path) && !/^\/(account|admin)\/mfa(\/|$)/.test(path)) {
         try { await postCommit(repository, request.agent === true || (method === 'POST' && path === '/assistant/chat')); } catch { /* Delivery failures must never fail a committed mutation. */ }
       }
       return compressResponse(result, request.acceptEncoding);

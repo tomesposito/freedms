@@ -35,7 +35,23 @@ export const vehicleStatuses = ['available', 'reserved', 'sold', 'in recon'] as 
 export type VehicleStatus = typeof vehicleStatuses[number];
 export interface ReconItem { description: string; amount: number }
 /** All money is integer USD cents. Dates stocked are UTC calendar dates. */
+export type VehiclePhotoType = 'image/jpeg' | 'image/png' | 'image/webp';
+export type VehiclePhoto =
+  | {source: 'url'; url: string}
+  | {source: 'upload'; id: string; name: string; type: VehiclePhotoType; size: number; createdAt: string; derivedFrom?: string};
+export const MAX_VEHICLE_PHOTOS = 20;
+export const MAX_VEHICLE_PHOTO_BYTES = 10 * 1024 * 1024;
+export const VEHICLE_PHOTO_PART_BYTES = 3 * 1024 * 1024;
+export function effectiveVehiclePhotos(vehicle: Pick<VehicleInput, 'photos' | 'photoUrls'>): VehiclePhoto[] {
+  return vehicle.photos ?? (vehicle.photoUrls ?? []).map(url => ({source: 'url', url}));
+}
+export function vehiclePhotoUrl(photo: VehiclePhoto, tenantId: string, base = '', size: 'display' | 'thumb' = 'display'): string {
+  if (photo.source === 'url') return photo.url;
+  const suffix = size === 'thumb' ? '-thumb' : '';
+  return `${base}/public/${encodeURIComponent(tenantId)}/photos/${encodeURIComponent(photo.id + suffix)}`;
+}
 export interface VehicleInput {
+  photos?: VehiclePhoto[];
   photoUrls?: string[];
   stockNumber: string; vin: string; year: number; make: string; model: string; trim: string;
   mileage: number | null;

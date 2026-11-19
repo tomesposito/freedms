@@ -34,7 +34,7 @@ export function buildFeed(vehicles: Vehicle[], config: FeedOptions): Pick<FeedRu
 export function feedCsv(run: Pick<FeedRun, 'rows'>): string {
   return toCsv([['stockNumber', 'vin', 'year', 'make', 'model', 'trim', 'status', 'listPrice', 'dateStocked', 'location'], ...run.rows.map(r => [r.stockNumber, r.vin, String(r.year), r.make, r.model, r.trim, r.status, (r.listPriceCents / 100).toFixed(2), r.dateStocked, r.location])]);
 }
-export async function feeds(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date) {
+export async function feeds(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date, photoBase = '') {
   const path = request.path.replace(/\/$/, ''), method = request.method.toUpperCase();
   const download = /^\/feeds\/runs\/([^/]+)\.(csv|json)$/.exec(path);
   if (!download && !['/feeds/config', '/feeds/generate', '/feeds/runs'].includes(path)) throw missing();
@@ -65,7 +65,7 @@ export async function feeds(request: ApiRequest, principal: Principal, repo: Ten
   onlyKeys(body, []);
   const options = config ?? defaultFeedOptions;
   const vehicles = await repo.list({});
-  const run: FeedRun = {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, createdAt: date, formats: [...options.formats], ...buildFeed(vehicles, options), ...(options.facebookEnabled ? {facebookRows: buildFacebookRows(vehicles, options, principal.tenantId, (await repo.tenant())!.name)} : {})};
+  const run: FeedRun = {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, createdAt: date, formats: [...options.formats], ...buildFeed(vehicles, options), ...(options.facebookEnabled ? {facebookRows: buildFacebookRows(vehicles, options, principal.tenantId, (await repo.tenant())!.name, photoBase)} : {})};
   // Keep the immutable snapshot safely below Dynamo's 400 KB item limit in both adapters.
   if (Buffer.byteLength(JSON.stringify(run)) > 300000) throw invalid('Feed snapshot exceeds the local 300 KB run limit. Narrow the included statuses or reduce inventory before generating.');
   await repo.appendFeedRun(run, event('feed.generated', run.id));
