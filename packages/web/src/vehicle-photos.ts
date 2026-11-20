@@ -16,7 +16,7 @@ export function inventoryPhoto(vehicle: VehicleView, base: string) {
 
 export const vehiclePhotosCard = '<section class="card vehicle-photos" aria-label="Photos"></section>';
 
-function encode(blob: Blob): Promise<string> {
+export function encode(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(',')[1]);
@@ -24,7 +24,7 @@ function encode(blob: Blob): Promise<string> {
     reader.readAsDataURL(blob);
   });
 }
-async function resize(bitmap: ImageBitmap, type: string, edge: number, cap: number): Promise<Blob> {
+export async function resize(bitmap: ImageBitmap, type: string, edge: number, cap: number): Promise<Blob> {
   const canvas = document.createElement('canvas');
   const longest = Math.max(bitmap.width, bitmap.height);
   for (let scale = Math.min(1, edge / longest); scale >= Math.min(1, edge / longest) / 8; scale *= 0.7) {
@@ -51,7 +51,7 @@ async function prepare(file: File) {
   } finally { bitmap.close(); }
 }
 
-export function mountVehiclePhotos(card: HTMLElement, initial: VehicleView | undefined, api: Api, base: string, onChange: (vehicle: VehicleView) => void) {
+export function mountVehiclePhotos(card: HTMLElement, initial: VehicleView | undefined, api: Api, base: string, onChange: (vehicle: VehicleView) => void, prepEntry?: (element: HTMLElement, id: string) => void) {
   let vehicle = initial;
   let photos: (VehiclePhoto | QueuedPhoto)[] = initial ? effectiveVehiclePhotos(initial) : [];
   let busy = false;
@@ -162,11 +162,13 @@ export function mountVehiclePhotos(card: HTMLElement, initial: VehicleView | und
         <input type="file" accept="image/*" multiple hidden>
         <button type="button" class="primary" data-add>Add photos</button>
         <button type="button" data-url>Add by URL</button>
-        ${photos.length ? '<button type="button" disabled data-unavailable title="Coming in a later release">Ask the assistant to prep these photos</button>' : ''}
+        ${photos.length && prepEntry ? '<span data-prep-entry></span>' : ''}
       </div>
       ${urlOpen ? '<div class="photo-actions"><label>Photo URL<input type="url" maxlength="2000" placeholder="https://"></label><button type="button" data-save-url>Add URL</button></div>' : ''}
       ${photos.length ? '<p class="muted">Use the arrows to reorder. The first photo is the cover. It leads the inventory list, your website, and the Facebook feed.</p>' : ''}`;
     card.append(messages);
+    const entry = card.querySelector<HTMLElement>('[data-prep-entry]');
+    if (entry && vehicle) prepEntry?.(entry, vehicle.id);
     const input = card.querySelector<HTMLInputElement>('input[type=file]')!;
     input.onchange = () => void addFiles(Array.from(input.files ?? []));
     card.querySelector<HTMLButtonElement>('[data-add]')!.onclick = () => input.click();

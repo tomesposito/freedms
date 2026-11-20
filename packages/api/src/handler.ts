@@ -1,4 +1,4 @@
-import { clearVehiclePhotoParts, projectedPhotoUrls, readVehiclePhotoUpload, removeVehiclePhotos, requireVehiclePhotoStore, selectVehiclePhotos, stageVehiclePhotoPart, VEHICLE_PHOTO_BODY_LIMIT, vehiclePhotoBase, vehiclePhotoPartKeys } from './vehicle-photos.js';
+import { clearVehiclePhotoParts, preparePhotoApproval, projectedPhotoUrls, readVehiclePhotoUpload, removeVehiclePhotos, requireVehiclePhotoStore, selectVehiclePhotos, stageVehiclePhotoPart, VEHICLE_PHOTO_BODY_LIMIT, vehiclePhotoBase, vehiclePhotoPartKeys } from './vehicle-photos.js';
 import { createDealerSiteHandler, websiteSettings } from './dealer-site.js';
 import { createPublicInventoryHandler } from './public-inventory.js';
 import { searchRecords } from './repository.js';
@@ -42,7 +42,7 @@ import type { DocumentStore } from './document-store.js';
 import { desking } from './desking.js';
 import { crm, intake } from './crm.js';
 import { randomUUID } from 'node:crypto';
-import { effectiveVehiclePhotos, MAX_VEHICLE_PHOTOS, vehicleStatuses, type Session, type AuthClaims, type OutboxEvent, type Vehicle } from '@freedms/shared';
+import { effectiveVehiclePhotos, MAX_VEHICLE_PHOTOS, PHOTO_PREP_BODY_LIMIT, vehicleStatuses, type Session, type AuthClaims, type OutboxEvent, type Vehicle } from '@freedms/shared';
 import { authorize, requireWrite } from './auth.js';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import { OPERATOR_TENANT_ID, type RepositoryFactory, type TenantRepository } from './repository.js';
@@ -175,7 +175,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         }
         if (path === '/assistant/pool' && method === 'GET') return response(200, {data: await billing.pool(principal)});
         if (path === '/assistant/usage' && method === 'GET') return response(200, {data: await billing.usage(principal)});
-        if ((path === '/assistant/skills' && method === 'GET') || (['/assistant/skills/run', '/assistant/skills/apply'].includes(path) && method === 'POST')) return assistantSkillsEndpoint(request, principal, options.assistantEntitlement ?? billing, handle, now());
+        if ((path === '/assistant/skills' && method === 'GET') || (['/assistant/skills/run', '/assistant/skills/apply'].includes(path) && method === 'POST')) return assistantSkillsEndpoint(request, principal, options.assistantEntitlement ?? billing, handle, now(), options.assistantProvider);
         if (path === '/assistant/chat' && method === 'POST') return assistantChat(request, principal, options.assistantProvider ?? new UnconfiguredAssistantProvider(), options.assistantEntitlement ?? billing, handle);
         if (/^\/ai-connections(\/|$)/.test(path)) return await aiConnections(request, principal, repositories, now());
         if (/^\/(ideas|admin\/ideas)(\/|$)/.test(path)) return await ideas(request, principal, repositories, now(), options.pilotOperator);
@@ -295,7 +295,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         }
         if (!((method === 'POST' && !id) || (['PUT', 'DELETE'].includes(method) && id))) throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
         requireWrite(principal, method);
-        const body = parseBody(request.body);
+        const body = parseBody(request.body, method === 'PUT' ? PHOTO_PREP_BODY_LIMIT : undefined);
         if (method === 'POST') {
           const {photos, ...fields} = body;
           const input = vehicleInput(fields, date);
@@ -313,9 +313,17 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
           await removeVehiclePhotos(documents?.forTenant(principal.tenantId), existing);
           return response(200, {data: {id}});
         }
-        const {version: _version, photos, ...fields} = body;
-        const vehicle: Vehicle = {...vehicleInput(fields, date), ...(fields.photoUrls === undefined && existing.photoUrls ? {photoUrls: existing.photoUrls} : {}), id: existing.id, tenantId: principal.tenantId, version: expected + 1, createdAt: existing.createdAt, updatedAt: date.toISOString()};
-        if (photos !== undefined) vehicle.photos = selectVehiclePhotos(photos, existing);
+        const {version: _version, photos, photoPrep, ...fields} = body;
+        const prepared = photoPrep === undefined ? undefined : preparePhotoApproval(photoPrep, existing, date);
+        if (prepared) {
+          onlyKeys(body, ['version', 'photoPrep']);
+          const {id: _id, tenantId: _tenant, version: _existingVersion, createdAt: _created, updatedAt: _updated,
+            photos: _photos, photoUrls: _urls, ...current} = existing;
+          Object.assign(fields, current, prepared.fields);
+        }
+        const vehicle: Vehicle = {...vehicleInput(fields, date), ...(fields.photoUrls === undefined && existing.photoUrls ? {photoUrls: existing.photoUrls} : {}), ...(fields.listingDescription === undefined && existing.listingDescription !== undefined ? {listingDescription: existing.listingDescription} : {}), id: existing.id, tenantId: principal.tenantId, version: expected + 1, createdAt: existing.createdAt, updatedAt: date.toISOString()};
+        if (prepared) vehicle.photos = prepared.photos;
+        else if (photos !== undefined) vehicle.photos = selectVehiclePhotos(photos, existing);
         else if (existing.photos) {
           if (fields.photoUrls === undefined) vehicle.photos = existing.photos;
           else {
@@ -329,7 +337,18 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
           }
         }
         if (vehicle.photos) vehicle.photoUrls = projectedPhotoUrls(vehicle, photoBase);
-        await repository.update(vehicle, expected, event('vehicle.updated', id!, vehicle.version));
+        const store = prepared?.uploads.length ? requireVehiclePhotoStore(documents, principal.tenantId) : undefined;
+        try {
+          if (store) {
+            const writes = await Promise.allSettled(prepared!.uploads.flatMap(upload => upload.files.map(([key, bytes]) => store.put(key, bytes))));
+            const failed = writes.find(write => write.status === 'rejected');
+            if (failed) throw failed.reason;
+          }
+          await repository.update(vehicle, expected, event('vehicle.updated', id!, vehicle.version));
+        } catch (error) {
+          if (store) await removeVehiclePhotos(store, {...vehicle, photos: prepared!.uploads.map(upload => upload.photo)});
+          throw error;
+        }
         await removeVehiclePhotos(documents?.forTenant(principal.tenantId), existing, vehicle);
         return response(200, {data: view(vehicle, date)});
       };

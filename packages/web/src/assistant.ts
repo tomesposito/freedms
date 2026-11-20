@@ -1,3 +1,5 @@
+import { effectiveVehiclePhotos, PHOTO_PREP_SKILL, type VehicleView } from '@freedms/shared';
+import { approvalFields, preparePhotoInputs, reviewHtml, scopeHtml, type PhotoPrepScope, type PrepReview } from './assistant-photo-prep';
 import { escapeHtml as e } from './format';
 import { renderMarkdown } from './markdown';
 
@@ -13,7 +15,7 @@ export function assistantContextFromHash(hash: string): AssistantContext | null 
   if (!match || ['new', 'settings', 'equity', 'reports'].includes(match[2])) return null;
   return {surface: {vehicles: 'vehicle', leads: 'lead', deals: 'deal'}[match[1]] as AssistantContext['surface'], id: match[2]};
 }
-export interface AssistantSkill {id: string; name: string; costCredits: number; kind: 'summary' | 'cleanup'}
+export interface AssistantSkill {id: string; name: string; costCredits: number; kind: 'summary' | 'cleanup' | 'photo'; perPhotoCredits?: number}
 export interface AssistantProposal {proposalId: string; kind: 'fix' | 'missing' | 'stale' | 'duplicate'; label: string; current?: string; proposed?: string; customerId?: string}
 export function skillChipsHtml(skills: AssistantSkill[], busy = false): string {
   return `<div class="assistant-skills">${skills.map(s => `<button type="button" data-assistant-skill="${e(s.id)}" ${busy ? 'disabled' : ''}>${e(s.name)} · ${e(s.costCredits)} credits</button>`).join('')}</div>`;
@@ -25,7 +27,7 @@ export function proposalsHtml(proposals: AssistantProposal[], index: number, loc
 }
 
 export interface AssistantPool {
-  overageCapCredits?: number; overageCreditsUsed?: number;
+  perRequestCreditCap?: number; overageCapCredits?: number; overageCreditsUsed?: number;
   tier: string; status: 'active' | 'past_due' | 'cancelled'; disabled: boolean;
   overageEnabled: boolean; balanceCredits: number; cycleEnd: string;
 }
@@ -57,7 +59,7 @@ export function toolLabel(tool: string): string {
 }
 export function receipt(credits: number): string { return `This used ${credits} ${credits === 1 ? 'credit' : 'credits'}`; }
 interface Reply {reply: string; transcript: {tool: string; ok: boolean}[]; creditsUsed: number; proposals?: AssistantProposal[]}
-export interface AssistantTurn {text: string; result?: Reply; error?: string; skill?: string; context?: AssistantContext; applied?: boolean}
+export interface AssistantTurn {text: string; result?: Reply; error?: string; skill?: string; context?: AssistantContext; applied?: boolean; prep?: PrepReview}
 const locked: Record<AssistantState, string> = {
   'waiting-list': 'Paid AI plans are opening soon',
   ready: 'Ask, or tell it what to do…', loading: 'Checking assistant plan…', unavailable: 'Unable to check assistant plan — reopen to retry',
@@ -80,10 +82,10 @@ function stateBody(state: AssistantState, pool?: AssistantPool): string {
     default: return `<p role="status">${e(locked[state])}</p>`;
   }
 }
-export function trayHtml(state: AssistantState, turns: AssistantTurn[] = [], pool?: AssistantPool, busy = false, draft = '', skills: AssistantSkill[] = []): string {
+export function trayHtml(state: AssistantState, turns: AssistantTurn[] = [], pool?: AssistantPool, busy = false, draft = '', skills: AssistantSkill[] = [], prepHtml = ''): string {
   // Disabled means absent: paint removes the panel and trigger entirely.
   if (state === 'disabled') return '';
-  return `<header class="assistant-header"><h2 id="assistant-title">AI assistant${(state === 'paywall' || state === 'past-due') ? '<span>PAID</span>' : ''}</h2><div class="assistant-header-actions">${pool ? `<span class="assistant-header-credit">${e(pool.balanceCredits.toLocaleString('en-US'))} credits</span>` : ''}<button type="button" id="assistant-close" aria-label="Close AI assistant">✕</button></div></header><div class="assistant-body" aria-live="polite">${state === 'ready' ? skillChipsHtml(skills, busy) : ''}${turns.map((turn, i) => `<div class="assistant-user">${e(turn.text)}</div>${turn.result ? `${turn.result.transcript.map(row => `<div class="assistant-tool ${row.ok ? 'done' : 'failed'}"><i aria-hidden="true"></i>${e(toolLabel(row.tool))}<small>${row.ok ? 'done' : 'failed'}</small></div>`).join('')}<div class="assistant-reply">${renderMarkdown(turn.result.reply)}</div><div class="assistant-receipt">${e(receipt(turn.result.creditsUsed))}</div>${turn.result.proposals ? proposalsHtml(turn.result.proposals, i, busy || state !== 'ready' || !!turn.applied) : ''}` : ''}${turn.error ? `<div class="assistant-error" role="alert">${e(turn.error)}${state === 'ready' && !busy && !turn.skill ? `<button type="button" data-assistant-retry="${e(i)}">Retry</button>` : ''}</div>` : ''}`).join('')}${busy ? '<div class="assistant-working" role="status">● ● ● <span>Working…</span></div>' : ''}${state !== 'ready' || !turns.length ? stateBody(state, pool) : ''}</div><form class="assistant-composer"><textarea id="assistant-input" aria-label="Message AI assistant" rows="2" maxlength="16000" placeholder="${e(locked[state])}" ${state !== 'ready' || busy ? 'disabled' : ''}>${e(draft)}</textarea><button class="primary" type="submit" ${state !== 'ready' || busy ? 'disabled' : ''}>Send</button></form>`;
+  return `<header class="assistant-header"><h2 id="assistant-title">AI assistant${(state === 'paywall' || state === 'past-due') ? '<span>PAID</span>' : ''}</h2><div class="assistant-header-actions">${pool ? `<span class="assistant-header-credit">${e(pool.balanceCredits.toLocaleString('en-US'))} credits</span>` : ''}<button type="button" id="assistant-close" aria-label="Close AI assistant">✕</button></div></header><div class="assistant-body" aria-live="polite">${state === 'ready' ? skillChipsHtml(skills, busy) : ''}${turns.map((turn, i) => `<div class="assistant-user" data-assistant-turn="${i}">${e(turn.text)}</div>${turn.result ? `${turn.result.transcript.map(row => `<div class="assistant-tool ${row.ok ? 'done' : 'failed'}"><i aria-hidden="true"></i>${e(toolLabel(row.tool))}<small>${row.ok ? 'done' : 'failed'}</small></div>`).join('')}<div class="assistant-reply">${renderMarkdown(turn.result.reply)}</div>${turn.prep ? reviewHtml(turn.prep, i, busy, !['ready', 'exhausted'].includes(state)) : ''}<div class="assistant-receipt">${e(receipt(turn.result.creditsUsed))}</div>${turn.result.proposals ? proposalsHtml(turn.result.proposals, i, busy || state !== 'ready' || !!turn.applied) : ''}` : ''}${turn.error ? `<div class="assistant-error" role="alert">${e(turn.error)}${state === 'ready' && !busy && !turn.skill ? `<button type="button" data-assistant-retry="${e(i)}">Retry</button>` : ''}</div>` : ''}`).join('')}${prepHtml}${busy ? '<div class="assistant-working" role="status">● ● ● <span>Working…</span></div>' : ''}${state !== 'ready' || (!turns.length && !prepHtml) ? stateBody(state, pool) : ''}</div><form class="assistant-composer"><textarea id="assistant-input" aria-label="Message AI assistant" rows="2" maxlength="16000" placeholder="${e(locked[state])}" ${state !== 'ready' || busy ? 'disabled' : ''}>${e(draft)}</textarea><button class="primary" type="submit" ${state !== 'ready' || busy ? 'disabled' : ''}>Send</button></form>`;
 }
 
 type Api = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
@@ -91,15 +93,18 @@ type Api = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
 let owner = '', open = false, turns: AssistantTurn[] = [], pool: AssistantPool | undefined;
 let state: AssistantState = 'loading', unconfigured = false, busy = false, draft = '', generation = 0, poolRequest = 0;
 let root: HTMLElement, cluster: HTMLElement, trigger: HTMLButtonElement, api: Api;
+let photoScope: PhotoPrepScope | undefined;
+const entrypoints = new Map<HTMLElement, {id: string; request: number}>();
 let skills: AssistantSkill[] = [], skillContext: AssistantContext | null = null, skillsRequest = 0, skillsError = '';
 export function resetAssistant(): void {
+  photoScope = undefined; entrypoints.clear();
   generation++; poolRequest++; skillsRequest++; skills = []; skillContext = null; skillsError = ''; owner = ''; open = false; turns = []; pool = undefined;
   state = 'loading'; unconfigured = false; busy = false; draft = '';
   document.body.classList.remove('assistant-dock-open');
   const panel = root?.querySelector<HTMLElement>('#assistant-tray');
   if (panel) panel.inert = true;
 }
-function paint(focus = false): void {
+function paint(focus = false, preserveScroll = false): void {
   if (!root?.isConnected) return;
   const input = root.querySelector<HTMLTextAreaElement>('#assistant-input');
   const hadFocus = document.activeElement === input;
@@ -107,6 +112,8 @@ function paint(focus = false): void {
   const selection = input?.selectionStart;
   let panel = root.querySelector<HTMLElement>('#assistant-tray');
   if (state === 'disabled') {
+    photoScope = undefined;
+    for (const entry of entrypoints.keys()) entry.replaceChildren();
     open = false; document.body.classList.remove('assistant-dock-open');
     root.replaceChildren(); cluster.replaceChildren(); return;
   }
@@ -114,7 +121,13 @@ function paint(focus = false): void {
   trigger.setAttribute('aria-expanded', String(open));
   trigger.innerHTML = '<span class="assistant-spark" aria-hidden="true">✦</span><span class="assistant-label">AI assistant</span>';
   cluster.querySelector('#assistant-credit')!.innerHTML = pool ? `<span class="assistant-balance">${e(pool.balanceCredits.toLocaleString('en-US'))} credits</span>` : '';
-  panel.innerHTML = trayHtml(state, turns, pool, busy, draft, skills);
+  const oldScroll = panel.querySelector('.assistant-body')?.scrollTop ?? 0;
+  const price = skills.find(skill => skill.id === PHOTO_PREP_SKILL)?.perPhotoCredits;
+  const prep = state === 'ready' && photoScope && pool && price
+    ? scopeHtml(photoScope, pool.balanceCredits, pool.perRequestCreditCap ?? 25, pool.overageEnabled ? pool.overageCapCredits ?? 500 : 0, price, busy)
+    : '';
+  panel.innerHTML = trayHtml(state, turns, pool, busy, draft, skills, prep);
+  bindPhotoPrep(panel);
   if (skillsError) { const note = document.createElement('p'); note.className = 'assistant-error'; note.textContent = skillsError; panel.querySelector('.assistant-body')?.prepend(note); }
   document.body.classList.toggle('assistant-dock-open', open);
   panel.inert = !open;
@@ -142,7 +155,9 @@ function paint(focus = false): void {
     });
     button.addEventListener('click', () => { void runSkill(turn.skill!, turn, selected()); });
   });
-  if (busy || turns.length) { const body = panel.querySelector('.assistant-body')!; body.scrollTop = body.scrollHeight; }
+  const body = panel.querySelector('.assistant-body')!;
+  if (preserveScroll) body.scrollTop = oldScroll;
+  else if (busy || turns.length || prep) body.scrollTop = body.scrollHeight;
 }
 function close(): void { open = false; paint(); trigger?.focus(); }
 async function refreshPool(): Promise<void> {
@@ -159,7 +174,12 @@ async function refreshPool(): Promise<void> {
     if (next !== 'unavailable' || !['disabled', 'exhausted', 'unconfigured'].includes(state)) state = next;
     pool = undefined;
   }
-  paint(focusComposer);
+  paint(focusComposer, !focusComposer);
+  for (const [entry, context] of entrypoints) {
+    if (!entry.isConnected) entrypoints.delete(entry);
+    else if (state !== 'ready') { context.request++; entry.replaceChildren(); }
+    else if (!entry.childElementCount) void checkPhotoPrepEntry(entry, context);
+  }
 }
 async function send(text: string): Promise<void> {
   text = text.trim();
@@ -204,6 +224,19 @@ async function runSkill(id: string, source?: AssistantTurn, accepted?: string[])
   if (busy || state !== 'ready') return;
   const skill = skills.find(s => s.id === id), context = source?.context ?? skillContext;
   if (!context || (!source && (!skill || JSON.stringify(context) !== JSON.stringify(assistantContextFromHash(location.hash))))) return;
+  if (!source && id === PHOTO_PREP_SKILL && skill && context.id) {
+    const current = generation, hash = location.hash;
+    busy = true; paint();
+    try {
+      const vehicle = await api<VehicleView>(`/vehicles/${encodeURIComponent(context.id)}`);
+      if (generation === current && hash === location.hash) {
+        photoScope = {vehicle, selected: new Set(effectiveVehiclePhotos(vehicle).map((_, index) => index)), mode: 'whole'};
+      }
+    } catch (error) {
+      if (generation === current) skillsError = error instanceof Error ? error.message : 'Could not open photo prep.';
+    } finally { if (generation === current) { busy = false; paint(); } }
+    return;
+  }
   const current = generation;
   const turn: AssistantTurn = {text: source ? 'Apply selected changes' : skill!.name, skill: id, context};
   turns.push(turn); busy = true; paint();
@@ -242,6 +275,7 @@ export async function commandSkills(): Promise<AssistantSkill[]> {
 export function openAssistantSkill(skillId: string): void { void openTray(skillId); }
 export function mountAssistant(container: HTMLElement, request: Api, identity: string): void {
   if (owner !== identity) { resetAssistant(); owner = identity; }
+  if (photoScope?.vehicle.id !== assistantContextFromHash(location.hash)?.id) photoScope = undefined;
   skillsRequest++; skills = []; skillsError = ''; skillContext = null;
   api = request;
   root = document.createElement('div'); root.className = 'assistant-shell';
@@ -260,4 +294,119 @@ function buildShell(): void {
   root.querySelector('#assistant-tray')!.addEventListener('keydown', event => {
     if ((event as KeyboardEvent).key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
   });
+}
+
+export function mountPhotoPrepEntry(entry: HTMLElement, vehicleId: string): void {
+  for (const previous of entrypoints.keys()) if (!previous.isConnected) entrypoints.delete(previous);
+  const context = {id: vehicleId, request: 0};
+  entrypoints.set(entry, context);
+  void checkPhotoPrepEntry(entry, context);
+}
+async function checkPhotoPrepEntry(entry: HTMLElement, context: {id: string; request: number}) {
+  const request = ++context.request;
+  let available = false;
+  try {
+    const result = await api<{skills: AssistantSkill[]}>(`/assistant/skills?surface=vehicle&id=${encodeURIComponent(context.id)}`);
+    available = result.skills.some(skill => skill.id === PHOTO_PREP_SKILL);
+  } catch { /* The tray owns the unavailable states. */ }
+  if (!entry.isConnected || entrypoints.get(entry) !== context || request !== context.request) return;
+  if (!available || state === 'disabled') { entry.replaceChildren(); return; }
+  if (entry.childElementCount) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = 'Ask the assistant to prep these photos';
+  button.onclick = () => openAssistantSkill(PHOTO_PREP_SKILL);
+  entry.replaceChildren(button);
+}
+
+function bindPhotoPrep(panel: HTMLElement): void {
+  panel.querySelectorAll<HTMLInputElement>('input[name="prep-scope"]').forEach(input => input.onchange = () => {
+    if (!photoScope) return;
+    photoScope.mode = input.value as PhotoPrepScope['mode'];
+    if (photoScope.mode === 'whole') photoScope.selected = new Set(effectiveVehiclePhotos(photoScope.vehicle).map((_, index) => index));
+    paint(false, true);
+    panel.querySelector<HTMLInputElement>(`input[name="prep-scope"][value="${input.value}"]`)?.focus();
+  });
+  panel.querySelectorAll<HTMLInputElement>('[data-prep-photo]').forEach(input => input.onchange = () => {
+    const index = Number(input.dataset.prepPhoto);
+    if (input.checked) photoScope?.selected.add(index);
+    else photoScope?.selected.delete(index);
+    paint(false, true);
+    panel.querySelector<HTMLInputElement>(`[data-prep-photo="${index}"]`)?.focus();
+  });
+  panel.querySelector<HTMLButtonElement>('[data-prep-run]')?.addEventListener('click', () => { void runPhotoPrep(); });
+  panel.querySelector<HTMLButtonElement>('[data-prep-cancel]')?.addEventListener('click', () => { photoScope = undefined; paint(); });
+  panel.querySelectorAll<HTMLElement>('[data-prep-review]').forEach(element => {
+    const turn = turns[Number(element.dataset.prepReview)];
+    const review = turn.prep!;
+    element.querySelectorAll<HTMLTextAreaElement>('[data-prep-description]').forEach(field => field.oninput = () => {
+      const row = review.suggestions[Number(field.dataset.prepDescription)];
+      if (row?.kind === 'description') row.text = field.value;
+    });
+    element.querySelectorAll<HTMLButtonElement>('[data-prep-approve]').forEach(button => button.onclick = () => {
+      void approvePhotoPrep(turn, [review.suggestions[Number(button.dataset.prepApprove)]]);
+    });
+    element.querySelectorAll<HTMLButtonElement>('[data-prep-dismiss]').forEach(button => button.onclick = () => {
+      const [row] = review.suggestions.splice(Number(button.dataset.prepDismiss), 1);
+      if (row.kind === 'light') review.media.delete(row.index);
+      paint(false, true);
+    });
+    element.querySelector<HTMLButtonElement>('[data-prep-approve-all]')?.addEventListener('click', () => {
+      void approvePhotoPrep(turn, [...review.suggestions]);
+    });
+    element.querySelector<HTMLButtonElement>('[data-prep-dismiss-all]')?.addEventListener('click', () => { delete turn.prep; paint(false, true); });
+  });
+}
+
+async function runPhotoPrep() {
+  if (busy || !photoScope || state !== 'ready') return;
+  const scope = photoScope, current = generation;
+  const turn: AssistantTurn = {text: `Prep listing photos · ${scope.vehicle.stockNumber}`, skill: PHOTO_PREP_SKILL};
+  turns.push(turn); photoScope = undefined; busy = true; paint();
+  try {
+    const {images, media} = await preparePhotoInputs(scope);
+    if (generation !== current) return;
+    const result = await api<Reply & {prep: Pick<PrepReview, 'suggestions' | 'missing' | 'version'>}>('/assistant/skills/run', 'POST',
+      {skill: PHOTO_PREP_SKILL, surface: 'vehicle', id: scope.vehicle.id, version: scope.vehicle.version, images, descriptionOnly: scope.mode === 'description'});
+    if (generation !== current) return;
+    const {prep, ...reply} = result;
+    turn.result = reply;
+    const order = effectiveVehiclePhotos(scope.vehicle).map((_, index) => index);
+    const successful = new Set(prep.suggestions.flatMap(row => row.kind === 'light' ? [row.index] : []));
+    for (const index of media.keys()) if (!successful.has(index)) media.delete(index);
+    turn.prep = {...prep, scope, media, order, vehiclePhotoCount: order.length};
+  } catch (error) {
+    if (generation !== current) return;
+    const next = chatErrorState(error as ApiError);
+    if (next) { state = next; unconfigured = next === 'unconfigured'; }
+    else turn.error = error instanceof Error ? error.message : 'Could not run photo prep.';
+  } finally {
+    if (generation === current) {
+      busy = false; paint();
+      const body = root.querySelector('.assistant-body');
+      const anchor = body?.querySelector(`[data-assistant-turn="${turns.indexOf(turn)}"]`);
+      if (body && anchor) body.scrollTop += anchor.getBoundingClientRect().top - body.getBoundingClientRect().top - 12;
+      await refreshPool();
+    }
+  }
+}
+
+async function approvePhotoPrep(turn: AssistantTurn, accepted: PrepReview['suggestions']) {
+  if (busy || !turn.prep || !['ready', 'exhausted'].includes(state)) return;
+  const current = generation, review = turn.prep;
+  const photoPrep = approvalFields(review, accepted);
+  busy = true; delete turn.error; paint(false, true);
+  try {
+    const saved = await api<VehicleView>(`/vehicles/${encodeURIComponent(review.scope.vehicle.id)}`, 'PUT', {version: review.version, photoPrep});
+    if (generation !== current) return;
+    if (photoPrep.order) review.order = photoPrep.order.map(index => review.order[index]);
+    review.version = saved.version;
+    review.vehiclePhotoCount = effectiveVehiclePhotos(saved).length;
+    while (review.order.length < review.vehiclePhotoCount) review.order.push(review.order.length);
+    review.suggestions = review.suggestions.filter(row => !accepted.includes(row));
+    for (const row of accepted) if (row.kind === 'light') review.media.delete(row.index);
+    document.dispatchEvent(new CustomEvent('vehicle-photo-prep-approved', {detail: saved}));
+  } catch (error) {
+    if (generation === current) turn.error = error instanceof Error ? error.message : 'Could not approve changes.';
+  } finally { if (generation === current) { busy = false; paint(false, true); } }
 }

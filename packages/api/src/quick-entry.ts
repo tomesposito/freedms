@@ -2,7 +2,7 @@ import { VEHICLE_PHOTO_BODY_LIMIT } from './vehicle-photos.js';
 import { IMPORT_BODY_LIMIT } from './import.js';
 export { dollarCents } from './validation.js';
 import { randomUUID } from 'node:crypto';
-import { leadSources, type LeadDraft, type VehicleDraft, type Principal } from '@freedms/shared';
+import { leadSources, PHOTO_PREP_BODY_LIMIT, type LeadDraft, type VehicleDraft, type Principal } from '@freedms/shared';
 import { requireWrite } from './auth.js';
 import { ApiError, missing } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
@@ -13,6 +13,8 @@ import { providerFailure, unavailable, visionUnsupported, type QuickEntryProvide
 export const PHOTO_BASE64_LIMIT = 5 * 1024 * 1024;
 export const PHOTO_BODY_LIMIT = PHOTO_BASE64_LIMIT + 1024;
 export function bodyLimit(method: string, path: string): number {
+  if (method.toUpperCase() === 'POST' && /^\/assistant\/skills\/run\/?$/.test(path)) return PHOTO_PREP_BODY_LIMIT;
+  if (method.toUpperCase() === 'PUT' && /^\/vehicles\/[^/]+\/?$/.test(path)) return PHOTO_PREP_BODY_LIMIT;
   if (path.replace(/\/$/, '') === '/mcp') return 1100 * 1024;
   if (method.toUpperCase() === 'POST' && (/^\/deals\/[^/]+\/(buyers-order|documents\/[^/]+)\/signatures\/?$/.test(path) || /^\/service\/repair-orders\/[^/]+\/signatures\/?$/.test(path))) return 136 * 1024;
   if (/^\/accounting\/reconciliations\/[^/]+\/(preview|import)\/?$/.test(path)) return IMPORT_BODY_LIMIT;

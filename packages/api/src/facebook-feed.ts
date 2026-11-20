@@ -5,13 +5,13 @@ import { toCsv } from './reports.js';
 export const facebookColumns = ['vehicle_id', 'vin', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'additional_image_link', 'make', 'model', 'year', 'trim', 'mileage_value', 'mileage_unit', 'dealer_name', 'location'] as const;
 export function facebookRow(v: Vehicle, tenantId: string, dealer: string, imageUrls: string[]): FacebookFeedRow {
   const title = [v.year, v.make, v.model, v.trim].filter(String).join(' ');
-  return {vehicle_id: v.stockNumber, vin: v.vin, title, description: `${title} for sale at ${dealer}. Stock ${v.stockNumber}.`,
+  return {vehicle_id: v.stockNumber, vin: v.vin, title, description: v.listingDescription || `${title} for sale at ${dealer}. Stock ${v.stockNumber}.`,
     availability: v.status === 'reserved' ? 'preorder' : v.status === 'in recon' ? 'out of stock' : 'in stock', condition: 'used', price: `${(v.listPrice / 100).toFixed(2)} USD`,
     link: `/public/${tenantId}/inventory.html`, image_link: imageUrls[0] ?? '', additional_image_link: imageUrls.slice(1).join(','),
     make: v.make, model: v.model, year: v.year, trim: v.trim, mileage_value: v.mileage ?? '', mileage_unit: v.mileage === null ? '' : 'MI', dealer_name: dealer, location: v.location};
 }
 export function buildFacebookRows(vehicles: Vehicle[], config: FeedOptions, tenantId: string, dealer: string, photoBase = ''): FacebookFeedRow[] {
-  return sortedFeedVehicles(vehicles).filter(v => v.status !== 'sold' && !feedExclusion(v, config)).map(v => facebookRow(v, tenantId, dealer, projectedPhotoUrls(v, photoBase)));
+  return sortedFeedVehicles(vehicles).filter(v => v.status !== 'sold' && !feedExclusion(v, config)).map(v => facebookRow(v, tenantId, dealer, projectedPhotoUrls(v, photoBase, 'feed')));
 }
 export const facebookCsv = (rows: FacebookFeedRow[]) => toCsv([[...facebookColumns], ...rows.map(row => facebookColumns.map(key => String(row[key])))]);
 export const newestFacebookRun = (runs: FeedRun[]) => runs.filter(run => run.facebookRows !== undefined).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))[0];

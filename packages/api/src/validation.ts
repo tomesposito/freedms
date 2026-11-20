@@ -27,7 +27,7 @@ export function version(value: unknown): number {
 }
 export function vehicleInput(value: unknown, now: Date): VehicleInput {
   const b = object(value);
-  onlyKeys(b, ['photoUrls', 'stockNumber', 'vin', 'year', 'mileage', 'make', 'model', 'trim', 'status', 'listPrice', 'cost', 'reconCosts', 'dateStocked', 'location', 'notes']);
+  onlyKeys(b, ['photoUrls', 'listingDescription', 'stockNumber', 'vin', 'year', 'mileage', 'make', 'model', 'trim', 'status', 'listPrice', 'cost', 'reconCosts', 'dateStocked', 'location', 'notes']);
   if (typeof b.year !== 'number' || !Number.isInteger(b.year) || b.year < 1886 || b.year > now.getUTCFullYear() + 2) throw invalid('Invalid model year.');
   if (!vehicleStatuses.includes(b.status as VehicleInput['status'])) throw invalid('Invalid vehicle status.');
   const mileage = b.mileage ?? null;
@@ -38,7 +38,7 @@ export function vehicleInput(value: unknown, now: Date): VehicleInput {
   const reconCosts = b.reconCosts.map(value => { const row = object(value); onlyKeys(row, ['description', 'amount']); return {description: text(row.description, 'Recon description', 200), amount: money(row.amount, 'Recon amount')}; });
   const photos = b.photoUrls;
   if (photos !== undefined && (!Array.isArray(photos) || photos.length > 20 || photos.some(url => typeof url !== 'string' || url.length > 2000 || !/^https?:\/\//i.test(url)))) throw invalid('Photos must be at most 20 HTTP(S) URLs.');
-  return {...(photos === undefined ? {} : {photoUrls: photos as string[]}), stockNumber: text(b.stockNumber, 'Stock number', 50), vin: vin(b.vin), year: b.year, mileage,
+  return {...(b.listingDescription === undefined ? {} : {listingDescription: text(b.listingDescription, 'Listing description', 5000, true)}), ...(photos === undefined ? {} : {photoUrls: photos as string[]}), stockNumber: text(b.stockNumber, 'Stock number', 50), vin: vin(b.vin), year: b.year, mileage,
     make: text(b.make, 'Make'), model: text(b.model, 'Model'), trim: text(b.trim, 'Trim', 120, true), status: b.status as VehicleInput['status'],
     listPrice: money(b.listPrice, 'List price'), cost: money(b.cost, 'Cost'), reconCosts, dateStocked,
     location: text(b.location, 'Location', 200, true), notes: text(b.notes, 'Notes', 10000, true)};

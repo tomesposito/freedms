@@ -20,8 +20,18 @@ export const assistantToolSpecs: AssistantToolSpec[] = tools.map(({name, descrip
 // pre-turn entitlement/context work and response handling.
 export const ASSISTANT_TURN_BUDGET_MS = 45_000;
 export const ASSISTANT_SETTLEMENT_RESERVE_MS = 5_000;
+export const expired = Symbol('assistant deadline');
+export async function withinAssistantBudget<T>(operation: () => Promise<T>, milliseconds: number, onExpiry?: () => void): Promise<T | typeof expired> {
+  if (milliseconds <= 0) { onExpiry?.(); return expired; }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([Promise.resolve().then(operation), new Promise<typeof expired>(resolve => {
+      timer = setTimeout(() => { onExpiry?.(); resolve(expired); }, milliseconds);
+    })]);
+  } finally { clearTimeout(timer); }
+}
 export interface AssistantTurnOptions { now?: () => number }
-const timeLimit = 'The assistant ran out of time for this message. Work already done stands. Please send another message to continue.';
+export const timeLimit = 'The assistant ran out of time for this message. Work already done stands. Please send another message to continue.';
 const stepLimit = 'The assistant hit the step limit for this message. Please send another message to continue.';
 export async function runAssistant(messages: AssistantMessage[], provider: AssistantProvider, claims: AuthClaims,
   execute: (request: ApiRequest) => Promise<ApiResponse>, meter?: AssistantMeter, options: AssistantTurnOptions = {}) {
@@ -30,19 +40,6 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
   const remainingWork = () => deadline - now() - ASSISTANT_SETTLEMENT_RESERVE_MS;
   const controller = new AbortController();
   const workTimer = setTimeout(() => controller.abort(), Math.max(0, remainingWork()));
-  const expired = Symbol('deadline');
-  // Promise.race observes late rejections too; always clear the losing timer.
-  const bounded = async <T>(operation: () => Promise<T>, milliseconds: number, abort = false): Promise<T | typeof expired> => {
-    if (milliseconds <= 0) { if (abort) controller.abort(); return expired; }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const pending = Promise.resolve().then(operation);
-    void pending.catch(() => {});
-    try {
-      return await Promise.race([pending, new Promise<typeof expired>(resolve => {
-        timer = setTimeout(() => { if (abort) controller.abort(); resolve(expired); }, milliseconds);
-      })]);
-    } finally { clearTimeout(timer); }
-  };
   const totalRemaining = () => deadline - now();
   let settledCredits = 0;
   let usage = zeroUsage;
@@ -50,11 +47,11 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
     const pending = usage; usage = zeroUsage;
     if (!meter?.recordUsage || !Object.values(pending).some(tokens => tokens !== 0)) return;
     // Cost telemetry is best effort, using only the remaining settlement budget.
-    try { await bounded(() => meter.recordUsage!(pending), totalRemaining()); } catch { /* Preserve delivery. */ }
+    try { await withinAssistantBudget(() => meter.recordUsage!(pending), totalRemaining()); } catch { /* Preserve delivery. */ }
   };
   const charge = async (action: string, price: Parameters<AssistantMeter['charge']>[1], usage: typeof zeroUsage) => {
     if (!meter) return;
-    const result = await bounded(() => meter.charge(action, price, usage), totalRemaining());
+    const result = await withinAssistantBudget(() => meter.charge(action, price, usage), totalRemaining());
     if (result === expired) return action === 'answer'
       ? 'The assistant could not settle the answer charge. The answer has been withheld.'
       : `The action ${action} DID execute successfully, but its credit settlement could not be confirmed. No further actions ran. Review the completed action before retrying.`;
@@ -63,7 +60,7 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
   };
   const beforeWrite = async (price: {credits: number}) => {
     if (!meter) return;
-    const result = await bounded(() => meter.beforeWrite(price), totalRemaining());
+    const result = await withinAssistantBudget(() => meter.beforeWrite(price), totalRemaining());
     return result === expired ? 'The assistant could not verify access. No further actions ran.' : result;
   };
   const history = structuredClone(messages), transcript: {tool: string; ok: boolean}[] = [];
@@ -72,7 +69,7 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
     // Call once even when no budget remains; never wait beyond the total deadline.
     const pending = meter?.finish();
     if (pending) void pending.catch(() => {});
-    const credits = pending ? await bounded(() => pending, totalRemaining()) : 0;
+    const credits = pending ? await withinAssistantBudget(() => pending, totalRemaining()) : 0;
     return {reply, transcript, creditsUsed: credits === expired ? settledCredits : credits};
   };
   try {
@@ -114,7 +111,7 @@ export async function runAssistant(messages: AssistantMessage[], provider: Assis
         const stop = price && (price.actionClass === 'write' ? await beforeWrite(price) : meter?.stop(price));
         if (stop) return finish(stop);
         if (remainingWork() <= 0) return finish(timeLimit);
-        const result = tool ? await bounded(() => executeTool(tool, call.input, claims, execute, {signal: controller.signal}), remainingWork(), true)
+        const result = tool ? await withinAssistantBudget(() => executeTool(tool, call.input, claims, execute, {signal: controller.signal}), remainingWork(), () => controller.abort())
           : {isError: true, content: [{text: 'Tool unavailable.'}]};
         // A timed-out write may still land, but is never charged. The time-limit
         // reply tells the user work already done stands and to send another message.

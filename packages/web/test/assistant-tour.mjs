@@ -7,6 +7,7 @@ import {existsSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {homedir} from 'node:os';
 import assert from 'node:assert/strict';
+import {MemoryDocumentStore} from '../../api/src/document-store.ts';
 import {MemoryRepositories} from '../../api/src/memory.ts';
 import {createHandler} from '../../api/src/handler.ts';
 import {seedDemo} from '../../api/src/demo-seed.ts';
@@ -26,7 +27,7 @@ async function setup(state, provider=new LocalAssistantProvider()) {
   const repositories=new MemoryRepositories(); repo=repositories.forTenant('mobile-demo');
   await repo.provision({id:'mobile-demo',name:'Demo Motors',createdAt:now.toISOString()}, {id:'admin',name:'Demo Owner',email:'owner@example.test'}, {tenantId:'mobile-demo',userId:'admin',role:'admin',active:true}, {id:'created',tenantId:'mobile-demo',actorId:'admin',aggregateId:'mobile-demo',aggregateVersion:1,type:'tenant.created',occurredAt:now.toISOString(),deliveryStatus:'pending'});
   await seedDemo(repositories,'mobile-demo','admin',now);
-  handle=createHandler(repositories,{decode:async()=>{throw new Error('Offline tour');}},()=>now,undefined,undefined,undefined,undefined,{assistantProvider:state==='unconfigured'?new UnconfiguredAssistantProvider():provider,assistantSeedLocalPlan:state!=='paywall'});
+  handle=createHandler(repositories,{decode:async()=>{throw new Error('Offline tour');}},()=>now,new MemoryDocumentStore(),undefined,undefined,undefined,{assistantProvider:state==='unconfigured'?new UnconfiguredAssistantProvider():provider,assistantSeedLocalPlan:state!=='paywall'});
   if(state!=='paywall') {
     const pool=await call('/assistant/pool');
     if(state==='disabled' || state==='past-due') {
@@ -40,7 +41,7 @@ async function setup(state, provider=new LocalAssistantProvider()) {
   }
 }
 await setup('ready');
-await call('/vehicles','POST',{stockNumber:'STOCK-100',vin:'1HGCM82633A004352',year:2003,make:'Honda',model:'Accord',trim:'',mileage:null,status:'available',listPrice:100000,cost:50000,reconCosts:[],dateStocked:'2026-11-04',location:'',notes:''});
+const tourVehicle = await call('/vehicles','POST',{stockNumber:'STOCK-100',vin:'1HGCM82633A004352',year:2003,make:'Honda',model:'Accord',trim:'',mileage:null,status:'available',listPrice:100000,cost:50000,reconCosts:[],dateStocked:'2026-11-04',location:'',notes:''});
 const vite=spawn(process.execPath,['node_modules/vite/bin/vite.js','packages/web','--host','127.0.0.1','--port','5199','--strictPort'],{env:{...process.env,VITE_COGNITO_DOMAIN:'',VITE_API_URL:'/api'},stdio:'ignore'});
 let browser;
 try {
@@ -55,7 +56,7 @@ try {
     const url=new URL(route.request().url());
     if(url.pathname.startsWith('/api/')){
       const r=await handle({method:route.request().method(),path:url.pathname.slice(4),query:Object.fromEntries(url.searchParams),body:route.request().postData() || undefined,...(url.pathname.startsWith('/api/share/')||url.pathname.startsWith('/api/invite/')?{}:{claims})});
-      await route.fulfill({status:r.statusCode,headers:r.headers,body:r.body});
+      await route.fulfill({status:r.statusCode,headers:r.headers,body:r.isBase64Encoded ? Buffer.from(r.body, 'base64') : r.body});
     }else if(url.hostname==='127.0.0.1') await route.continue();
     else {errors.push(`External request: ${url}`);await route.abort();}
   });
@@ -189,6 +190,45 @@ try {
   await page.setViewportSize({width:390,height:844});
   await page.reload({waitUntil:'networkidle'}); await open();
   assert.equal(await page.locator('.assistant-user').count(),0);
+  await page.setViewportSize({width:1440,height:1000});
+  await page.goto(`http://127.0.0.1:5199/?tour=${++visit}#/vehicles/${tourVehicle.id}`, {waitUntil:'networkidle'});
+  const lotPhoto = await page.evaluate(async () => {
+    const response = await fetch('/src/assets/dusk-lot.jpg');
+    const bitmap = await createImageBitmap(await response.blob());
+    const canvas = document.createElement('canvas');
+    canvas.width = 760; canvas.height = 520;
+    canvas.getContext('2d').drawImage(bitmap, 1490, 400, 760, 520, 0, 0, 760, 520);
+    bitmap.close();
+    return canvas.toDataURL('image/jpeg', .9).split(',')[1];
+  });
+  await page.locator('.vehicle-photos input[type=file]').setInputFiles({name:'demo-lot.jpg', mimeType:'image/jpeg', buffer:Buffer.from(lotPhoto, 'base64')});
+  await page.getByText('demo-lot.jpg · Uploaded').waitFor();
+  const entry = page.getByRole('button',{name:'Ask the assistant to prep these photos'});
+  await entry.click();
+  await page.getByRole('button',{name:'Run photo prep · 3 credits'}).waitFor();
+  await page.getByRole('radio',{name:'Selected photos'}).check();
+  await page.getByRole('checkbox',{name:'Photo 1'}).uncheck();
+  assert.equal(await page.getByRole('button',{name:'Run photo prep · 0 credits'}).isDisabled(),true);
+  await page.getByRole('radio',{name:'Whole vehicle'}).check();
+  await shot('photo-prep-estimate');
+  await copyFile(`${out}/photo-prep-estimate.png`, 'docs/screenshots/ai-assistant-photo-prep-estimate.png');
+  const beforePrep = await call(`/vehicles/${tourVehicle.id}`);
+  const beforePrepBalance = (await call('/assistant/pool')).balanceCredits;
+  await page.getByRole('button',{name:'Run photo prep · 3 credits'}).click();
+  await page.getByRole('heading',{name:'Light & color fix · Photo 1'}).waitFor();
+  await page.locator('.assistant-receipt').filter({hasText:'This used 3 credits'}).waitFor();
+  assert.equal((await call('/assistant/pool')).balanceCredits,beforePrepBalance - 3);
+  assert.deepEqual(await call(`/vehicles/${tourVehicle.id}`), beforePrep);
+  assert.equal(await page.locator('.prep-comparison img').last().evaluate(img=>img.complete && img.naturalWidth>0),true);
+  await page.locator('.assistant-body').evaluate(body=>{body.scrollTop=0;});
+  await page.setViewportSize({width:1440,height:1500});
+  await shot('photo-prep-results');
+  await copyFile(`${out}/photo-prep-results.png`,'docs/screenshots/ai-assistant-photo-prep-results.png');
+  await page.getByRole('textbox',{name:'Edit description'}).fill('Dealer-reviewed listing description.');
+  await Promise.all([page.waitForResponse(response=>response.url().endsWith(`/api/vehicles/${tourVehicle.id}`) && response.request().method()==='PUT'), page.getByRole('button',{name:'Approve all'}).click()]);
+  const approved = await call(`/vehicles/${tourVehicle.id}`);
+  assert.equal(approved.listingDescription,'Dealer-reviewed listing description.');
+  assert.equal(approved.photos[1].derivedFrom,approved.photos[0].id);
   await page.setViewportSize({width:1440,height:1000});
   for(const state of ['paywall','past-due','disabled','exhausted','unconfigured']) {
     await setup(state); await goto();

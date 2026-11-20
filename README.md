@@ -96,6 +96,16 @@ flagged for a person, never run.
 
 ![AI assistant vehicle summary skill with cost chip and receipt](docs/screenshots/ai-assistant-skills.png)
 
+From a vehicle with photos, choose **Prep listing photos** to estimate a pass
+against the workspace balance. Whole-vehicle and selected-photo passes use three
+credits per successfully processed photo. Review the proposed cover, light and
+color fixes, readings, damage notes, and editable description in the dock.
+Approved descriptions appear on the dealer site and Facebook feed.
+
+![Photo prep estimate with the workspace credit balance](docs/screenshots/ai-assistant-photo-prep-estimate.png)
+
+![Photo prep suggestions, approval controls, and credit receipt](docs/screenshots/ai-assistant-photo-prep-results.png)
+
 **AI assistant admin**
 
 Admins manage the plan, credits, usage, and dealership switch. Billing uses Stripe

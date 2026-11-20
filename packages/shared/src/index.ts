@@ -1,3 +1,4 @@
+export * from './photo-prep.js';
 export * from './mcp-grants.js';
 export * from './ideas.js';
 import type { TermsAcceptance } from './legal.js';
@@ -45,14 +46,16 @@ export const VEHICLE_PHOTO_PART_BYTES = 3 * 1024 * 1024;
 export function effectiveVehiclePhotos(vehicle: Pick<VehicleInput, 'photos' | 'photoUrls'>): VehiclePhoto[] {
   return vehicle.photos ?? (vehicle.photoUrls ?? []).map(url => ({source: 'url', url}));
 }
-export function vehiclePhotoUrl(photo: VehiclePhoto, tenantId: string, base = '', size: 'display' | 'thumb' = 'display'): string {
+export type VehiclePhotoSize = 'display' | 'thumb' | 'hero' | 'feed';
+export function vehiclePhotoUrl(photo: VehiclePhoto, tenantId: string, base = '', size: VehiclePhotoSize = 'display'): string {
   if (photo.source === 'url') return photo.url;
-  const suffix = size === 'thumb' ? '-thumb' : '';
+  const suffix = size === 'thumb' || (size !== 'display' && photo.derivedFrom) ? `-${size}` : '';
   return `${base}/public/${encodeURIComponent(tenantId)}/photos/${encodeURIComponent(photo.id + suffix)}`;
 }
 export interface VehicleInput {
   photos?: VehiclePhoto[];
   photoUrls?: string[];
+  listingDescription?: string;
   stockNumber: string; vin: string; year: number; make: string; model: string; trim: string;
   mileage: number | null;
   status: VehicleStatus; listPrice: number; cost: number; reconCosts: ReconItem[];
