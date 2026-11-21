@@ -196,8 +196,8 @@ export class DynamoRepositories implements RepositoryFactory {
         assertMcpGrant(tenantId, record, expectedVersion, event);
         const row = put(`MCPGRANT#${requireId(record.id)}`, record, expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined);
         const guardedRow = expectedVersion ? {Put: {...row.Put,
-          ConditionExpression: '#d.#v = :v AND #d.revokedAt = :active AND #d.userId = :user AND #d.clientId = :client',
-          ExpressionAttributeValues: {':v': expectedVersion, ':active': null, ':user': record.userId, ':client': record.clientId}
+          ConditionExpression: '#d.#v = :v AND #d.userId = :user AND #d.clientId = :client' + (event?.type === 'mcp-grant.authorized' ? '' : ' AND #d.revokedAt = :active'),
+          ExpressionAttributeValues: {':v': expectedVersion, ':user': record.userId, ':client': record.clientId, ...(event?.type === 'mcp-grant.authorized' ? {} : {':active': null})}
         }} : row;
         // A separate unique pair guard makes concurrent first uses create only one grant.
         await transact([

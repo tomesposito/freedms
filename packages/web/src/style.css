@@ -367,3 +367,9 @@ body.assistant-dock-open #assistant-tray{transform:translateX(0);visibility:visi
 .prep-suggestion h3, .prep-suggestion p { margin: 0 0 .45rem; }
 .prep-suggestion h3 { font-size: 1rem; }
 .prep-suggestion textarea { width: 100%; }
+
+/* MCP consent shares the app's login shell and brand assets. */
+.oauth-summary{border:1px solid var(--border,#dbe2e7);border-radius:12px;padding:0 18px;margin:22px 0;background:#f8fafb;overflow-wrap:anywhere}
+.oauth-permissions{padding-left:22px;margin:14px 0 22px;line-height:1.6}
+.auth-form .oauth-permissions+h2,.auth-form h2{font-size:1rem}
+#oauth-allow,#oauth-deny{width:100%;margin-top:10px}

@@ -1,3 +1,4 @@
+import { oauthPaths } from './oauth.js';
 import { executeTool } from './execute.js';
 import { grantRevoked } from './grants.js';
 import type { AuthClaims } from '@freedms/shared';
@@ -8,7 +9,7 @@ import { OPERATOR_TENANT_ID, type RepositoryFactory } from '../repository.js';
 import { object, onlyKeys } from '../validation.js';
 import { accessVerifier, type McpConfig } from './auth.js';
 import { tools } from './tools.js';
-export const isMcpPath = (path: string) => ['/mcp', '/mcp/register', '/.well-known/oauth-protected-resource', '/.well-known/oauth-authorization-server'].includes(path.replace(/\/$/, ''));
+export const isMcpPath = (path: string) => [...oauthPaths, '/mcp', '/mcp/register', '/.well-known/oauth-protected-resource', '/.well-known/oauth-authorization-server'].includes(path.replace(/\/$/, ''));
 export function createMcpHandler(repositories: RepositoryFactory, execute: (request: ApiRequest) => Promise<ApiResponse>, config: McpConfig) {
   const verify = accessVerifier({...config,
     isRegisteredClient: async clientId => !!await repositories.forTenant(OPERATOR_TENANT_ID).mcpRegistration(clientId)});
@@ -24,12 +25,12 @@ export function createMcpHandler(repositories: RepositoryFactory, execute: (requ
       : response(405, {error: {code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.'}});
     if (request.path.replace(/\/$/, '') === '/.well-known/oauth-authorization-server') {
       if (request.method !== 'GET') return response(405, {error: {code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.'}});
-      if (!config.oauthDomain) return response(503, {error: {code: 'OAUTH_UNAVAILABLE', message: 'OAuth discovery is not configured.'}});
+      if (!config.oauthDomain && !config.customOAuth) return response(503, {error: {code: 'OAUTH_UNAVAILABLE', message: 'OAuth discovery is not configured.'}});
       return response(200, {
         issuer: authorizationServer,
-        authorization_endpoint: new URL('/oauth2/authorize', config.oauthDomain).href,
-        token_endpoint: new URL('/oauth2/token', config.oauthDomain).href,
-        revocation_endpoint: new URL('/oauth2/revoke', config.oauthDomain).href,
+        authorization_endpoint: config.customOAuth ? `${authorizationServer}/?mcp_oauth=1` : new URL('/oauth2/authorize', config.oauthDomain!).href,
+        token_endpoint: config.customOAuth ? `${config.resource}/oauth/token` : new URL('/oauth2/token', config.oauthDomain!).href,
+        revocation_endpoint: config.customOAuth ? `${config.resource}/oauth/revoke` : new URL('/oauth2/revoke', config.oauthDomain!).href,
         registration_endpoint: `${config.resource.replace(/\/$/, '')}/register`,
         response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'],
         token_endpoint_auth_methods_supported: ['none'], code_challenge_methods_supported: ['S256'],

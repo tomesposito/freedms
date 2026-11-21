@@ -686,6 +686,53 @@ changes, pool tier upgrade or new authorization server are part
 of this change. Deploy and verify this operator-managed Cognito setting separately
 from application artifacts, with the prior settings saved for rollback.
 
+**Custom MCP OAuth — November 21, 2026 (#188, owner approved):** the customer
+trust requirement now calls for the same FreeDMS login and MFA experience on the
+application domain. This supersedes D-10's rejection of an application-owned MCP
+authorization server and the classic-only limit in #186. Cognito remains the
+identity provider and verifies passwords, first-login password changes, recovery
+and MFA through the existing SDK; the ordinary web/app login is unchanged.
+
+New discovery advertises `https://app.<RootDomain>/?mcp_oauth=1` and the
+`/api/mcp/oauth/token` and `/api/mcp/oauth/revoke` endpoints. The shared login shell
+provides the existing logo, typography, colors, form controls and lot photograph.
+After authentication, an explicit consent page identifies the requesting app,
+registered callback host, signed-in person, dealership and requested permissions,
+with Allow access and Cancel. App names are self-reported registration metadata,
+not a verification badge. The flow keeps its identity token in memory and does
+not replace the normal browser session. No password, MFA code or Cognito token
+is delivered to the connecting app.
+
+The maintained `@node-oauth/oauth2-server` engine handles authorization code,
+mandatory PKCE S256 and rotating refresh grants; `aws-jwt-verify` independently
+verifies the Cognito web ID token's signature, issuer, audience, use and expiry.
+The application binds each ten-minute interaction to a Secure, HttpOnly,
+SameSite=Strict host cookie, separate CSRF secret and exact Origin. It checks the
+immutable subject/dealership binding and live membership before consent. Only
+registered exact redirects, public clients and the two approved MCP scopes are
+accepted. The single resource is bound to the grant and checked at token exchange.
+Interactions and authorization codes are consumed atomically. Codes last one
+minute, access tokens one hour, and refresh families thirty days with an absolute
+expiry. Replay of a consumed code or refresh token revokes the family.
+
+Opaque credentials are random, and only their hashes are persisted in a dedicated
+encrypted DynamoDB table with TTL cleanup and explicit expiry checks. Token pairs
+are written atomically. Every token use or refresh checks the live grant,
+membership, registration and family. Consent writes an audited authorization
+generation; reconnecting cannot revive old opaque or legacy Cognito tokens.
+Existing Account → AI connections revocation remains authoritative.
+
+The dynamic registration bridge and classic Cognito branding remain available for
+existing consumers and rollback. Stage the new table, narrow IAM rights and public
+OAuth routes with `McpCustomOAuthEnabled=0`, preserve the live Lambda artifact,
+update the private infrastructure/configuration baseline, deploy the attested
+compatible release, then enable discovery under the operator migration lock.
+Disabling discovery alone retains validation for already-issued opaque tokens;
+rolling back to pre-custom application code also requires disabling discovery
+and asking those clients to reconnect through the classic flow. Verification
+covers adversarial protocol cases, revocation and replay, the shared login/MFA UI
+on desktop/mobile, and a real connector connection completed by the owner.
+
 ### D-11 — Billing rail for paid AI
 
 **Status: DECIDED — owner, 2026-11-03: Stripe Billing.**

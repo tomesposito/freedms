@@ -136,7 +136,7 @@ export class MemoryRepositories implements RepositoryFactory {
         assertMcpGrant(tenantId, record, expectedVersion, event); requireId(record.id);
         if (event) check(event);
         const old = s.mcpGrants.get(record.id);
-        if ((old?.version ?? 0) !== expectedVersion || old?.revokedAt ||
+        if ((old?.version ?? 0) !== expectedVersion || (old?.revokedAt && event?.type !== 'mcp-grant.authorized') ||
           (old && (old.userId !== record.userId || old.clientId !== record.clientId)) ||
           (!expectedVersion && [...s.mcpGrants.values()].some(g => g.userId === record.userId && g.clientId === record.clientId))) throw conflict();
         s.mcpGrants.set(record.id, structuredClone(record));

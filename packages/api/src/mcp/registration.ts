@@ -6,7 +6,7 @@ import { OPERATOR_TENANT_ID, type RepositoryFactory } from '../repository.js';
 import { onlyKeys, text, invalid } from '../validation.js';
 
 export interface McpRegistration {
-  tenantId: string; client_id: string; client_name: string; redirect_uris: string[]; scopes: string[]; createdAt: string;
+  grant_types?: string[]; tenantId: string; client_id: string; client_name: string; redirect_uris: string[]; scopes: string[]; createdAt: string;
 }
 export interface RegistrationClients {
   create(input: CreateUserPoolClientCommandInput): Promise<string>;
@@ -79,7 +79,7 @@ export async function registerMcpClient(request: ApiRequest, repositories: Repos
       PreventUserExistenceErrors: 'ENABLED', EnableTokenRevocation: true, AccessTokenValidity: 1, TokenValidityUnits: {AccessToken: 'hours'}});
     try {
       // Like access requests, this is operator bookkeeping: no dealership mutation/outbox event.
-      await repository.saveMcpRegistration({tenantId: OPERATOR_TENANT_ID, client_id, client_name: data.client_name, redirect_uris: data.redirect_uris, scopes, createdAt: now.toISOString()});
+      await repository.saveMcpRegistration({tenantId: OPERATOR_TENANT_ID, client_id, client_name: data.client_name, redirect_uris: data.redirect_uris, grant_types: data.grant_types, scopes, createdAt: now.toISOString()});
     } catch (error) {
       await config.clients.delete(config.poolId, client_id);
       throw error;

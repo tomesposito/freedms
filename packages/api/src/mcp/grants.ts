@@ -12,7 +12,7 @@ export async function grantRevoked(repositories: RepositoryFactory, tenantId: st
     repo = repositories.forTenant(tenantId);
     existing = (await repo.mcpGrants()).find(g => g.userId === access.sub && g.clientId === access.client_id);
   } catch { return true; }
-  if (existing?.revokedAt) return true;
+  if (existing?.revokedAt || (access.grant_id || existing?.oauthAuthorizationId) && access.grant_id !== existing?.oauthAuthorizationId) return true;
   try {
     const now = (config.now ?? Date.now)(), timestamp = new Date(now).toISOString();
     const scopes = access.scope.split(' ').filter(Boolean);
@@ -31,7 +31,8 @@ export async function grantRevoked(repositories: RepositoryFactory, tenantId: st
     if (error && typeof error === 'object' && 'code' in error && error.code === 'CONFLICT') {
       // A revoke may have won the race against this bookkeeping write.
       try {
-        return Boolean((await repo.mcpGrants()).find(g => g.userId === access.sub && g.clientId === access.client_id)?.revokedAt);
+        const current = (await repo.mcpGrants()).find(g => g.userId === access.sub && g.clientId === access.client_id);
+        return Boolean(current?.revokedAt || (access.grant_id || current?.oauthAuthorizationId) && access.grant_id !== current?.oauthAuthorizationId);
       } catch { return true; }
     }
     // Other bookkeeping failures do not prevent a tool call.

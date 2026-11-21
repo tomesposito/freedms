@@ -76,6 +76,11 @@ Parameters:
     Type: String
     Default: ''
     Description: Operator inbox for new pilot access requests
+  McpCustomOAuthEnabled:
+    Type: String
+    Default: '0'
+    AllowedValues: ['0', '1']
+    Description: Advertise the branded FreeDMS OAuth flow after the compatible release is deployed
   McpCallbackURLs:
     Type: CommaDelimitedList
     Default: 'https://agent.meta.ai/api/hatch/oauth/callback'
@@ -161,6 +166,17 @@ Resources:
           KeyType: RANGE
       SSESpecification:
         SSEEnabled: true
+  McpOAuthTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: PK, AttributeType: S}]
+      KeySchema: [{AttributeName: PK, KeyType: HASH}]
+      SSESpecification: {SSEEnabled: true}
+      TimeToLiveSpecification: {AttributeName: expiresAt, Enabled: true}
+      Tags: [{Key: Project, Value: freeDMS}]
   Documents:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -377,6 +393,9 @@ Resources:
           ORIGIN_SECRET: !Ref OriginSecret
           TOKEN_ISSUER: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
           TOKEN_AUDIENCE: !Ref UserPoolClient
+          MCP_OAUTH_TABLE: !Ref McpOAuthTable
+          MCP_CUSTOM_OAUTH_ENABLED: !Ref McpCustomOAuthEnabled
+          MCP_CALLBACK_URLS: !Join [',', !Ref McpCallbackURLs]
           MCP_CLIENT_ID: !Ref McpClient
           MCP_RESOURCE_URI: !Sub 'https://app.${RootDomain}/api/mcp'
           MCP_OAUTH_DOMAIN: !Sub 'https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com'
@@ -405,6 +424,9 @@ Resources:
               Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:Scan, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:ConditionCheckItem]
               Resource: !GetAtt Table.Arn
             - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt McpOAuthTable.Arn
+            - Effect: Allow
               Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
               Resource:
                 - !Sub '${Documents.Arn}/tenants/*'
@@ -426,6 +448,34 @@ Resources:
           Properties:
             ApiId: !Ref Api
             Path: /mcp/register
+            Method: POST
+            Auth: {Authorizer: NONE}
+        McpOAuthInteractionPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /mcp/oauth/interaction
+            Method: POST
+            Auth: {Authorizer: NONE}
+        McpOAuthAuthorizePost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /mcp/oauth/authorize
+            Method: POST
+            Auth: {Authorizer: NONE}
+        McpOAuthTokenPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /mcp/oauth/token
+            Method: POST
+            Auth: {Authorizer: NONE}
+        McpOAuthRevokePost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /mcp/oauth/revoke
             Method: POST
             Auth: {Authorizer: NONE}
         McpMetadata:
