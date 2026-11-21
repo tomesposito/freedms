@@ -516,7 +516,10 @@ The registration bridge accepts `POST /mcp/register` (public application URL:
 `https://app.<RootDomain>/api/mcp/register`). Consumers that accept an explicit
 registration URL can send `client_name`, `redirect_uris`, `grant_types`
 (`authorization_code`, optionally `refresh_token`), `response_types` (`code`),
-`token_endpoint_auth_method` (`none`), and a space-delimited `scope`. Omitted
+`token_endpoint_auth_method` (`none`), and a space-delimited `scope`.
+`application_type` is also accepted when set to `native` (as sent by Codex) or
+`web`; this hint does not change callback, scope or client-authentication policy.
+Omitted
 OAuth metadata defaults to authorization code, code response, no client secret,
 and `freedms/mcp.read`. The response is HTTP 201 with the new client ID and
 accepted metadata, never a secret. The consumer handles the ID; dealers connect

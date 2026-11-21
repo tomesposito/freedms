@@ -43,6 +43,7 @@ test('DCR creates distinct public Cognito clients with exact configuration and o
 test('DCR rejects invalid metadata before creating any client', async () => {
   const s = setup();
   const bad = [null, [], {}, {...fields, client_name: ''}, {...fields, tenantId: 'injected'},
+    ...['desktop', '', null, 1, {}].map(application_type => ({...fields, application_type})),
     ...['http://example.com/cb', 'https://*.example.com', 'https://example.com/#', 'https://example.com/#fragment', 'https://user:pass@example.com', 'https://@example.com', 'ftp://localhost', 'http://localhost.evil/cb', 'http://127.1/cb', 'https://example.com/%2a', 'https://example.com/a b', 'https://example.com/\\cb'].map(uri => ({...fields, redirect_uris: [uri]})),
     {...fields, redirect_uris: []}, {...fields, scope: 'openid'}, {...fields, scope: 'freedms/mcp.read admin'}, {...fields, scope: ''},
     {...fields, grant_types: ['client_credentials']}, {...fields, grant_types: ['refresh_token']}, {...fields, response_types: ['token']}, {...fields, token_endpoint_auth_method: 'client_secret_basic'}];
@@ -52,6 +53,24 @@ test('DCR rejects invalid metadata before creating any client', async () => {
   }
   for (const body of ['{', 'x'.repeat(17000)]) assert.equal(JSON.parse((await s.handle({method: 'POST', path: '/mcp/register', body})).body).error, 'invalid_client_metadata');
   assert.deepEqual(s.created, []); assert.deepEqual(await s.repositories.forTenant('operator').mcpRegistrations(), []);
+});
+test('DCR accepts Codex native and web application metadata without changing client security settings', async () => {
+  const s = setup();
+  for (const application_type of ['native', 'web']) {
+    const result = await s.post({...fields, application_type});
+    assert.equal(result.statusCode, 201);
+    assert.equal(JSON.parse(result.body).application_type, application_type);
+  }
+  assert.deepEqual(s.created[0], s.created[1]);
+  assert.equal(s.created[0].GenerateSecret, false);
+  assert.deepEqual(s.created[0].AllowedOAuthScopes, fields.scope.split(' '));
+  assert.deepEqual(s.created[0].CallbackURLs, fields.redirect_uris);
+  for (const body of [{...fields, application_type: 'native', scope: 'admin'},
+    {...fields, application_type: 'native', redirect_uris: ['http://attacker.example/callback']},
+    {...fields, application_type: 'native', token_endpoint_auth_method: 'client_secret_basic'}]) {
+    assert.equal((await s.post(body)).statusCode, 400);
+  }
+  assert.equal(s.created.length, 2);
 });
 test('DCR defaults to read scope and public authorization code metadata', async () => {
   const s = setup(); const result = await s.post({client_name: 'Minimal', redirect_uris: ['https://example.com/cb']});
