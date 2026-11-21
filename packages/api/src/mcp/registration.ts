@@ -3,7 +3,7 @@ import { CognitoIdentityProviderClient, CreateUserPoolClientCommand, DeleteUserP
 import { ApiError } from '../errors.js';
 import { parseBody, response, errorResponse, type ApiRequest, type ApiResponse } from '../handler.js';
 import { OPERATOR_TENANT_ID, type RepositoryFactory } from '../repository.js';
-import { onlyKeys, text, invalid } from '../validation.js';
+import { text, invalid } from '../validation.js';
 
 export interface McpRegistration {
   grant_types?: string[]; tenantId: string; client_id: string; client_name: string; redirect_uris: string[]; scopes: string[]; createdAt: string;
@@ -31,9 +31,16 @@ function strings(value: unknown, label: string, allowed?: string[]): string[] {
   if (!Array.isArray(value) || !value.length || value.length > 100 || value.some(v => typeof v !== 'string' || (allowed && !allowed.includes(v)))) throw invalid(`Invalid ${label}.`);
   return [...new Set(value as string[])];
 }
+const registrationFields = ['client_name', 'redirect_uris', 'grant_types', 'response_types', 'token_endpoint_auth_method', 'scope', 'application_type'];
 function metadata(request: ApiRequest) {
-  const body = parseBody(request.body, 16 * 1024);
-  onlyKeys(body, ['client_name', 'redirect_uris', 'grant_types', 'response_types', 'token_endpoint_auth_method', 'scope', 'application_type']);
+  const parsed = parseBody(request.body, 16 * 1024);
+  // RFC 7591: unrecognized client metadata is ignored, never rejected. Standard
+  // clients send optional fields (client_uri, logo_uri, tos_uri, ...) that this
+  // endpoint does not use; dropping them here keeps those clients working while
+  // every field below is still validated exactly as strictly as before. Ignored
+  // fields can never influence the record: tenant, scopes and client policy all
+  // come from the validated fields and server constants only.
+  const body = Object.fromEntries(Object.entries(parsed).filter(([key]) => registrationFields.includes(key)));
   const client_name = text(body.client_name, 'Client name', 128);
   // Native MCP clients (including Codex) send this standard registration hint.
   // It never changes redirect validation, scopes or the public-client policy.
@@ -70,7 +77,7 @@ export async function registerMcpClient(request: ApiRequest, repositories: Repos
     }
     let data: ReturnType<typeof metadata>;
     try { data = metadata(request); }
-    catch (error) { if (error instanceof ApiError) return response(400, {error: 'invalid_client_metadata', error_description: error.message}); throw error; }
+    catch (error) { if (error instanceof ApiError) { console.warn(`mcp registration rejected: ${error.message}`); return response(400, {error: 'invalid_client_metadata', error_description: error.message}); } throw error; }
     if (!config?.poolId) return response(503, {error: 'temporarily_unavailable', error_description: 'Registration is not configured.'});
     const {scopes, ...result} = data;
     const client_id = await config.clients.create({UserPoolId: config.poolId, ClientName: data.client_name,
