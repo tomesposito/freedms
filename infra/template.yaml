@@ -150,6 +150,15 @@ Resources:
             Status: Enabled
             NoncurrentVersionExpiration: {NoncurrentDays: 30}
             AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}
+          - Id: TemporaryVehiclePhotoParts
+            Status: Enabled
+            Prefix: temporary/vehicle-photo-parts/
+            ExpirationInDays: 1
+            NoncurrentVersionExpiration: {NoncurrentDays: 1}
+          - Id: TemporaryVehiclePhotoPartDeleteMarkers
+            Status: Enabled
+            Prefix: temporary/vehicle-photo-parts/
+            ExpiredObjectDeleteMarker: true
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -365,11 +374,13 @@ Resources:
                 StringEquals:
                   ses:FromAddress: !Ref MailFrom
             - Effect: Allow
-              Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:Scan, dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:ConditionCheckItem]
+              Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:Scan, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:ConditionCheckItem]
               Resource: !GetAtt Table.Arn
             - Effect: Allow
               Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
-              Resource: !Sub '${Documents.Arn}/tenants/*'
+              Resource:
+                - !Sub '${Documents.Arn}/tenants/*'
+                - !Sub '${Documents.Arn}/temporary/vehicle-photo-parts/*'
       Events:
         WebhookDrain:
           Type: Schedule
@@ -445,6 +456,83 @@ Resources:
             ApiId: !Ref Api
             Path: '/invite/{token}'
             Method: GET
+            Auth: {Authorizer: NONE}
+        PublicInventoryJson:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/public/{tenantId}/inventory.json'
+            Method: GET
+            Auth: {Authorizer: NONE}
+        PublicInventoryHtml:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/public/{tenantId}/inventory.html'
+            Method: GET
+            Auth: {Authorizer: NONE}
+        PublicInventoryIndex:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/public/{tenantId}/llms.txt'
+            Method: GET
+            Auth: {Authorizer: NONE}
+        PublicFacebookFeed:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/public/{tenantId}/facebook.csv'
+            Method: GET
+            Auth: {Authorizer: NONE}
+        PublicDealerHome:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/public/{tenantId}/site'
+            Method: GET
+            Auth: {Authorizer: NONE}
+        PublicDealerInventory:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/public/{tenantId}/site/inventory'
+            Method: GET
+            Auth: {Authorizer: NONE}
+        PublicDealerAbout:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/public/{tenantId}/site/about'
+            Method: GET
+            Auth: {Authorizer: NONE}
+        PublicDealerContact:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/public/{tenantId}/site/contact'
+            Method: GET
+            Auth: {Authorizer: NONE}
+        PublicDealerVehicle:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/public/{tenantId}/site/vehicles/{vehicleId}'
+            Method: GET
+            Auth: {Authorizer: NONE}
+        PublicDealerInquiry:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/public/{tenantId}/site/contact'
+            Method: POST
+            Auth: {Authorizer: NONE}
+        PublicVehicleInquiry:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/public/{tenantId}/site/vehicles/{vehicleId}'
+            Method: POST
             Auth: {Authorizer: NONE}
         PublicVehiclePhoto:
           Type: HttpApi
@@ -547,6 +635,7 @@ Resources:
           }
           if (request.headers.host.value !== 'app.${RootDomain}' || marketingFile || request.uri.indexOf('/marketing/') === 0) return {statusCode: 404};
           if (request.uri.indexOf('/api/') === 0) request.uri = request.uri.slice(4);
+          if (request.uri.indexOf('/public/') === 0) request.uri = request.uri.replace(/\/$/, '');
           return request;
         }
   WebAcl:
@@ -606,6 +695,17 @@ Resources:
               - EventType: viewer-request
                 FunctionARN: !GetAtt ViewerFunction.FunctionARN
           - PathPattern: /api/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE]
+            CachedMethods: [GET, HEAD]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt ViewerFunction.FunctionARN
+          - PathPattern: /public/*
             TargetOriginId: api
             ViewerProtocolPolicy: https-only
             AllowedMethods: [GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE]

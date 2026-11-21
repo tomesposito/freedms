@@ -81,7 +81,9 @@ test('identical public 404s, GET only, gateway and local auth bypass', async () 
     assert.deepEqual(localAuth(path, false, '', {verify: () => {throw new Error('must not verify');}}), {});
     const gateway = gatewayHandler(handler, 'issuer', 'audience');
     assert.equal((await gateway({rawPath: path, requestContext: {http: {method: 'GET', sourceIp: 'gateway'}}})).statusCode, 200);
-    assert.equal((await gateway({rawPath: path, requestContext: {http: {method: 'POST'}}})).statusCode, 405);
+    // Only allowlisted methods bypass hosted authentication; the application
+    // still reports 405 when called directly in local development.
+    assert.equal((await gateway({rawPath: path, requestContext: {http: {method: 'POST'}}})).statusCode, 401);
   }
 });
 test('fixed window rate limiting separates sources and tenants and resets using injected time', async () => {

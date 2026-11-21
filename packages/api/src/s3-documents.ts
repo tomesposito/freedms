@@ -9,7 +9,13 @@ export class S3DocumentStore implements DocumentStore {
   }
   forTenant(tenantId: string) {
     const prefix = `tenants/${requireId(tenantId)}/`;
-    const key = (id: string) => `${prefix}${requireId(id)}`;
+    const key = (id: string) => {
+      requireId(id);
+      // Only upload parts expire. Final photos and dealership documents keep
+      // their existing tenant keys and retention policy.
+      return /^vehicle-photo-part-[a-f0-9]{64}-\d+$/.test(id)
+        ? `temporary/vehicle-photo-parts/${tenantId}/${id}` : `${prefix}${id}`;
+    };
     return {
       put: async (id: string, content: Uint8Array) => {
         await this.client.send(new PutObjectCommand({Bucket: this.bucket, Key: key(id), Body: content,

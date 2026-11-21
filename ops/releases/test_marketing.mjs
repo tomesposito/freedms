@@ -121,6 +121,22 @@ test('only the pilot request POST reaches the API from the marketing host', () =
   }
 });
 
+test('public dealer paths use the API without caching and stay off the marketing host', () => {
+  const behavior = template.split('          - PathPattern: /public/*\n')[1].split('\n        ViewerCertificate:')[0];
+  assert.match(behavior, /TargetOriginId: api/);
+  assert.match(behavior, /CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad/);
+  assert.match(behavior, /OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac/);
+  assert.match(behavior, /POST/);
+  for (const path of ['/public/A/inventory.json', '/public/A/facebook.csv', '/public/A/site/', '/public/A/site/contact', '/public/A/photos/photo']) {
+    for (const method of ['GET', 'POST']) {
+      assert.equal(route('app.freedms.co', path, method).uri, path.replace(/\/$/, ''));
+      assert.equal(route('app.freedms.co', '/api' + path, method).uri, path.replace(/\/$/, ''));
+      assert.equal(route('freedms.co', path, method).statusCode, 404);
+      assert.equal(route('other.example', path, method).statusCode, 404);
+    }
+  }
+});
+
 const accessHtml = readFileSync('site/index.html', 'utf8');
 const accessScript = [...accessHtml.matchAll(/<script>([\s\S]*?)<\/script>/g)]
   .map(match => match[1]).find(script => script.includes("getElementById('access-form')"));
