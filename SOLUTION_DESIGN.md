@@ -672,16 +672,17 @@ registration fields so discovery success alone cannot mask registration failure.
 **OAuth branding — November 21, 2026 (#186):** keep the web/app's custom login
 unchanged. Brand the MCP OAuth pages as closely as Cognito classic permits using
 the existing FreeDMS logo, white surfaces, navy text, orange primary actions,
-48px controls and the product's focus/error colors. The versioned assets are
-`infra/cognito/classic.css` and `infra/cognito/logo.png`; the PNG is a rendering
+48px rounded controls, system font stack and the product's focus/error colors.
+The versioned assets are `infra/cognito/classic.css` and `infra/cognito/logo.png`;
+the PNG is a rendering
 of the existing app SVG because classic hosted UI does not accept SVG logos.
 Apply these as the user pool's `ALL` classic UI defaults so the dedicated MCP
 client and existing/new dynamic clients inherit the same appearance. Avoid
 per-client overrides that would leave newly registered consumers unbranded.
 The custom app login does not consume this stylesheet; its hosted fallback also
-inherits the branding. Cognito retains its page layout, built-in font and flow
-copy, including MFA and password recovery. No external fonts, injected HTML,
-authentication changes, pool tier upgrade or new authorization server are part
+inherits the branding. Cognito retains its page layout and flow copy, including
+MFA and password recovery. No external fonts, injected HTML, authentication
+changes, pool tier upgrade or new authorization server are part
 of this change. Deploy and verify this operator-managed Cognito setting separately
 from application artifacts, with the prior settings saved for rollback.
 

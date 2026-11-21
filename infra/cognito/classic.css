@@ -8,9 +8,13 @@
 }
 .background-customizable {
   background-color: #FFFFFF;
+  color: #0B1F2C;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  border-radius: 8px;
 }
 .label-customizable {
   font-weight: 600;
+  font-size: 14px;
   color: #0B1F2C;
 }
 .textDescription-customizable {
@@ -26,6 +30,11 @@
   color: #0B1F2C;
   background-color: #FFFFFF;
   border: 1px solid #CCD5DA;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-family: inherit;
+  font-size: 16px;
 }
 .inputField-customizable:focus {
   border-color: #FF6A00;
@@ -39,10 +48,17 @@
   height: 48px;
   color: #0B1F2C;
   background-color: #FF6A00;
+  border: 0;
+  border-radius: 7px;
+  font-family: inherit;
 }
 .submitButton-customizable:hover {
   color: #0B1F2C;
   background-color: #F56300;
+}
+.redirect-customizable {
+  color: #A94700;
+  text-decoration: underline;
 }
 .errorMessage-customizable {
   padding: 12px;

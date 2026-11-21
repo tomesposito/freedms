@@ -627,9 +627,11 @@ in `infra/cognito/classic.css` and `infra/cognito/logo.png` (#186). The logo is 
 unmodified raster rendering of `packages/web/src/assets/logo.svg`, within
 Cognito's 100 KB logo limit. The stylesheet uses the supported classic selectors
 and properties, and stays below 3 KB. It matches the app's white surfaces, navy
-`#0B1F2C`, orange `#FF6A00`, muted text, 48px controls and focus/error colors.
-Classic retains its own layout, font and flow copy; it cannot reproduce the
-app's split photo layout. The web/app's custom sign-in is unchanged.
+`#0B1F2C`, orange `#FF6A00`, muted text, rounded 48px controls, system font stack
+and focus/error colors. No external font is loaded. The recovery link uses a
+darker orange for readable contrast on white. Classic retains its own layout
+and flow copy; it cannot reproduce the app's split photo layout. The web/app's
+custom sign-in is unchanged.
 
 This is a separate operator-owned Cognito setting, not an application release
 or a CloudFormation-managed resource. Use the stack's `CognitoUserPoolId` output;
@@ -653,10 +655,11 @@ inherits these defaults; the normal in-app SRP sign-in remains unchanged. Keep
 `EnableManagedLoginBranding=false`; enabling it is a different migration.
 
 Verify the CSS readback, served logo, and real OAuth sign-in/recovery screens at
-desktop and mobile widths. Allow up to one minute for Cognito's cache. Verify a
-newly registered client inherits the assets, then remove only that verification
-client and its registration record. MFA uses the same hosted styling; complete
-credential/MFA verification with the account owner when needed. Never submit
+desktop and mobile widths. Allow up to one minute for Cognito's cache. Verify
+a newly created public client inherits the assets, then remove only that
+verification client (and its registration record if created through the bridge).
+MFA uses the same hosted styling; complete credential/MFA verification with the
+account owner when needed. Never submit
 dummy password-reset requests or print tokens in verification logs.
 
 To roll back, reapply the saved CSS and logo together using the same command.
