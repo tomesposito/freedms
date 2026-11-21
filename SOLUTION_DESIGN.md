@@ -646,10 +646,92 @@ revoke — grants recorded by the API and enforced on MCP calls, so revocation
 never depends on storing token values. A home-grown authorization server is
 rejected: token issuance is the most security-critical surface in the product
 and Cognito does it well; the bridge adds only the one verb Cognito lacks.
-Open detail, not a blocker: advertising the registration endpoint through
-pure discovery is constrained because the authorization-server metadata lives
-on Cognito's domain — consumers that accept a registration address directly
-are unaffected; a metadata facade is a later option.
+**Discovery follow-through — November 21, 2026 (#182):** Codex cannot reach
+sign-in from the MCP URL because Cognito metadata omits the registration
+bridge. The API now serves an RFC 8414 metadata facade at the application
+origin's `/.well-known/oauth-authorization-server`. Protected-resource metadata
+names that same origin as its authorization server, and the facade's `issuer`
+matches it. The document advertises `/api/mcp/register`, Cognito's hosted
+authorization/token/revocation endpoints, authorization code and refresh grants,
+public-client authentication (`none`), PKCE S256, and the two MCP scopes.
+This is OAuth discovery, not OpenID Connect discovery: Cognito continues to
+issue tokens, and the API still validates their Cognito issuer, signature,
+registered client, scope and live membership. No token proxy or new token issuer
+is introduced. The Cognito domain comes from deployment configuration, never
+request headers. An exact GET-only CloudFront behavior and public API route
+expose the facade; the existing origin guard and private REST routes stay in force.
+Deploy the routing/configuration migration with the live Lambda artifact
+preserved, update the private release baseline, then promote the tested,
+attested application build. Verify discovery, registration and arrival at the
+Cognito sign-in page; the user completes credentials and MFA personally.
+The bridge also accepts Codex's `application_type: native` registration hint
+(or `web`), validates that value, and preserves the same redirect, scope and
+public-client restrictions. The full discovery test includes Codex's actual
+registration fields so discovery success alone cannot mask registration failure.
+
+**OAuth branding — November 21, 2026 (#186):** keep the web/app's custom login
+unchanged. Brand the MCP OAuth pages as closely as Cognito classic permits using
+the existing FreeDMS logo, white surfaces, navy text, orange primary actions,
+48px rounded controls, system font stack and the product's focus/error colors.
+The versioned assets are `infra/cognito/classic.css` and `infra/cognito/logo.png`;
+the PNG is a rendering
+of the existing app SVG because classic hosted UI does not accept SVG logos.
+Apply these as the user pool's `ALL` classic UI defaults so the dedicated MCP
+client and existing/new dynamic clients inherit the same appearance. Avoid
+per-client overrides that would leave newly registered consumers unbranded.
+The custom app login does not consume this stylesheet; its hosted fallback also
+inherits the branding. Cognito retains its page layout and flow copy, including
+MFA and password recovery. No external fonts, injected HTML, authentication
+changes, pool tier upgrade or new authorization server are part
+of this change. Deploy and verify this operator-managed Cognito setting separately
+from application artifacts, with the prior settings saved for rollback.
+
+**Custom MCP OAuth — November 21, 2026 (#188, owner approved):** the customer
+trust requirement now calls for the same FreeDMS login and MFA experience on the
+application domain. This supersedes D-10's rejection of an application-owned MCP
+authorization server and the classic-only limit in #186. Cognito remains the
+identity provider and verifies passwords, first-login password changes, recovery
+and MFA through the existing SDK; the ordinary web/app login is unchanged.
+
+New discovery advertises `https://app.<RootDomain>/?mcp_oauth=1` and the
+`/api/mcp/oauth/token` and `/api/mcp/oauth/revoke` endpoints. The shared login shell
+provides the existing logo, typography, colors, form controls and lot photograph.
+After authentication, an explicit consent page identifies the requesting app,
+registered callback host, signed-in person, dealership and requested permissions,
+with Allow access and Cancel. App names are self-reported registration metadata,
+not a verification badge. The flow keeps its identity token in memory and does
+not replace the normal browser session. No password, MFA code or Cognito token
+is delivered to the connecting app.
+
+The maintained `@node-oauth/oauth2-server` engine handles authorization code,
+mandatory PKCE S256 and rotating refresh grants; `aws-jwt-verify` independently
+verifies the Cognito web ID token's signature, issuer, audience, use and expiry.
+The application binds each ten-minute interaction to a Secure, HttpOnly,
+SameSite=Strict host cookie, separate CSRF secret and exact Origin. It checks the
+immutable subject/dealership binding and live membership before consent. Only
+registered exact redirects, public clients and the two approved MCP scopes are
+accepted. The single resource is bound to the grant and checked at token exchange.
+Interactions and authorization codes are consumed atomically. Codes last one
+minute, access tokens one hour, and refresh families thirty days with an absolute
+expiry. Replay of a consumed code or refresh token revokes the family.
+
+Opaque credentials are random, and only their hashes are persisted in a dedicated
+encrypted DynamoDB table with TTL cleanup and explicit expiry checks. Token pairs
+are written atomically. Every token use or refresh checks the live grant,
+membership, registration and family. Consent writes an audited authorization
+generation; reconnecting cannot revive old opaque or legacy Cognito tokens.
+Existing Account → AI connections revocation remains authoritative.
+
+The dynamic registration bridge and classic Cognito branding remain available for
+existing consumers and rollback. Stage the new table, narrow IAM rights and public
+OAuth routes with `McpCustomOAuthEnabled=0`, preserve the live Lambda artifact,
+update the private infrastructure/configuration baseline, deploy the attested
+compatible release, then enable discovery under the operator migration lock.
+Disabling discovery alone retains validation for already-issued opaque tokens;
+rolling back to pre-custom application code also requires disabling discovery
+and asking those clients to reconnect through the classic flow. Verification
+covers adversarial protocol cases, revocation and replay, the shared login/MFA UI
+on desktop/mobile, and a real connector connection completed by the owner.
 
 ### D-11 — Billing rail for paid AI
 
@@ -714,6 +796,14 @@ configured-model set is no longer Claude-only; cache-point system blocks
 are sent only for `anthropic.claude-` model IDs. Whether D-13's wording
 should be generalized to a standing multi-provider clause is the owner's
 call — this note records the shipped fact without changing the decision.
+
+**Amendment (2026-11-21, Tom, #166 comment 7062962674):** The assistant uses
+Bedrock Converse for text and tools. Bria AI is the sole off-AWS vendor
+authorized under D-13, specifically for the optional photo prep background job
+(replace_background). The Bria key is configured through FREEDMS_BRIA_API_KEY.
+A vendor or model swap that changes the cost basis requires D-7 repricing review.
+The ledger records a $0.032 per-image cost basis for Bria. Launch requires comparing
+hosted usage and the first invoice against the $0.035 blended action guardrail.
 
 ### D-14 — Command bar and explicit search/ask routing (2026-11-04)
 

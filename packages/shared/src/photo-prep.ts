@@ -10,6 +10,7 @@ export interface PhotoPrepImage {
 export type PhotoPrepSuggestion =
   | {kind: 'hero'; order: number[]}
   | {kind: 'light'; index: number}
+  | {kind: 'background'; index: number; jpeg: string; stub?: true}
   | {kind: 'vin'; index: number; vin: string; matches: boolean}
   | {kind: 'mileage'; index: number; mileage: number}
   | {kind: 'damage'; index: number; note: string}

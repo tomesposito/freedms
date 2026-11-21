@@ -39,6 +39,11 @@ Parameters:
     Type: String
     Default: ''
     Description: Foundation model ID used by the configured inference profile
+  BriaApiKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: Optional Bria API key for listing photo background replacement
   StripeSecretArn:
     Type: String
     Default: ''
@@ -76,6 +81,11 @@ Parameters:
     Type: String
     Default: ''
     Description: Operator inbox for new pilot access requests
+  McpCustomOAuthEnabled:
+    Type: String
+    Default: '0'
+    AllowedValues: ['0', '1']
+    Description: Advertise the branded FreeDMS OAuth flow after the compatible release is deployed
   McpCallbackURLs:
     Type: CommaDelimitedList
     Default: 'https://agent.meta.ai/api/hatch/oauth/callback'
@@ -161,6 +171,17 @@ Resources:
           KeyType: RANGE
       SSESpecification:
         SSEEnabled: true
+  McpOAuthTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: PK, AttributeType: S}]
+      KeySchema: [{AttributeName: PK, KeyType: HASH}]
+      SSESpecification: {SSEEnabled: true}
+      TimeToLiveSpecification: {AttributeName: expiresAt, Enabled: true}
+      Tags: [{Key: Project, Value: freeDMS}]
   Documents:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -361,6 +382,7 @@ Resources:
           PILOT_OPERATOR_SUBJECT: !Ref PilotOperatorSubject
           PILOT_OPERATOR_TENANT_ID: !Ref PilotOperatorTenantId
           FREEDMS_ASSISTANT_MODEL: !Ref AssistantModelId
+          FREEDMS_BRIA_API_KEY: !Ref BriaApiKey
           FREEDMS_STRIPE_SECRET_ARN: !Ref StripeSecretArn
           FREEDMS_STRIPE_SECRET_KEY: !Ref StripeSecretKey
           FREEDMS_STRIPE_WEBHOOK_SECRET: !Ref StripeWebhookSecret
@@ -377,8 +399,12 @@ Resources:
           ORIGIN_SECRET: !Ref OriginSecret
           TOKEN_ISSUER: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
           TOKEN_AUDIENCE: !Ref UserPoolClient
+          MCP_OAUTH_TABLE: !Ref McpOAuthTable
+          MCP_CUSTOM_OAUTH_ENABLED: !Ref McpCustomOAuthEnabled
+          MCP_CALLBACK_URLS: !Join [',', !Ref McpCallbackURLs]
           MCP_CLIENT_ID: !Ref McpClient
           MCP_RESOURCE_URI: !Sub 'https://app.${RootDomain}/api/mcp'
+          MCP_OAUTH_DOMAIN: !Sub 'https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com'
       Policies:
         - Statement:
             - Effect: Allow
@@ -404,6 +430,9 @@ Resources:
               Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:Scan, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:ConditionCheckItem]
               Resource: !GetAtt Table.Arn
             - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt McpOAuthTable.Arn
+            - Effect: Allow
               Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
               Resource:
                 - !Sub '${Documents.Arn}/tenants/*'
@@ -427,11 +456,46 @@ Resources:
             Path: /mcp/register
             Method: POST
             Auth: {Authorizer: NONE}
+        McpOAuthInteractionPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /mcp/oauth/interaction
+            Method: POST
+            Auth: {Authorizer: NONE}
+        McpOAuthAuthorizePost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /mcp/oauth/authorize
+            Method: POST
+            Auth: {Authorizer: NONE}
+        McpOAuthTokenPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /mcp/oauth/token
+            Method: POST
+            Auth: {Authorizer: NONE}
+        McpOAuthRevokePost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /mcp/oauth/revoke
+            Method: POST
+            Auth: {Authorizer: NONE}
         McpMetadata:
           Type: HttpApi
           Properties:
             ApiId: !Ref Api
             Path: /.well-known/oauth-protected-resource
+            Method: GET
+            Auth: {Authorizer: NONE}
+        McpAuthorizationMetadata:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /.well-known/oauth-authorization-server
             Method: GET
             Auth: {Authorizer: NONE}
         StripeWebhook:
@@ -710,6 +774,17 @@ Resources:
             - EventType: viewer-request
               FunctionARN: !GetAtt ViewerFunction.FunctionARN
         CacheBehaviors:
+          - PathPattern: /.well-known/oauth-authorization-server
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD]
+            CachedMethods: [GET, HEAD]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt ViewerFunction.FunctionARN
           - PathPattern: /assets/*
             TargetOriginId: frontend
             ViewerProtocolPolicy: redirect-to-https

@@ -1,6 +1,6 @@
-import { effectiveVehiclePhotos, PHOTO_PREP_IMAGE_BYTES, type PhotoPrepSuggestion, type Principal, type Vehicle } from '@freedms/shared';
+import { effectiveVehiclePhotos, PHOTO_PREP_IMAGE_BYTES, type PhotoPrepSuggestion, type PhotoBackgroundUsage, type Principal, type Vehicle } from '@freedms/shared';
 import { AssistantBilling, PHOTO_PRICE, zeroUsage } from './assistant-billing.js';
-import { assistantUnavailable, type AssistantMessage, type AssistantProvider } from './assistant-provider.js';
+import { assistantUnavailable, type AssistantMessage, type AssistantProvider, type PhotoPrepImageEditor } from './assistant-provider.js';
 import { ASSISTANT_SETTLEMENT_RESERVE_MS, ASSISTANT_TURN_BUDGET_MS, expired, timeLimit, withinAssistantBudget } from './assistant.js';
 import { conflict } from './errors.js';
 import { invalid, object, onlyKeys } from './validation.js';
@@ -30,12 +30,15 @@ function observation(raw: unknown): Observation {
 }
 
 export async function runPhotoPrep(input: Record<string, unknown>, vehicle: Vehicle, principal: Principal,
-  billing: AssistantBilling, provider: AssistantProvider | undefined) {
+  billing: AssistantBilling, provider: AssistantProvider | undefined, imageEditor?: PhotoPrepImageEditor) {
   if (!provider?.configured) throw assistantUnavailable();
   if (input.version !== vehicle.version) throw conflict();
   const count = effectiveVehiclePhotos(vehicle).length;
   if (input.descriptionOnly !== undefined && typeof input.descriptionOnly !== 'boolean') throw invalid('Invalid photo prep scope.');
   const descriptionOnly = input.descriptionOnly === true;
+  if (input.replaceBackground !== undefined && typeof input.replaceBackground !== 'boolean') throw invalid('Invalid background choice.');
+  const replaceBackground = !descriptionOnly && input.replaceBackground === true;
+  const backgroundJobs = new Map<number, Promise<Extract<PhotoPrepSuggestion, {kind: 'background'}> | undefined>>();
   if (!Array.isArray(input.images) || input.images.length > count ||
       (descriptionOnly ? input.images.length !== 0 : input.images.length === 0)) throw invalid('Choose photos to prep.');
   const seen = new Set<number>();
@@ -71,6 +74,25 @@ export async function runPhotoPrep(input: Record<string, unknown>, vehicle: Vehi
   const recordUsage = async (usage: typeof zeroUsage) => {
     if (usage === zeroUsage) return;
     await withinAssistantBudget(async () => meter.recordUsage?.(usage), remaining());
+  };
+  const editBackground = async (index: number, bytes: Uint8Array, editor: PhotoPrepImageEditor) => {
+    const timeoutMs = remainingWork();
+    if (timeoutMs <= 0 || editor.source === 'unconfigured') return;
+    const controller = new AbortController();
+    let suggestion: Extract<PhotoPrepSuggestion, {kind: 'background'}> | undefined;
+    try {
+      const result = await withinAssistantBudget(() => editor.replaceBackground(bytes, controller.signal), timeoutMs, () => controller.abort());
+      if (result !== expired) {
+        const jpeg = verifyPhotoType(Buffer.from(result), 'image/jpeg');
+        if (jpeg.length <= PHOTO_PREP_IMAGE_BYTES) {
+          suggestion = {kind: 'background', index, jpeg: jpeg.toString('base64'), ...(editor.source === 'stub' ? {stub: true} : {})};
+        }
+      }
+    } catch { /* Provider failures affect this job only. */ }
+    const usage: PhotoBackgroundUsage = {job: 'photo-background', provider: editor.source,
+      outcome: suggestion ? 'success' : 'failure', costBasisMills: editor.source === 'bria' ? 32 : 0};
+    await withinAssistantBudget(async () => meter.recordUsage?.(zeroUsage, usage), remaining());
+    return suggestion;
   };
   const stop = await beforeAction((descriptionOnly ? 1 : images.length) * PHOTO_PRICE.credits);
   if (stop) return fail(stop);
@@ -109,6 +131,11 @@ export async function runPhotoPrep(input: Record<string, unknown>, vehicle: Vehi
     if (settlement) { message = settlement; break; }
     transcript.push({tool, ok: true});
     observations.push({...result, index: image.index, quality: image.quality});
+    // Background work can poll while the rest of the pass uses Converse.
+    // Limit edits to exterior shots where the vehicle is the foreground subject.
+    if (replaceBackground && imageEditor?.configured && result.label === 'exterior' && image.bytes) {
+      backgroundJobs.set(image.index, editBackground(image.index, image.bytes, imageEditor));
+    }
   }
   if (observations.length) {
     const ranked = observations.filter(row => row.label === 'exterior').sort((a, b) => (b.coverScore - a.coverScore) || (b.quality - a.quality));
@@ -145,6 +172,24 @@ export async function runPhotoPrep(input: Record<string, unknown>, vehicle: Vehi
     if (draft) {
       transcript.push({tool: 'Draft listing description', ok: true});
       suggestions.push({kind: 'description', text: draft});
+    }
+  }
+  if (replaceBackground) {
+    if (!imageEditor?.configured) {
+      message = [message, 'Background replacement is unavailable.'].filter(Boolean).join(' ');
+    } else {
+      const results = await Promise.all(images.map(async ({index}) => ({index, suggestion: await backgroundJobs.get(index)})));
+      for (const {index, suggestion} of results) {
+        transcript.push({tool: 'Background replacement · Photo ' + (index + 1), ok: !!suggestion});
+        if (suggestion) {
+          const light = suggestions.findIndex(row => row.kind === 'light' && row.index === index);
+          suggestions.splice(light < 0 ? suggestions.length : light, 0, suggestion);
+        }
+      }
+      const failed = results.filter(row => !row.suggestion);
+      if (failed.length) {
+        message = [message, 'No background suggestion for photo ' + failed.map(row => row.index + 1).join(', ') + '.'].filter(Boolean).join(' ');
+      }
     }
   }
   if (!message && remainingWork() <= 0) message = timeLimit;

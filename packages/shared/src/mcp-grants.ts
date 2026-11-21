@@ -8,6 +8,7 @@ export interface McpGrant {
   firstGrantedAt: string;
   lastUsedAt: string;
   revokedAt: string | null;
+  oauthAuthorizationId?: string;
   version: number;
 }
-export type McpGrantView = Omit<McpGrant, 'tenantId' | 'clientId'> & {ownerName?: string; ownerEmail?: string | null};
+export type McpGrantView = Omit<McpGrant, 'tenantId' | 'clientId' | 'oauthAuthorizationId'> & {ownerName?: string; ownerEmail?: string | null};

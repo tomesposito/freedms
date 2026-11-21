@@ -5,7 +5,7 @@ import type { AuthClaims } from '@freedms/shared';
 import { validateClaims } from './auth.js';
 import { errorResponse, type ApiRequest, type ApiResponse } from './handler.js';
 export interface GatewayEvent {
-  headers?: Record<string, string>; rawPath: string; body?: string; isBase64Encoded?: boolean; queryStringParameters?: Record<string, string>;
+  cookies?: string[]; headers?: Record<string, string>; rawPath: string; body?: string; isBase64Encoded?: boolean; queryStringParameters?: Record<string, string>;
   requestContext: {http: {method: string; sourceIp?: string}; authorizer?: {jwt?: {claims: Record<string, unknown>}}};
 }
 export function gatewayHandler(handle: (request: ApiRequest) => Promise<ApiResponse>, issuer: string, audience: string, originSecret?: string) {
@@ -28,7 +28,8 @@ export function gatewayHandler(handle: (request: ApiRequest) => Promise<ApiRespo
       if (!intake && !publicLink && !isMcpPath(path)) validateClaims(claims, issuer, audience);
       const authorization = Object.entries(event.headers ?? {}).find(([key]) => key.toLowerCase() === 'authorization')?.[1] ?? '';
       const acceptEncoding = Object.entries(event.headers ?? {}).find(([key]) => key.toLowerCase() === 'accept-encoding')?.[1];
-      return await handle({stripeSignature: Object.entries(event.headers ?? {}).find(([key]) => key.toLowerCase() === 'stripe-signature')?.[1], method, path, sourceIp: event.requestContext.http.sourceIp, authorization, acceptEncoding, query: event.queryStringParameters,
+      const header = (name: string) => Object.entries(event.headers ?? {}).find(([key]) => key.toLowerCase() === name)?.[1];
+      return await handle({origin: header('origin'), contentType: header('content-type'), cookie: event.cookies?.join('; ') ?? header('cookie'), stripeSignature: Object.entries(event.headers ?? {}).find(([key]) => key.toLowerCase() === 'stripe-signature')?.[1], method, path, sourceIp: event.requestContext.http.sourceIp, authorization, acceptEncoding, query: event.queryStringParameters,
         body: event.isBase64Encoded && event.body ? Buffer.from(event.body, 'base64').toString('utf8') : event.body,
         ...(intake ? {intakeToken: authorization.replace(/^Bearer /, '')} : publicLink ? {} : {claims: claims as unknown as AuthClaims})});
     } catch (error) { return errorResponse(error); }

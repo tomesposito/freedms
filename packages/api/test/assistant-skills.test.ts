@@ -8,8 +8,10 @@ import type { AuthClaims, Customer, OutboxEvent } from '@freedms/shared';
 import { createHandler } from '../src/handler.js';
 import { AssistantBilling } from '../src/assistant-billing.js';
 import { MemoryRepositories } from '../src/memory.js';
-import type { AssistantMessage, AssistantProvider } from '../src/assistant-provider.js';
+import { type AssistantMessage, type AssistantProvider, type PhotoPrepImageEditor, photoPrepImageEditorFromEnv } from '../src/assistant-provider.js';
 import { assistantSkillsEndpoint, customerProposals, type Proposal } from '../src/assistant-skills.js';
+import { BriaPhotoPrepEditor } from '../src/bria-photo-prep.js';
+import { PNG } from 'pngjs';
 const date = new Date('2026-11-04T12:00:00Z');
 const auth = (tenant = 'A'): AuthClaims => ({sub: `user-${tenant}`, 'custom:tenant_id': tenant, iss: 'test', aud: 'test', exp: 9999999999, token_use: 'id'});
 const vehicle = {stockNumber: 'STOCK-104', vin: '1HGCM82633A004352', year: 2003, make: 'Honda', model: 'Accord', trim: '', mileage: null, status: 'in recon', listPrice: 0, cost: 50000, reconCosts: [{description: 'Brakes', amount: 10000}], dateStocked: '2026-01-01', location: '', notes: ''};
@@ -18,12 +20,12 @@ class Provider implements AssistantProvider {
   configured = true; seen: AssistantMessage[][] = [];
   async converse(messages: AssistantMessage[]): Promise<AssistantMessage> { this.seen.push(structuredClone(messages)); return {role: 'assistant', content: [{text: 'Done'}]}; }
 }
-async function setup(seed = true) {
+async function setup(seed = true, photoPrepImageEditor?: PhotoPrepImageEditor) {
   const repositories = new MemoryRepositories(), provider = new Provider();
   const event = (tenantId: string, id: string, type: OutboxEvent['type'], version = 1): OutboxEvent => ({id: `${id}-${version}`, tenantId, actorId: `user-${tenantId}`, aggregateId: id, aggregateVersion: version, type, occurredAt: date.toISOString(), deliveryStatus: 'pending'});
   for (const tenantId of ['A', 'B']) await repositories.forTenant(tenantId).provision({id: tenantId, name: tenantId, createdAt: date.toISOString()}, {id: `user-${tenantId}`, name: 'User'}, {tenantId, userId: `user-${tenantId}`, role: 'admin', active: true}, event(tenantId, tenantId, 'tenant.created'));
   const documents = new MemoryDocumentStore();
-  const handle = createHandler(repositories, {decode: async () => {throw Error('offline');}}, () => date, documents, undefined, undefined, undefined, {assistantProvider: provider, assistantSeedLocalPlan: seed});
+  const handle = createHandler(repositories, {decode: async () => {throw Error('offline');}}, () => date, documents, undefined, undefined, undefined, {assistantProvider: provider, photoPrepImageEditor, assistantSeedLocalPlan: seed});
   const req = async (path: string, body?: unknown, tenant = 'A', method = body === undefined ? 'GET' : 'POST') => {
     const url = new URL(path, 'http://offline');
     const result = await handle({path: url.pathname, query: Object.fromEntries(url.searchParams), method, claims: auth(tenant), ...(body !== undefined ? {body: JSON.stringify(body)} : {})});
@@ -275,4 +277,102 @@ test('photo prep uses the shared cap and never calls the provider when disabled'
   assert.equal((await run()).status, 403);
   assert.equal((await s.req(`/assistant/skills?surface=vehicle&id=${v.id}`)).status, 403);
   assert.equal(s.provider.seen.length, 0);
+});
+
+test('background selection shares photo settlement and records successful and failed editor usage', async () => {
+  let edits = 0;
+  const s = await setup(true, {
+    configured: true, source: 'bria',
+    async replaceBackground(bytes) {
+      edits++;
+      if (bytes[3] === 0xe1) throw new Error('Offline editor failure');
+      return bytes;
+    },
+  });
+  const photoUrls = ['https://example.test/one.jpg', 'https://example.test/two.jpg'];
+  const v = await s.addVehicle({photoUrls});
+  const url = '/vehicles/' + v.id;
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+  const otherJpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe1]).toString('base64');
+  s.provider.converse = async messages => ({role: 'assistant', content: [{text: messages[0].content?.some(block => block.image)
+    ? JSON.stringify({label: 'exterior', coverScore: 90}) : 'Draft listing.'}]});
+  const body = {skill: PHOTO_PREP_SKILL, surface: 'vehicle', id: v.id, version: v.version, images: [{index: 0, jpeg}, {index: 1, jpeg: otherJpeg}]};
+  const run = (replaceBackground = false, tenant = 'A') => s.req('/assistant/skills/run', {...body, replaceBackground}, tenant);
+  const list = await s.req('/assistant/skills?surface=vehicle&id=' + v.id);
+  assert.equal(list.data.skills.find((row: {id: string}) => row.id === PHOTO_PREP_SKILL).backgroundAvailable, true);
+  const balance = (await s.req('/assistant/pool')).data.balanceCredits;
+  assert.equal((await run()).data.creditsUsed, 6);
+  assert.equal((await run(true, 'B')).status, 404);
+  assert.equal(edits, 0);
+  const pass = await run(true);
+  assert.equal(pass.data.creditsUsed, 6);
+  assert.equal(edits, 2);
+  assert.deepEqual(pass.data.prep.suggestions.filter((row: {kind: string}) => row.kind === 'background'), [{kind: 'background', index: 0, jpeg}]);
+  assert.match(pass.data.reply, /No background suggestion for photo 2/);
+  assert.deepEqual((await s.req(url)).data, v);
+  assert.equal((await s.req('/assistant/pool')).data.balanceCredits, balance - 12);
+  const ledger = await s.repo.assistantLedger('2026-11-04');
+  for (const outcome of ['success', 'failure']) {
+    const row = ledger.find(entry => entry.photoBackgroundUsage?.outcome === outcome);
+    assert.equal(row?.credits, 0);
+    assert.equal(row?.actionClass, 'usage');
+    assert.deepEqual(row.photoBackgroundUsage, {job: 'photo-background', provider: 'bria', outcome, costBasisMills: 32});
+  }
+  assert.equal(ledger.filter(row => row.actionClass === 'photo').length, 4);
+  assert.equal((await s.repositories.forTenant('B').assistantLedger('2026-11-04')).length, 0);
+
+  const media = {index: 0, display: jpeg, thumb: jpeg, hero: jpeg, feed: jpeg};
+  const approval = {version: v.version, photoPrep: {derivatives: [{...media, kind: 'background'}, media]}};
+  assert.equal((await s.req(url, approval, 'B', 'PUT')).status, 404);
+  const applied = await s.req(url, approval, 'A', 'PUT');
+  assert.equal(applied.status, 200);
+  assert.equal(applied.data.version, v.version + 1);
+  assert.deepEqual(applied.data.photos.slice(0, 2).map((row: {url: string}) => row.url), photoUrls);
+  assert.equal(applied.data.photos[2].name, 'Background replacement · Photo 1');
+  assert.equal(applied.data.photos[2].derivedFrom, photoUrls[0]);
+  assert.equal(applied.data.photos[3].derivedFrom, photoUrls[0]);
+  assert.equal((await s.req(url, approval, 'A', 'PUT')).status, 409);
+  assert.equal((await s.repo.events()).filter(row => row.type === 'vehicle.updated').length, 1);
+});
+
+test('unconfigured background editing leaves ordinary photo prep available', async () => {
+  const s = await setup(true, photoPrepImageEditorFromEnv({}));
+  const v = await s.addVehicle({photoUrls: ['https://example.test/one.jpg']});
+  s.provider.converse = async () => ({role: 'assistant', content: [{text: '{"label":"exterior","coverScore":90}'}]});
+  const list = await s.req('/assistant/skills?surface=vehicle&id=' + v.id);
+  assert.equal(list.data.skills.find((row: {id: string}) => row.id === PHOTO_PREP_SKILL).backgroundAvailable, undefined);
+  const pass = await s.req('/assistant/skills/run', {skill: PHOTO_PREP_SKILL, surface: 'vehicle', id: v.id, version: v.version,
+    images: [{index: 0, jpeg: '/9j/2Q=='}], replaceBackground: true});
+  assert.equal(pass.data.creditsUsed, 3);
+  assert.match(pass.data.reply, /Background replacement is unavailable/);
+  assert.ok(pass.data.prep.suggestions.some((row: {kind: string}) => row.kind === 'light'));
+  assert.ok((await s.repo.assistantLedger('2026-11-04')).every(row => !row.photoBackgroundUsage));
+});
+
+test('Bria photo editor submits a background-only job and downloads the completed preview offline', async () => {
+  const png = new PNG({width: 8, height: 8, fill: true});
+  png.data.fill(255);
+  const bytes = PNG.sync.write(png);
+  const urls: string[] = [];
+  const controller = new AbortController();
+  const editor = new BriaPhotoPrepEditor('', async (url, options) => {
+    urls.push(String(url));
+    assert.equal(options?.signal, controller.signal);
+    assert.equal(options?.redirect, 'error');
+    if (urls.length === 1) {
+      assert.equal(options?.method, 'POST');
+      const payload = JSON.parse(String(options.body));
+      assert.equal(payload.image, '/9j/2Q==');
+      assert.equal(payload.mode, 'fibo2');
+      assert.equal(payload.sync, false);
+      return Response.json({request_id: 'offline-job'}, {status: 202});
+    }
+    if (urls.length === 2) return Response.json({status: 'COMPLETED', result: {image_url: 'https://bria-datasets.s3.us-east-1.amazonaws.com/edit.png'}});
+    assert.equal(options?.headers, undefined);
+    return new Response(new Uint8Array(bytes));
+  });
+  const jpeg = await editor.replaceBackground(Buffer.from('/9j/2Q==', 'base64'), controller.signal);
+  assert.deepEqual([...jpeg.slice(0, 3)], [0xff, 0xd8, 0xff]);
+  assert.deepEqual(urls, ['https://engine.prod.bria-api.com/v2/image/edit/replace_background',
+    'https://engine.prod.bria-api.com/v2/status/offline-job', 'https://bria-datasets.s3.us-east-1.amazonaws.com/edit.png']);
 });

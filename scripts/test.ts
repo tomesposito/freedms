@@ -71,6 +71,7 @@ import '../packages/web/test/load-error.test.js';
 import '../packages/web/test/account.test.js';
 
 import '../packages/api/test/mcp.test.js';
+import '../packages/api/test/mcp-discovery.test.js';
 
 import '../packages/api/test/access-requests.test.js';
 import '../packages/api/test/pilot-inbox.test.js';
@@ -104,3 +105,5 @@ import '../packages/web/test/overview.test.js';
 import '../packages/api/test/facebook-feed.test.js';
 
 import '../packages/api/test/dealer-site.test.js';
+
+import '../packages/api/test/mcp-oauth.test.js';

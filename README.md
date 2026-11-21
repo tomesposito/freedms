@@ -98,11 +98,15 @@ flagged for a person, never run.
 
 From a vehicle with photos, choose **Prep listing photos** to estimate a pass
 against the workspace balance. Whole-vehicle and selected-photo passes use three
-credits per successfully processed photo. Review the proposed cover, light and
-color fixes, readings, damage notes, and editable description in the dock.
+credits per successfully processed photo. When available, you can include
+background replacement for exterior photos at the same per-photo price.
+Review the proposed cover, photo comparisons, readings, damage notes, and
+editable description in the dock.
 Approved descriptions appear on the dealer site and Facebook feed.
 
 ![Photo prep estimate with the workspace credit balance](docs/screenshots/ai-assistant-photo-prep-estimate.png)
+
+The results below show an offline test preview using a copy of the input photo.
 
 ![Photo prep suggestions, approval controls, and credit receipt](docs/screenshots/ai-assistant-photo-prep-results.png)
 

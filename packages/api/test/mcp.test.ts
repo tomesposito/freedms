@@ -51,7 +51,7 @@ test('MCP initialize, ping, scoped tool discovery, metadata and adapter dispatch
   assert.equal((await s.request('tools/call', {name: 'create_vehicle', arguments: {}}, token({scope: 'freedms/mcp.read'}))).error.message, 'Tool unavailable.');
   for (const sub of ['unknown', 'admin-C']) assert.deepEqual((await s.request('tools/list', {}, token({sub}))).result.tools, []);
   const metadata = await s.handle({method: 'GET', path: '/.well-known/oauth-protected-resource'});
-  assert.deepEqual(JSON.parse(metadata.body).authorization_servers, [config.issuer]); assert.equal(JSON.parse(metadata.body).resource, config.resource);
+  assert.deepEqual(JSON.parse(metadata.body).authorization_servers, [new URL(config.resource).origin]); assert.equal(JSON.parse(metadata.body).resource, config.resource);
   const gateway = gatewayHandler(s.handle, 'web-issuer', 'web-audience');
   const result = await gateway({rawPath: '/mcp', requestContext: {http: {method: 'POST'}}, headers: {Authorization: `Bearer ${token()}`}, body: JSON.stringify({jsonrpc: '2.0', id: 7, method: 'tools/list'})});
   assert.equal(JSON.parse(result.body).result.tools.length, 130);

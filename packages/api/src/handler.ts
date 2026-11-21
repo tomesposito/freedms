@@ -7,12 +7,13 @@ import { billingAction, billingReturnUrl, stripeWebhook } from './assistant-stri
 import { UnconfiguredStripeBilling, type StripeBilling } from './stripe.js';
 import { AssistantBilling } from './assistant-billing.js';
 import { assistantChat, type AssistantEntitlement } from './assistant.js';
-import { UnconfiguredAssistantProvider, type AssistantProvider } from './assistant-provider.js';
+import { UnconfiguredAssistantProvider, type AssistantProvider, type PhotoPrepImageEditor } from './assistant-provider.js';
 import { registerMcpClient, deleteMcpRegistration, type RegistrationConfig } from './mcp/registration.js';
 import { aiConnections } from './ai-connections.js';
 import { ideas } from './ideas.js';
 import type { TurnstileVerifier } from './turnstile.js';
 import { submitAccessRequest, manageAccessRequests, canManageAccessRequests, type PilotOperator, type AccessRequestMail } from './access-requests.js';
+import { oauthPaths, type McpOAuth } from './mcp/oauth.js';
 import { createMcpHandler, isMcpPath } from './mcp/server.js';
 import { mcpConfig, type McpConfig } from './mcp/auth.js';
 import { compressResponse } from './compression.js';
@@ -48,8 +49,8 @@ import { ApiError, conflict, missing, requireId } from './errors.js';
 import { OPERATOR_TENANT_ID, type RepositoryFactory, type TenantRepository } from './repository.js';
 import type { VinDecoder } from './vin.js';
 import { pageNumber, invalid, object, onlyKeys, text, vehicleInput, version, view, vin } from './validation.js';
-export interface ApiRequest { stripeSignature?: string; origin?: string; sourceIp?: string; authorization?: string; agent?: boolean; method: string; path: string; query?: Record<string, string | undefined>; body?: string; claims?: AuthClaims; intakeToken?: string; acceptEncoding?: string }
-export interface ApiResponse { statusCode: number; headers: Record<string, string>; body: string; isBase64Encoded?: boolean }
+export interface ApiRequest { contentType?: string; cookie?: string; stripeSignature?: string; origin?: string; sourceIp?: string; authorization?: string; agent?: boolean; method: string; path: string; query?: Record<string, string | undefined>; body?: string; claims?: AuthClaims; intakeToken?: string; acceptEncoding?: string }
+export interface ApiResponse { cookies?: string[]; statusCode: number; headers: Record<string, string>; body: string; isBase64Encoded?: boolean }
 export function response(statusCode: number, body: unknown): ApiResponse {
   return {statusCode, headers: {'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff'}, body: JSON.stringify(body)};
 }
@@ -66,7 +67,7 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
   if (!body || Buffer.byteLength(body) > limit) throw invalid(`A JSON body of at most ${limit} bytes is required.`);
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
-export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {stripe?: StripeBilling; appBaseUrl?: string; assistantSeedLocalPlan?: boolean; assistantProvider?: AssistantProvider; assistantEntitlement?: AssistantEntitlement; registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
+export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {oauth?: McpOAuth; stripe?: StripeBilling; appBaseUrl?: string; assistantSeedLocalPlan?: boolean; assistantProvider?: AssistantProvider; photoPrepImageEditor?: PhotoPrepImageEditor; assistantEntitlement?: AssistantEntitlement; registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
   const photoBase = vehiclePhotoBase(options.appBaseUrl);
   const publicInventory = createPublicInventoryHandler(documents, photoBase);
   const dealerSite = createDealerSiteHandler(photoBase);
@@ -84,6 +85,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
   const sandboxDenied = () => new ApiError(403, 'ASSISTANT_SANDBOX_RESTRICTED', 'Paid AI plans are not available yet. Join the waiting list in Account → AI assistant.');
   const handle = async (request: ApiRequest): Promise<ApiResponse> => {
     if (request.path.replace(/\/$/, '') === '/mcp/register') return registerMcpClient(request, repositories, now(), options.registration);
+    if (oauthPaths.includes(request.path.replace(/\/$/, ''))) return options.oauth ? options.oauth.handle(request) : response(503, {error: 'temporarily_unavailable'});
     if (isMcpPath(request.path)) return mcp(request);
     try {
       if (request.method.toUpperCase() === 'POST' && request.path.replace(/\/$/, '') === '/intake/adf') {
@@ -175,7 +177,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         }
         if (path === '/assistant/pool' && method === 'GET') return response(200, {data: await billing.pool(principal)});
         if (path === '/assistant/usage' && method === 'GET') return response(200, {data: await billing.usage(principal)});
-        if ((path === '/assistant/skills' && method === 'GET') || (['/assistant/skills/run', '/assistant/skills/apply'].includes(path) && method === 'POST')) return assistantSkillsEndpoint(request, principal, options.assistantEntitlement ?? billing, handle, now(), options.assistantProvider);
+        if ((path === '/assistant/skills' && method === 'GET') || (['/assistant/skills/run', '/assistant/skills/apply'].includes(path) && method === 'POST')) return assistantSkillsEndpoint(request, principal, options.assistantEntitlement ?? billing, handle, now(), options.assistantProvider, options.photoPrepImageEditor);
         if (path === '/assistant/chat' && method === 'POST') return assistantChat(request, principal, options.assistantProvider ?? new UnconfiguredAssistantProvider(), options.assistantEntitlement ?? billing, handle);
         if (/^\/ai-connections(\/|$)/.test(path)) return await aiConnections(request, principal, repositories, now());
         if (/^\/(ideas|admin\/ideas)(\/|$)/.test(path)) return await ideas(request, principal, repositories, now(), options.pilotOperator);
@@ -359,6 +361,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       return compressResponse(result, request.acceptEncoding);
     } catch (error) { return errorResponse(error); }
   };
-  const mcp = createMcpHandler(repositories, handle, options.mcp ?? mcpConfig());
+  const verifyOpaqueToken = options.oauth?.verifyAccess;
+  const mcp = createMcpHandler(repositories, handle, {...(options.mcp ?? mcpConfig()), ...(verifyOpaqueToken ? {verifyOpaqueToken} : {})});
   return handle;
 }

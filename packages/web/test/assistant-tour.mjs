@@ -27,7 +27,7 @@ async function setup(state, provider=new LocalAssistantProvider()) {
   const repositories=new MemoryRepositories(); repo=repositories.forTenant('mobile-demo');
   await repo.provision({id:'mobile-demo',name:'Demo Motors',createdAt:now.toISOString()}, {id:'admin',name:'Demo Owner',email:'owner@example.test'}, {tenantId:'mobile-demo',userId:'admin',role:'admin',active:true}, {id:'created',tenantId:'mobile-demo',actorId:'admin',aggregateId:'mobile-demo',aggregateVersion:1,type:'tenant.created',occurredAt:now.toISOString(),deliveryStatus:'pending'});
   await seedDemo(repositories,'mobile-demo','admin',now);
-  handle=createHandler(repositories,{decode:async()=>{throw new Error('Offline tour');}},()=>now,new MemoryDocumentStore(),undefined,undefined,undefined,{assistantProvider:state==='unconfigured'?new UnconfiguredAssistantProvider():provider,assistantSeedLocalPlan:state!=='paywall'});
+  handle=createHandler(repositories,{decode:async()=>{throw new Error('Offline tour');}},()=>now,new MemoryDocumentStore(),undefined,undefined,undefined,{assistantProvider:state==='unconfigured'?new UnconfiguredAssistantProvider():provider,photoPrepImageEditor:provider.photoPrepImageEditor,assistantSeedLocalPlan:state!=='paywall'});
   if(state!=='paywall') {
     const pool=await call('/assistant/pool');
     if(state==='disabled' || state==='past-due') {
@@ -210,18 +210,25 @@ try {
   await page.getByRole('checkbox',{name:'Photo 1'}).uncheck();
   assert.equal(await page.getByRole('button',{name:'Run photo prep · 0 credits'}).isDisabled(),true);
   await page.getByRole('radio',{name:'Whole vehicle'}).check();
+  const backgroundChoice = page.getByRole('checkbox',{name:'Replace exterior photo backgrounds'});
+  assert.equal(await backgroundChoice.isChecked(),false);
+  await backgroundChoice.check();
+  await page.getByText('Includes background replacement for exterior photos.').waitFor();
   await shot('photo-prep-estimate');
   await copyFile(`${out}/photo-prep-estimate.png`, 'docs/screenshots/ai-assistant-photo-prep-estimate.png');
   const beforePrep = await call(`/vehicles/${tourVehicle.id}`);
   const beforePrepBalance = (await call('/assistant/pool')).balanceCredits;
   await page.getByRole('button',{name:'Run photo prep · 3 credits'}).click();
   await page.getByRole('heading',{name:'Light & color fix · Photo 1'}).waitFor();
+  const backgroundRow = page.locator('.prep-suggestion').filter({has:page.getByRole('heading',{name:'Background replacement · Photo 1'})});
+  await backgroundRow.getByText('Local test preview. The after image is a copy of the input.').waitFor();
+  await backgroundRow.locator('img').last().waitFor();
   await page.locator('.assistant-receipt').filter({hasText:'This used 3 credits'}).waitFor();
   assert.equal((await call('/assistant/pool')).balanceCredits,beforePrepBalance - 3);
   assert.deepEqual(await call(`/vehicles/${tourVehicle.id}`), beforePrep);
   assert.equal(await page.locator('.prep-comparison img').last().evaluate(img=>img.complete && img.naturalWidth>0),true);
   await page.locator('.assistant-body').evaluate(body=>{body.scrollTop=0;});
-  await page.setViewportSize({width:1440,height:1500});
+  await page.setViewportSize({width:1440,height:1840});
   await shot('photo-prep-results');
   await copyFile(`${out}/photo-prep-results.png`,'docs/screenshots/ai-assistant-photo-prep-results.png');
   await page.getByRole('textbox',{name:'Edit description'}).fill('Dealer-reviewed listing description.');
@@ -229,6 +236,8 @@ try {
   const approved = await call(`/vehicles/${tourVehicle.id}`);
   assert.equal(approved.listingDescription,'Dealer-reviewed listing description.');
   assert.equal(approved.photos[1].derivedFrom,approved.photos[0].id);
+  assert.match(approved.photos[1].name,/Background replacement/);
+  assert.equal(approved.photos[2].derivedFrom,approved.photos[0].id);
   await page.setViewportSize({width:1440,height:1000});
   for(const state of ['paywall','past-due','disabled','exhausted','unconfigured']) {
     await setup(state); await goto();

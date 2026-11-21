@@ -1,0 +1,101 @@
+.logo-customizable {
+  max-width: 50%;
+  max-height: 25%;
+}
+.banner-customizable {
+  padding: 32px 0 24px 0;
+  background-color: #FFFFFF;
+}
+.background-customizable {
+  background-color: #FFFFFF;
+  color: #0B1F2C;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  border-radius: 8px;
+}
+.label-customizable {
+  font-weight: 600;
+  font-size: 14px;
+  color: #0B1F2C;
+}
+.textDescription-customizable {
+  padding-top: 12px;
+  padding-bottom: 20px;
+  display: block;
+  font-size: 16px;
+  color: #52636E;
+}
+.inputField-customizable {
+  width: 100%;
+  height: 48px;
+  color: #0B1F2C;
+  background-color: #FFFFFF;
+  border: 1px solid #CCD5DA;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-family: inherit;
+  font-size: 16px;
+}
+.inputField-customizable:focus {
+  border-color: #FF6A00;
+  outline: 2px solid #FFB27A;
+}
+.submitButton-customizable {
+  font-size: 15px;
+  font-weight: bold;
+  margin: 24px 0 16px 0;
+  width: 100%;
+  height: 48px;
+  color: #0B1F2C;
+  background-color: #FF6A00;
+  border: 0;
+  border-radius: 7px;
+  font-family: inherit;
+}
+.submitButton-customizable:hover {
+  color: #0B1F2C;
+  background-color: #F56300;
+}
+.redirect-customizable {
+  color: #A94700;
+  text-decoration: underline;
+}
+.errorMessage-customizable {
+  padding: 12px;
+  font-size: 14px;
+  width: 100%;
+  background: #FFF4F2;
+  border: 1px solid #D92D20;
+  color: #B42318;
+  box-sizing: border-box;
+}
+.idpDescription-customizable {
+  padding-top: 12px;
+  padding-bottom: 20px;
+  display: block;
+  font-size: 16px;
+  color: #52636E;
+}
+.idpButton-customizable {
+  height: 48px;
+  width: 100%;
+  text-align: center;
+  margin-bottom: 16px;
+  color: #0B1F2C;
+  background-color: #FFFFFF;
+  border-color: #CCD5DA;
+}
+.idpButton-customizable:hover {
+  color: #0B1F2C;
+  background-color: #F2F5F7;
+}
+.legalText-customizable {
+  color: #52636E;
+  font-size: 12px;
+}
+.passwordCheck-valid-customizable {
+  color: #256447;
+}
+.passwordCheck-notValid-customizable {
+  color: #B42318;
+}

@@ -1,6 +1,6 @@
 import { stripeBillingFromEnv } from './stripe.js';
 import { LocalAssistantProvider } from './local-assistant.js';
-import { assistantProviderFromEnv } from './assistant-provider.js';
+import { assistantProviderFromEnv, photoPrepImageEditorFromEnv } from './assistant-provider.js';
 import { turnstileVerifierFromEnv } from './turnstile.js';
 import { localAuth } from './local-auth.js';
 import { localSession } from './local-session.js';
@@ -22,7 +22,8 @@ const tokens = new LocalTokens(randomBytes(48).toString('hex'));
 const pilotOperator = {userId: process.env.PILOT_OPERATOR_SUBJECT ?? '', tenantId: process.env.PILOT_OPERATOR_TENANT_ID ?? ''};
 const resolveOperator = localOperatorResolver(repositories, tokens, pilotOperator,
   process.env.LOCAL_PILOT_OPERATOR === '1' && process.env.PILOT_OPERATOR_SUBJECT === undefined && process.env.PILOT_OPERATOR_TENANT_ID === undefined);
-const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv(), undefined, {stripe: stripeBillingFromEnv(), appBaseUrl: process.env.FREEDMS_APP_BASE_URL, assistantProvider: process.env.FREEDMS_ASSISTANT_STUB === '1' ? new LocalAssistantProvider() : assistantProviderFromEnv(), assistantSeedLocalPlan: process.env.FREEDMS_ASSISTANT_STUB === '1', pilotOperator, turnstile: turnstileVerifierFromEnv()});
+const assistantStub = process.env.FREEDMS_ASSISTANT_STUB === '1' ? new LocalAssistantProvider() : undefined;
+const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv(), undefined, {stripe: stripeBillingFromEnv(), appBaseUrl: process.env.FREEDMS_APP_BASE_URL, assistantProvider: assistantStub ?? assistantProviderFromEnv(), photoPrepImageEditor: assistantStub?.photoPrepImageEditor ?? photoPrepImageEditorFromEnv(), assistantSeedLocalPlan: process.env.FREEDMS_ASSISTANT_STUB === '1', pilotOperator, turnstile: turnstileVerifierFromEnv()});
 const server = createServer(async (req, res) => {
   let result;
   try {

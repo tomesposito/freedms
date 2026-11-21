@@ -325,8 +325,10 @@ async function start(): Promise<void> {
   }
   catch (error) { await login(); flash(error); }
 }
-window.addEventListener('hashchange', () => { void route(); });
-void start();
+const mcpOAuth = new URLSearchParams(location.search).has('mcp_oauth');
+window.addEventListener('hashchange', () => { if (!mcpOAuth) void route(); });
+if (mcpOAuth) void import('./mcp-oauth').then(({mountMcpOAuth}) => mountMcpOAuth(app, cognito));
+else void start();
 
 document.addEventListener('vehicle-photo-prep-approved', event => {
   const vehicle = (event as CustomEvent<VehicleView>).detail;

@@ -503,7 +503,10 @@ Protected Resource Metadata is served at
 requests advertise that URL in the Bearer challenge. CloudFront strips `/api`;
 the API routes are `POST /mcp` and `GET /.well-known/oauth-protected-resource`.
 `MCP_RESOURCE_URI` supplies the canonical endpoint and `TOKEN_ISSUER` the Cognito
-pool issuer. Local defaults use `http://127.0.0.1:3001/mcp` and a mock issuer.
+pool issuer used for token validation. `MCP_OAUTH_DOMAIN` supplies the Cognito
+hosted OAuth origin, derived from `CognitoDomainPrefix` in the template.
+Local defaults use `http://127.0.0.1:3001/mcp` and a mock token issuer; set
+`MCP_OAUTH_DOMAIN` to a test authorization server to exercise local discovery.
 The local adapter mounts the same handler; offline tests inject RSA JWKS and a
 clock rather than contacting Cognito. Local web ID tokens are not MCP credentials.
 
@@ -513,7 +516,10 @@ The registration bridge accepts `POST /mcp/register` (public application URL:
 `https://app.<RootDomain>/api/mcp/register`). Consumers that accept an explicit
 registration URL can send `client_name`, `redirect_uris`, `grant_types`
 (`authorization_code`, optionally `refresh_token`), `response_types` (`code`),
-`token_endpoint_auth_method` (`none`), and a space-delimited `scope`. Omitted
+`token_endpoint_auth_method` (`none`), and a space-delimited `scope`.
+`application_type` is also accepted when set to `native` (as sent by Codex) or
+`web`; this hint does not change callback, scope or client-authentication policy.
+Omitted
 OAuth metadata defaults to authorization code, code response, no client secret,
 and `freedms/mcp.read`. The response is HTTP 201 with the new client ID and
 accepted metadata, never a secret. The consumer handles the ID; dealers connect
@@ -521,8 +527,32 @@ by signing in and consenting, without copying IDs or registering callbacks.
 Self-registration replaces the operator's console app-client creation and
 callback entry for these consumers. The ChatGPT manual callback procedure below
 remains the fallback for consumers that cannot use this registration address.
-Cognito discovery does not advertise `registration_endpoint`; a metadata facade
-is outside this change.
+Cognito discovery does not advertise `registration_endpoint`. FreeDMS therefore
+publishes an OAuth authorization-server metadata facade at
+`https://app.<RootDomain>/.well-known/oauth-authorization-server` (#182).
+Protected-resource metadata names `https://app.<RootDomain>` as its authorization
+server; the facade's `issuer` exactly matches that origin. It advertises the
+registration bridge, Cognito authorization/token/revocation endpoints, public
+clients (`none`), PKCE S256, authorization-code/refresh grants and the MCP scopes.
+It is not an OpenID Connect document: access tokens still have the Cognito pool
+issuer and are validated against that issuer and its keys. Existing registered
+clients and direct registration URLs continue to work.
+
+For an existing deployment, apply the template's exact GET-only CloudFront
+behavior, public API route and `MCP_OAUTH_DOMAIN` environment value as an operator
+infrastructure migration. Preserve the live Lambda `CodeUri`, all stack parameters
+and unrelated settings. Review the change set, hold the release migration lock,
+verify the deployed configuration, and update the private release infrastructure
+digest and Lambda configuration fingerprint before approving the new attested
+application release through the normal promotion workflow. The new route returns
+no usable metadata until that application build is promoted.
+
+Verify the unauthenticated MCP challenge, follow its resource metadata URL, fetch
+the named authorization server's `/.well-known/oauth-authorization-server`, and
+check that `registration_endpoint` is the public `/api/mcp/register` address.
+Starting `codex mcp login freedms` should register a public client and open Cognito
+sign-in; the person completes sign-in and MFA. The `/api/session` route must still
+reject anonymous requests, and the marketing host must not expose discovery.
 
 The API role adds only `cognito-idp:CreateUserPoolClient` and
 `cognito-idp:DeleteUserPoolClient`, scoped to `UserPool.Arn`. The pool ID is derived
@@ -590,7 +620,62 @@ these four writes has a `confirm` argument. No token minting, attestation,
 signature, compliance sign-off, terms acceptance, or credit certification tools
 are exposed. Those actions remain human-only.
 
-When `EnableManagedLoginBranding=true`, both app clients have `AWS::Cognito::ManagedLoginBranding` resources with navy
+### MCP OAuth branding (classic hosted UI)
+
+The pilot's Lite pool uses classic hosted UI. Its default branding is versioned
+in `infra/cognito/classic.css` and `infra/cognito/logo.png` (#186). The logo is an
+unmodified raster rendering of `packages/web/src/assets/logo.svg`, within
+Cognito's 100 KB logo limit. The stylesheet uses the supported classic selectors
+and properties, and stays below 3 KB. It matches the app's white surfaces, navy
+`#0B1F2C`, orange `#FF6A00`, muted text, rounded 48px controls, system font stack
+and focus/error colors. No external font is loaded. The recovery link uses a
+darker orange for readable contrast on white. Classic retains its own layout
+and flow copy; it cannot reproduce the app's split photo layout. The web/app's
+custom sign-in is unchanged.
+
+This is a separate operator-owned Cognito setting, not an application release
+or a CloudFormation-managed resource. Use the stack's `CognitoUserPoolId` output;
+verify the AWS account, pool and active classic domain before applying it. Save
+`get-ui-customization --client-id ALL` and any previous logo in a private operator
+directory first. Then, from the repository root:
+
+```sh
+aws cognito-idp set-ui-customization \
+  --user-pool-id <CognitoUserPoolId> --client-id ALL \
+  --css file://infra/cognito/classic.css \
+  --image-file fileb://infra/cognito/logo.png
+aws cognito-idp get-ui-customization \
+  --user-pool-id <CognitoUserPoolId> --client-id ALL
+```
+
+Use `ALL` so existing and newly registered MCP clients inherit the same branding
+without adding Cognito permissions to the registration bridge. Check that those
+clients have no overriding customization. The web client's hosted fallback also
+inherits these defaults; the normal in-app SRP sign-in remains unchanged. Keep
+`EnableManagedLoginBranding=false`; enabling it is a different migration.
+
+Verify the CSS readback, served logo, and real OAuth sign-in/recovery screens at
+desktop and mobile widths. Allow up to one minute for Cognito's cache. Verify
+a newly created public client inherits the assets, then remove only that
+verification client (and its registration record if created through the bridge).
+MFA uses the same hosted styling; complete credential/MFA verification with the
+account owner when needed. Never submit
+dummy password-reset requests or print tokens in verification logs.
+
+To roll back, reapply the saved CSS and logo together using the same command.
+If the original pool had no branding, use empty CSS and an empty image file to
+reset the defaults, then verify the readback and hosted page. This does not
+change callbacks, tokens, MFA, pool tier, app code or the release baseline.
+For an updated app logo, render the SVG again with a trusted SVG renderer and
+visually compare it before replacing the PNG; on macOS `sips -s format png
+packages/web/src/assets/logo.svg --out infra/cognito/logo.png` preserves the
+existing artwork. Review the complete assets before applying an update.
+
+See [AWS classic branding](https://docs.aws.amazon.com/cognito/latest/developerguide/hosted-ui-classic-branding.html)
+and [SetUICustomization](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_SetUICustomization.html).
+
+The optional managed-login alternative remains in the template. When
+`EnableManagedLoginBranding=true`, both app clients have `AWS::Cognito::ManagedLoginBranding` resources with navy
 `#0B1F2C`, orange `#FF6A00`, rounded inputs/buttons and an embedded base64 copy of
 `packages/web/src/assets/logo.svg`. SVG is supported, so no raster conversion or
 external image hosting is necessary. Settings follow the
@@ -603,3 +688,43 @@ version before applying these branding resources. The flag defaults to false so 
 For Muse (`custom.freedms`), `https://agent.meta.ai/api/hatch/oauth/callback` is pre-registered by default in the template. The only remaining operator registration step is a stack deploy/update with a reviewed stack parameter update. For an existing stack with an explicit `McpCallbackURLs` value, include Muse's callback in that value; an override replaces the default, so include every callback you intend to retain.
 
 For ChatGPT, create a custom MCP server at `https://app.<RootDomain>/api/mcp` using OAuth and the dedicated client ID. Copy the exact production redirect URI from its management screen into `McpCallbackURLs`; do not guess a callback ID or use a wildcard. New connections can use callback-specific URLs when the issuer does not advertise RFC 9207 support. See [OpenAI authentication documentation](https://developers.openai.com/plugins/build/auth). Register the callback with a reviewed stack parameter update, then sign in and approve the requested scopes in ChatGPT. Public endpoint checks alone do not verify the final OAuth connection.
+
+
+### Branded MCP OAuth rollout (#188)
+
+The custom connector flow uses the ordinary FreeDMS login/MFA components and an
+explicit app/dealership/permissions consent page at `/?mcp_oauth=1`. Passwords and
+MFA stay with Cognito. Normal web/app sign-in and its session storage are unchanged.
+
+1. Hold the operator infrastructure migration lock and snapshot current release,
+   configuration and Lambda code/configuration. Preserve all current stack
+   parameters and the live Lambda `CodeUri`. Add `McpOAuthTable` (encrypted,
+   on-demand, TTL `expiresAt`), narrow Get/Put/Update permissions, and the exact
+   public `/mcp/oauth/{interaction,authorize,token,revoke}` routes. Stage
+   `McpCustomOAuthEnabled=0`. New environment keys are `MCP_OAUTH_TABLE`,
+   `MCP_CALLBACK_URLS` and `MCP_CUSTOM_OAUTH_ENABLED`.
+2. Review the change set, execute, verify the existing Lambda code digest and
+   unrelated settings, then record the new template digest and configuration
+   fingerprint in the private release baseline before releasing the lock.
+3. Promote the tested, attested master release through preflight and deploy.
+4. Under a fresh migration lock, change `McpCustomOAuthEnabled` to `1`, preserve
+   the just-deployed Lambda code, verify the configuration and update its baseline.
+5. Verify discovery advertises the application-domain authorize/token/revoke
+   endpoints. Register a real connector, complete sign-in and MFA personally,
+   review consent, verify tool discovery, refresh and revoke. Anonymous endpoint
+   checks do not prove the authenticated flow.
+
+The cookie is Secure/HttpOnly/SameSite=Strict and host-only; interaction endpoints
+require the configured application Origin and a separate CSRF secret. The existing API Gateway browser-origin policy is unchanged; native/server
+OAuth clients can call the public token/revoke endpoints. CloudFront
+must forward cookies, Origin and Content-Type on `/api/*` (the existing API
+behavior does). Opaque codes/access/refresh tokens are stored only as hashes;
+TTL cleanup never substitutes for expiry validation. Code or refresh replay
+invalidates the authorization family. Reconsent creates a new generation so old
+tokens stay invalid. Account → AI connections remains the user's removal control.
+
+Rollback discovery with `McpCustomOAuthEnabled=0` and the same locked baseline
+procedure. Keep this release or a compatible successor running to honor existing
+opaque connections. If rolling back to older code, those clients must reconnect
+through Cognito. Keep the classic branding assets and registration bridge for
+this fallback. Never delete the token table to implement rollback or revocation.

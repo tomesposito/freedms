@@ -32,7 +32,7 @@ test('DCR creates distinct public Cognito clients with exact configuration and o
   assert.equal(JSON.parse((await s.post()).body).client_id, 'client-2');
   const repo = s.repositories.forTenant('operator');
   const record = await repo.mcpRegistration('client-1');
-  assert.deepEqual(record, {tenantId: 'operator', client_id: 'client-1', client_name: fields.client_name, redirect_uris: fields.redirect_uris, scopes: fields.scope.split(' '), createdAt: start.toISOString()});
+  assert.deepEqual(record, {tenantId: 'operator', client_id: 'client-1', client_name: fields.client_name, redirect_uris: fields.redirect_uris, grant_types: fields.grant_types, scopes: fields.scope.split(' '), createdAt: start.toISOString()});
   assert.equal((await repo.mcpRegistrations()).length, 2); assert.deepEqual(await repo.events(), []);
   const other = s.repositories.forTenant('dealer');
   assert.equal(await other.mcpRegistration('client-1'), undefined); assert.deepEqual(await other.mcpRegistrations(), []);
@@ -42,7 +42,8 @@ test('DCR creates distinct public Cognito clients with exact configuration and o
 });
 test('DCR rejects invalid metadata before creating any client', async () => {
   const s = setup();
-  const bad = [null, [], {}, {...fields, client_name: ''}, {...fields, tenantId: 'injected'},
+  const bad = [null, [], {}, {...fields, client_name: ''},
+    ...['desktop', '', null, 1, {}].map(application_type => ({...fields, application_type})),
     ...['http://example.com/cb', 'https://*.example.com', 'https://example.com/#', 'https://example.com/#fragment', 'https://user:pass@example.com', 'https://@example.com', 'ftp://localhost', 'http://localhost.evil/cb', 'http://127.1/cb', 'https://example.com/%2a', 'https://example.com/a b', 'https://example.com/\\cb'].map(uri => ({...fields, redirect_uris: [uri]})),
     {...fields, redirect_uris: []}, {...fields, scope: 'openid'}, {...fields, scope: 'freedms/mcp.read admin'}, {...fields, scope: ''},
     {...fields, grant_types: ['client_credentials']}, {...fields, grant_types: ['refresh_token']}, {...fields, response_types: ['token']}, {...fields, token_endpoint_auth_method: 'client_secret_basic'}];
@@ -52,6 +53,43 @@ test('DCR rejects invalid metadata before creating any client', async () => {
   }
   for (const body of ['{', 'x'.repeat(17000)]) assert.equal(JSON.parse((await s.handle({method: 'POST', path: '/mcp/register', body})).body).error, 'invalid_client_metadata');
   assert.deepEqual(s.created, []); assert.deepEqual(await s.repositories.forTenant('operator').mcpRegistrations(), []);
+});
+test('DCR accepts Codex native and web application metadata without changing client security settings', async () => {
+  const s = setup();
+  for (const application_type of ['native', 'web']) {
+    const result = await s.post({...fields, application_type});
+    assert.equal(result.statusCode, 201);
+    assert.equal(JSON.parse(result.body).application_type, application_type);
+  }
+  assert.deepEqual(s.created[0], s.created[1]);
+  assert.equal(s.created[0].GenerateSecret, false);
+  assert.deepEqual(s.created[0].AllowedOAuthScopes, fields.scope.split(' '));
+  assert.deepEqual(s.created[0].CallbackURLs, fields.redirect_uris);
+  for (const body of [{...fields, application_type: 'native', scope: 'admin'},
+    {...fields, application_type: 'native', redirect_uris: ['http://attacker.example/callback']},
+    {...fields, application_type: 'native', token_endpoint_auth_method: 'client_secret_basic'}]) {
+    assert.equal((await s.post(body)).statusCode, 400);
+  }
+  assert.equal(s.created.length, 2);
+});
+test('DCR ignores unrecognized metadata fields instead of rejecting the registration', async () => {
+  const s = setup();
+  // Standard RFC 7591 fields this endpoint does not use, plus an injection
+  // attempt: all ignored. The record is built from validated fields only.
+  const result = await s.post({...fields, client_uri: 'https://assistant.example/', logo_uri: 'https://assistant.example/logo.png',
+    tos_uri: 'https://assistant.example/terms', policy_uri: 'https://assistant.example/privacy', contacts: ['ops@assistant.example'],
+    jwks_uri: 'https://assistant.example/jwks.json', software_id: 'assistant-client', software_version: '1.0', tenantId: 'injected'});
+  assert.equal(result.statusCode, 201);
+  assert.deepEqual(JSON.parse(result.body), {...fields, client_id: 'client-1'});
+  const record = await s.repositories.forTenant('operator').mcpRegistration('client-1');
+  assert.equal(record?.tenantId, 'operator'); assert.equal(record?.client_name, fields.client_name);
+  // Ignoring unknown fields does not soften validation of the known ones.
+  for (const body of [{...fields, client_uri: 'https://assistant.example/', scope: 'admin'},
+    {...fields, logo_uri: 'https://assistant.example/logo.png', redirect_uris: ['http://attacker.example/callback']},
+    {...fields, tos_uri: 'https://assistant.example/terms', token_endpoint_auth_method: 'client_secret_basic'}]) {
+    assert.equal((await s.post(body)).statusCode, 400);
+  }
+  assert.equal(s.created.length, 1);
 });
 test('DCR defaults to read scope and public authorization code metadata', async () => {
   const s = setup(); const result = await s.post({client_name: 'Minimal', redirect_uris: ['https://example.com/cb']});
