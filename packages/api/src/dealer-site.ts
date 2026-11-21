@@ -1,4 +1,4 @@
-import { projectedPhotoUrls } from './vehicle-photos.js';
+import { projectedPhotoUrls, publiclyVisibleVehicles } from './vehicle-photos.js';
 import { randomUUID } from 'node:crypto';
 import type { Principal, Tenant, Vehicle, WebsiteSettings } from '@freedms/shared';
 import { createLead } from './crm.js';
@@ -62,7 +62,7 @@ export function createDealerSiteHandler(photoBase = '') {
     const s = {...websiteDefaults(tenant), ...settings};
     // An empty identity override falls back to the tenant's identity.
     s.storeName ||= tenant.name; s.phone ||= tenant.phone ?? ''; s.address ||= tenant.address ?? '';
-    const all = (await repo.list({})).filter(v => v.status === 'available').sort((a, b) => a.stockNumber.localeCompare(b.stockNumber) || a.id.localeCompare(b.id));
+    const all = publiclyVisibleVehicles(await repo.list({})).sort((a, b) => a.stockNumber.localeCompare(b.stockNumber) || a.id.localeCompare(b.id));
     const vehicle = vehicleId ? all.find(v => v.id === vehicleId) : undefined;
     if (vehicleId && !vehicle) throw missing();
     const base = `/public/${tenantId}/site`, action = vehicle ? `${base}/vehicles/${vehicle.id}` : `${base}/contact`;

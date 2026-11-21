@@ -125,7 +125,7 @@ test('vehicle photo upload, allowlisted routes, projected order and byte deletio
   for (const route of [url, `${url}-thumb`]) {
     const result = await publicGet(route);
     assert.equal(result.statusCode, 200);
-    assert.deepEqual(result.headers, {'content-type': 'image/png', 'cache-control': 'public, max-age=300', 'x-content-type-options': 'nosniff'});
+    assert.deepEqual(result.headers, {'content-type': 'image/png', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff'});
     assert.equal(result.body, png);
     assert.equal(result.isBase64Encoded, true);
   }
@@ -161,4 +161,48 @@ test('vehicle photo upload, allowlisted routes, projected order and byte deletio
   assert.equal((await publicGet(url)).statusCode, 404);
   for (const suffix of ['', '-display', '-thumb']) assert.equal(await documents.forTenant('A').get(upload.id + suffix), undefined);
   assert.equal((await repositories.forTenant('A').events()).filter(event => event.type === 'vehicle.updated').length, 3);
+});
+
+test('public photos stop serving when a vehicle leaves available and return when it comes back', async () => {
+  const {handler, call, add} = await setup();
+  const vehicle = await add({});
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2GQAAAAASUVORK5CYII=';
+  const uploadId = randomUUID();
+  assert.equal((await call(`/vehicles/${vehicle.id}/photos`, 'POST', {uploadId, version: 1, part: 0, bytes: png})).status, 202);
+  const uploaded = await call(`/vehicles/${vehicle.id}/photos`, 'POST', {uploadId, version: 1, parts: 1, type: 'image/png', name: 'front.png', thumb: png, display: png});
+  assert.equal(uploaded.status, 201);
+  const upload = uploaded.data.photos.find((photo: any) => photo.source === 'upload');
+  // Add a prepped derivative so -hero and -feed have real stored bytes and
+  // would serve 200 if the visibility gate were bypassed for those variants.
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+  const prepped = await call(`/vehicles/${vehicle.id}`, 'PUT', {version: uploaded.data.version, photoPrep: {derivatives: [{index: 0, display: jpeg, thumb: jpeg, hero: jpeg, feed: jpeg}]}});
+  assert.equal(prepped.status, 200);
+  const derived = prepped.data.photos.find((photo: any) => photo.derivedFrom);
+  assert.ok(derived);
+  const routes = [
+    `/public/A/photos/${upload.id}`, `/public/A/photos/${upload.id}-thumb`,
+    `/public/A/photos/${derived.id}`, `/public/A/photos/${derived.id}-thumb`,
+    `/public/A/photos/${derived.id}-hero`, `/public/A/photos/${derived.id}-feed`,
+  ];
+  const get = (route: string) => handler({path: route, method: 'GET'});
+  for (const route of routes) {
+    const result = await get(route);
+    assert.equal(result.statusCode, 200, route);
+    assert.equal(result.headers['cache-control'], 'no-store');
+  }
+  assert.equal((await get(routes[0])).body, png);
+  // The withdrawal response must be indistinguishable from a photo that
+  // never existed: same status, headers, body, and encoding.
+  const missingPhoto = await get(`/public/A/photos/${vehicle.id}_${randomUUID()}`);
+  assert.equal(missingPhoto.statusCode, 404);
+  let version = prepped.data.version as number;
+  for (const status of ['sold', 'reserved', 'in recon'] as const) {
+    const updated = await call(`/vehicles/${vehicle.id}`, 'PUT', {...input, status, version});
+    assert.equal(updated.status, 200, status);
+    version = updated.data.version;
+    for (const route of routes) assert.deepEqual(await get(route), missingPhoto, `${status} ${route}`);
+  }
+  const back = await call(`/vehicles/${vehicle.id}`, 'PUT', {...input, status: 'available', version});
+  assert.equal(back.status, 200);
+  for (const route of routes) assert.equal((await get(route)).statusCode, 200, route);
 });

@@ -1,5 +1,5 @@
 import type { DocumentStore } from './document-store.js';
-import { projectedPhotoUrls, serveVehiclePhoto } from './vehicle-photos.js';
+import { projectedPhotoUrls, publiclyVisibleVehicles, serveVehiclePhoto } from './vehicle-photos.js';
 import { facebookCsv, newestFacebookRun } from './facebook-feed.js';
 import type { Vehicle } from '@freedms/shared';
 import { ApiError, missing } from './errors.js';
@@ -9,8 +9,8 @@ import type { RepositoryFactory } from './repository.js';
 export function buildPublicInventory(dealer: string, vehicles: Vehicle[], photoBase = '') {
   return {
     '@context': 'https://schema.org', '@type': 'ItemList', name: `${dealer} — Inventory`,
-    numberOfItems: vehicles.filter(v => v.status === 'available').length,
-    itemListElement: vehicles.filter(v => v.status === 'available')
+    numberOfItems: publiclyVisibleVehicles(vehicles).length,
+    itemListElement: publiclyVisibleVehicles(vehicles)
       .sort((a, b) => a.stockNumber.localeCompare(b.stockNumber) || a.id.localeCompare(b.id))
       .map((v, i) => {
         const image = projectedPhotoUrls(v, photoBase);
