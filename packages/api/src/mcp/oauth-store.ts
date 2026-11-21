@@ -24,7 +24,8 @@ export class DynamoOAuthStore implements OAuthStore {
   async consume(kind: string, id: string): Promise<boolean> {
     try {
       await this.client.send(new UpdateCommand({TableName: this.table, Key: {PK: `${kind}#${digest(id)}`},
-        UpdateExpression: 'SET consumed = :yes', ConditionExpression: 'attribute_exists(PK) AND attribute_not_exists(consumed) AND expiresAt > :now',
+        UpdateExpression: 'SET #used = :yes', ConditionExpression: 'attribute_exists(PK) AND attribute_not_exists(#used) AND #expiry > :now',
+        ExpressionAttributeNames: {'#used': 'consumed', '#expiry': 'expiresAt'},
         ExpressionAttributeValues: {':yes': true, ':now': Math.floor(Date.now() / 1000)}}));
       return true;
     } catch (error) { if (error instanceof Error && error.name === 'ConditionalCheckFailedException') return false; throw error; }

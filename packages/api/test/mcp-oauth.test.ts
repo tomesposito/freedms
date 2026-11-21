@@ -138,7 +138,8 @@ test('Dynamo OAuth writes hash keys, use consistent reads and conditional consum
   await store.put({kind:'access',id:'test-secret-value',data:{subject:'user'},expiresAt:9999999999});
   assert.equal(JSON.stringify(commands).includes('test-secret-value'),false);
   await store.get('access','test-secret-value'); assert.equal(commands[1].input.ConsistentRead,true);
-  assert.equal(await store.consume('refresh','value'),true); assert.match(commands[2].input.ConditionExpression,/attribute_not_exists\(consumed\).*expiresAt > :now/);
+  assert.equal(await store.consume('refresh','value'),true); assert.match(commands[2].input.ConditionExpression,/attribute_not_exists\(#used\).*#expiry > :now/);
+  assert.deepEqual(commands[2].input.ExpressionAttributeNames, {'#used':'consumed','#expiry':'expiresAt'});
 });
 test('consent escapes app and identity labels and displays permissions and removal path', () => {
   const html = consentHtml({id:'',csrf:'',appName:'<script>bad</script>',redirectUri:'http://127.0.0.1:42/cb',scopes:['freedms/mcp.read']}, {user:'<user>',dealership:'<dealer>'});
