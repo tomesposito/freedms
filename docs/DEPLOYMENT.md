@@ -203,6 +203,40 @@ Their existing token checks still apply. Use AWS-managed cache, origin-request,
 and response-header policies: custom policies are not eligible for the Free plan.
 Invitation acceptance remains Cognito protected. No local session route is deployed.
 
+## Public dealer routes and temporary photos
+
+Public inventory documents, Facebook CSV feeds, dealer pages, and uploaded photo
+URLs are served from `https://app.<RootDomain>/public/<tenantId>/...`. CloudFront
+forwards `/public/*` to the same protected API origin with caching disabled;
+the marketing host rejects these paths. Existing `/api/public/...` photo URLs
+remain supported. The viewer function removes a trailing slash before routing.
+API Gateway exposes GET only for the inventory documents, feed, photo, and
+dealer pages, plus POST only for contact and vehicle inquiries. Other API routes
+retain Cognito authentication, and direct-origin requests require the private
+origin header.
+
+This rollout needs an operator infrastructure migration before application
+promotion: apply the routes, grant table-scoped `dynamodb:UpdateItem` for webhook
+settlement, and add the temporary photo storage prefix and lifecycle rules.
+Preserve the live Lambda artifact and all existing stack parameters while
+applying the template. Verify the reviewed change set, public route contract,
+runtime permissions and CloudFront Free subscription; then update the private
+release infrastructure baseline and deploy the attested application build.
+
+S3 stores upload parts under `temporary/vehicle-photo-parts/<tenantId>/`. Current
+parts become eligible for expiration after one day; their noncurrent versions
+expire after one day and expired delete markers are removed. Lifecycle deletion
+is asynchronous. Final photos and dealership documents stay under `tenants/`
+with the existing retention policy. Apply this before enabling photo uploads;
+installations that already used the old part keys need a separately reviewed
+cleanup of abandoned `tenants/<tenantId>/vehicle-photo-part-*` objects.
+
+Validate a public inquiry and a webhook claim/terminal settlement with isolated
+test records after deployment, then remove those records and verification
+resources. Check legacy invite rows for plaintext credentials without logging
+token values; remove only the obsolete field after the hash-only application is
+deployed, preserving hashes, states and optimistic versions.
+
 ## Operator CLI
 
 Create a private JSON file containing these fields (values below are examples):

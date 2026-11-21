@@ -10,8 +10,9 @@ Public pages render directly from the tenant's current available inventory:
 
 Every page includes schema.org inventory JSON-LD and links the tenant's existing
 `llms.txt` index. Public reads do not write records or call authenticated app
-routes. Reads use the same tenant resolution locally and when hosted; no host
-header routing or deployment changes are needed.
+routes. Reads use the same tenant resolution locally and when hosted. Hosted
+deployment requires the `/public/*` CloudFront API behavior and the explicit
+anonymous API Gateway routes in `infra/template.yaml`; see DEPLOYMENT.md.
 
 Admins edit the eight identity/appearance controls in Deals → Workspace settings
 → Website (`GET/PUT /settings/website`). The versioned `website-settings` CRM

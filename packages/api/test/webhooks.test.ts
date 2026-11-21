@@ -561,6 +561,7 @@ test('hosted schedule routes through the API Lambda to the bounded drain without
   assert.match(template, /WebhookDrain:\s+Type: Schedule\s+Properties:\s+Schedule: rate\(5 minutes\)/);
   assert.match(template, /Timeout: 60/);
   assert.match(template, /dynamodb:Scan/);
+  assert.match(template, /Action: \[dynamodb:GetItem,[^\n]+dynamodb:UpdateItem[^\n]+\]\s+Resource: !GetAtt Table\.Arn/);
   assert.ok(lambda.indexOf("event.source === 'aws.events'") < lambda.indexOf('const handle = createHandler'));
   assert.match(lambda, /return webhookDrainHandler\(\)/);
   assert.match(lambda, /webhookDrainHandler = async \(\) => drainWebhooks\(repositories, hostedWebhookSender\(\), new Date\(\)\)/);

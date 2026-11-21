@@ -9,6 +9,8 @@ import { bootstrapPilot, invitePilot, CognitoPilotIdentity } from '../src/pilot-
 import { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
 import { seedDemo } from '../src/demo-seed.js';
 import type { AuthClaims } from '@freedms/shared';
+import { readFileSync } from 'node:fs';
+import { vehiclePhotoPartKeys } from '../src/vehicle-photos.js';
 const now = new Date();
 const claims = (sub = 'admin', tenant = 'A'): AuthClaims => ({sub, 'custom:tenant_id': tenant,
   email: `${sub}@example.test`, email_verified: true, iss: 'issuer', aud: 'audience', exp: now.getTime() / 1000 + 3600, token_use: 'id'});
@@ -48,6 +50,53 @@ test('gateway permits only narrow token routes and never trusts a caller JWT hea
   const protectedOrigin = gatewayHandler(async () => response(200, {}), 'issuer', 'audience', 'secret');
   assert.equal((await protectedOrigin(event('/share/token'))).statusCode, 403);
   assert.equal((await protectedOrigin({...event('/share/token'), headers: {'X-FreeDMS-Origin': 'secret'}})).statusCode, 200);
+});
+test('hosted public routes allow only inventory reads and dealer inquiries, with origin protection', async () => {
+  const template = readFileSync('infra/template.yaml', 'utf8');
+  const configured = [...template.matchAll(/Path: '(\/public\/[^']+)'\s+Method: (GET|POST)\s+Auth: \{Authorizer: NONE\}/g)]
+    .map(([, path, method]) => `${method} ${path}`);
+  const reads = ['inventory.json', 'inventory.html', 'llms.txt', 'facebook.csv', 'photos/{photoId}',
+    'site', 'site/inventory', 'site/about', 'site/contact', 'site/vehicles/{vehicleId}'];
+  const expected = [...reads.map(path => `GET /public/{tenantId}/${path}`),
+    'POST /public/{tenantId}/site/contact', 'POST /public/{tenantId}/site/vehicles/{vehicleId}'];
+  assert.deepEqual(configured.sort(), expected.sort());
+  let handled = 0;
+  const gateway = gatewayHandler(async () => { handled++; return response(200, {}); }, 'issuer', 'audience', 'origin');
+  for (const route of expected) {
+    const [method, pattern] = route.split(' '), path = pattern.replaceAll(/\{\w+\}/g, 'valid-id');
+    assert.equal((await gateway(event(path, method))).statusCode, 403);
+    assert.equal((await gateway({...event(path, method), headers: {'x-freedms-origin': 'origin'}})).statusCode, 200);
+  }
+  const before = handled;
+  for (const [path, method] of [['/public/A/admin', 'GET'], ['/public/A/site/admin', 'GET'],
+    ['/public/A/inventory.json', 'POST'], ['/public/A/site', 'POST'], ['/public/A/site/contact', 'DELETE'], ['/vehicles', 'GET']]) {
+    assert.equal((await gateway({...event(path, method), headers: {'x-freedms-origin': 'origin'}})).statusCode, 401);
+  }
+  assert.equal(handled, before);
+});
+test('temporary photo parts expire separately from final photos and tenant documents', async () => {
+  const objects = new Map<string, Uint8Array>();
+  const client = {send: async (command: PutObjectCommand | GetObjectCommand | DeleteObjectCommand) => {
+    const key = command.input.Key!;
+    if (command instanceof PutObjectCommand) { objects.set(key, command.input.Body as Uint8Array); return {}; }
+    if (command instanceof DeleteObjectCommand) { objects.delete(key); return {}; }
+    if (!objects.has(key)) throw Object.assign(new Error(), {name: 'NoSuchKey'});
+    return {Body: {transformToByteArray: async () => objects.get(key)}};
+  }} as unknown as S3Client;
+  const store = new S3DocumentStore('documents', client);
+  const part = vehiclePhotoPartKeys('vehicle', 'owner', '12345678-1234-1234-1234-123456789abc')[0];
+  const a = store.forTenant('A'), b = store.forTenant('B'), bytes = Uint8Array.from([1, 2, 3]);
+  await a.put(part, bytes); await b.put(part, bytes);
+  await a.put('vehicle_12345678-1234-1234-1234-123456789abc-display', bytes); await a.put('deal-document', bytes);
+  assert.equal([...objects.keys()].filter(key => key.startsWith('temporary/vehicle-photo-parts/')).length, 2);
+  assert.deepEqual(await a.get(part), bytes);
+  await a.remove(part); assert.equal(await a.get(part), undefined); assert.deepEqual(await b.get(part), bytes);
+  assert.ok(objects.has('tenants/A/vehicle_12345678-1234-1234-1234-123456789abc-display'));
+  assert.ok(objects.has('tenants/A/deal-document'));
+  const template = readFileSync('infra/template.yaml', 'utf8');
+  assert.match(template, /Prefix: temporary\/vehicle-photo-parts\/\s+ExpirationInDays: 1\s+NoncurrentVersionExpiration: \{NoncurrentDays: 1\}/);
+  assert.match(template, /Prefix: temporary\/vehicle-photo-parts\/\s+ExpiredObjectDeleteMarker: true/);
+  assert.match(template, /NoncurrentVersionExpiration: \{NoncurrentDays: 30\}/);
 });
 async function workspace() {
   const repositories = new MemoryRepositories();
