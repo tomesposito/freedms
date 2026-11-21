@@ -60,6 +60,12 @@ async function workspace() {
 test('hosted invitations bind verified email, tenant and Cognito subject; membership is required afterward', async () => {
   const s = await workspace();
   const invite = await invitePilot(s.repositories, s.identity, {tenantId: 'A', name: 'Staff', email: 'staff@example.test', actorId: 'admin', role: 'staff'}, now);
+  assert.ok('token' in invite && typeof invite.token === 'string');
+  const stored = (await s.repositories.forTenant('A').crmGet('invite', invite.id))!;
+  assert.equal('token' in stored, false);
+  assert.equal(stored.tokenHash, (await import('node:crypto')).createHash('sha256').update(invite.token).digest('hex'));
+  const again = await invitePilot(s.repositories, s.identity, {tenantId: 'A', name: 'Staff', email: 'staff@example.test', actorId: 'admin', role: 'staff'}, now);
+  assert.equal('token' in again, false);
   const path = `/invite/${invite.token}/accept`;
   const accept = (trusted?: AuthClaims) => s.gateway({...event(path, 'POST', trusted), body: JSON.stringify({name: 'Staff', email: 'staff@example.test'})});
   assert.equal((await s.gateway(event('/session', 'GET', claims('staff')))).statusCode, 403);

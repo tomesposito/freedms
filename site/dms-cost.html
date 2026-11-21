@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>How Much Does Dealer Management Software Cost? | freeDMS</title>
-<meta name="description" content="Dealer management software costs franchise dealers $2,000-$8,000 per rooftop/month, plus fees. Independent tools run $0-$300. freeDMS is a complete DMS at $0.">
+<meta name="description" content="Dealer management software costs franchise dealers $2,000-$8,000 per rooftop/month, plus fees. Independent tools run $0-$300. freeDMS is a DMS for independents at $0.">
 <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
 <meta name="theme-color" content="#0B1F2C">
 <link rel="canonical" href="https://freedms.co/dms-cost.html">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="freeDMS">
 <meta property="og:title" content="How Much Does Dealer Management Software Cost? | freeDMS">
-<meta property="og:description" content="Dealer management software costs franchise dealers $2,000-$8,000 per rooftop/month, plus fees. Independent tools run $0-$300. freeDMS is a complete DMS at $0.">
+<meta property="og:description" content="Dealer management software costs franchise dealers $2,000-$8,000 per rooftop/month, plus fees. Independent tools run $0-$300. freeDMS is a DMS for independents at $0.">
 <meta property="og:url" content="https://freedms.co/dms-cost.html">
 <meta property="og:image" content="https://freedms.co/assets/og-image.jpg">
 <meta property="og:image:width" content="1200">
@@ -19,7 +19,7 @@
 <meta property="og:image:alt" content="freeDMS — The all-in-one DMS for independent dealers">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="How Much Does Dealer Management Software Cost? | freeDMS">
-<meta name="twitter:description" content="Dealer management software costs franchise dealers $2,000-$8,000 per rooftop/month, plus fees. Independent tools run $0-$300. freeDMS is a complete DMS at $0.">
+<meta name="twitter:description" content="Dealer management software costs franchise dealers $2,000-$8,000 per rooftop/month, plus fees. Independent tools run $0-$300. freeDMS is a DMS for independents at $0.">
 <meta name="twitter:image" content="https://freedms.co/assets/og-image.jpg">
 <script type="application/ld+json">
 {
@@ -224,6 +224,42 @@ table.cost th{background:var(--wash)}
 .updated{color:var(--muted);font-size:.9rem;margin-top:36px}
 
 </style>
+<script>
+(() => {
+  // Queue initialization for the asynchronously loaded PostHog web SDK.
+  const posthog = window.posthog = [];
+  posthog._i = [['phc_zLdpMfB26g8UzU4FmNVHSP2uyM46vJroS5qmHza4ZnUN', {
+    api_host: 'https://us.i.posthog.com',
+    capture_pageview: true,
+    capture_pageleave: false,
+    autocapture: false,
+    person_profiles: 'never',
+    disable_session_recording: true,
+    disable_external_dependency_loading: true,
+    advanced_disable_flags: true,
+    before_send(event) {
+      if (event.event !== '$pageview') return null;
+
+      // Keep the anonymous event envelope and discard SDK-added metadata.
+      const properties = event.properties;
+      event.properties = {
+        token: properties.token,
+        distinct_id: properties.distinct_id,
+        $process_person_profile: false,
+        $current_url: properties.$current_url?.split(/[?#]/, 1)[0],
+        $referrer: properties.$referrer?.split(/[?#]/, 1)[0],
+      };
+      return event;
+    },
+  }, 'posthog']];
+
+  const script = document.createElement('script');
+  script.src = 'https://us-assets.i.posthog.com/static/array.js';
+  script.async = true;
+  script.crossOrigin = 'anonymous';
+  document.head.appendChild(script);
+})();
+</script>
 </head>
 <body>
 
@@ -248,7 +284,7 @@ table.cost th{background:var(--wash)}
   <p class="eyebrow">Guide</p>
   <h1 style="font-size:clamp(2rem,4.4vw,3.1rem);font-weight:850;max-width:22ch">How much does dealer management software cost?</h1>
   <div class="article">
-    <div class="answer"><p>Franchise dealers commonly pay <b>$2,000&ndash;$8,000 per rooftop, per month</b> for a DMS, plus implementation that often runs $10,000 or more, plus module and integration fees on top. Independent dealers usually pay far less &mdash; roughly $0&ndash;$300 a month for lighter tools &mdash; but give up the general ledger, service, and parts depth. freeDMS, a complete DMS built for independents, costs <b>$0</b>.</p></div>
+    <div class="answer"><p>Franchise dealers commonly pay <b>$2,000&ndash;$8,000 per rooftop, per month</b> for a DMS, plus implementation that often runs $10,000 or more, plus module and integration fees on top. Independent dealers usually pay far less &mdash; roughly $0&ndash;$300 a month for lighter tools &mdash; but give up the general ledger, service, and parts depth. freeDMS, a DMS built for independents, costs <b>$0</b>.</p></div>
 
     <h2>What franchise dealers pay</h2>
     <p>The franchise market is held by a few large vendors (CDK Global, Reynolds and Reynolds, Dealertrack) and priced by quote, not by list. Dealer-reported figures cluster between $2,000 and $8,000 per rooftop per month for the core system, typically on multi-year contracts. Implementation, data conversion, and training are billed separately and often add $10,000 or more up front. Modules beyond the core &mdash; CRM, service scheduling, digital retailing &mdash; and integrations with your own data can each carry their own monthly fee.</p>

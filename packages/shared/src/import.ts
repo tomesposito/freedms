@@ -2,6 +2,7 @@ import type { VehicleInput } from './index.js';
 export interface ImportRowResult {
   rowNumber: number; status: 'valid' | 'error' | 'duplicate';
   errors: {field: string; message: string}[];
+  warnings?: string[];
   duplicate?: {field: 'vin' | 'stockNumber'; reason: string};
   vehicle?: VehicleInput;
 }
@@ -9,7 +10,7 @@ export interface ImportPreview { totalRows: number; validCount: number; errorCou
 export interface ImportResult {
   importId: string; totalRows: number; importedCount: number; duplicateCount: number; errorCount: number;
   importedVehicleIds: string[];
-  skipped: {rowNumber: number; status: 'error' | 'duplicate'; errors?: ImportRowResult['errors']; duplicate?: ImportRowResult['duplicate']}[];
+  skipped: {rowNumber: number; status: 'error' | 'duplicate'; errors?: ImportRowResult['errors']; warnings?: ImportRowResult['warnings']; duplicate?: ImportRowResult['duplicate']}[];
 }
 export interface InventoryImport { id: string; tenantId: string; actorId: string; createdAt: string; totalRows: number; importedCount: number; duplicateCount: number; errorCount: number }
 

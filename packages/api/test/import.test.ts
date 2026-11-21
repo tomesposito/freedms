@@ -7,7 +7,7 @@ import { DynamoRepositories } from '../src/dynamo.js';
 import { createHandler } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
 import { bodyLimit } from '../src/quick-entry.js';
-import { IMPORT_BODY_LIMIT } from '../src/import.js';
+import { IMPORT_BODY_LIMIT, MAX_VIN_DECODES_PER_IMPORT } from '../src/import.js';
 const now = new Date('2026-10-22T12:00:00Z');
 const headers = ['year', 'make', 'model', 'vin', 'stock #', 'cost', 'price', 'mileage', 'notes', 'trim', 'status', 'date stocked', 'location'];
 const base = ['2003', 'Honda', 'Accord', '1HGCM82633A004352', 'S1', '$12,999.00', '15000', '88,000', 'Dealer note', '', '', '', ''];
@@ -91,6 +91,67 @@ test('VIN enrichment fills only blanks in both endpoints and failures leave norm
   const provided = (await call({csv: csv(), enrich: true})).data.rows[0].vehicle; assert.equal(provided.year, 2003); assert.equal(provided.make, 'Honda'); assert.equal(provided.model, 'Accord');
   assert.equal((await call({csv: source, enrich: true}, '/vehicles/import')).data.importedCount, 1); assert.equal(calls(), 3);
   const failing = await setup(true); const result = await failing.call({csv: source, enrich: true}); assert.equal(result.data.errorCount, 1); assert.deepEqual(result.data.rows[0].errors.map((e: {field: string}) => e.field).sort(), ['make', 'model', 'year']);
+});
+test('VIN enrichment memoizes identical validated VINs and preserves supplied fields', async () => {
+  const {call, calls} = await setup();
+  const source = csv(Array.from({length: 20}, (_, i) => row({0: '', 1: '', 2: '', 3: i % 2 ? base[3].toLowerCase() : base[3], 4: `S${i}`, 9: ''})));
+  const p: ImportPreview = (await call({csv: source, enrich: true})).data;
+  assert.equal(calls(), 1);
+  assert.equal(p.errorCount, 0);
+  for (const r of p.rows) {
+    assert.deepEqual([r.vehicle?.year, r.vehicle?.make, r.vehicle?.model, r.vehicle?.trim], [2004, 'Decoded', 'Model', 'Trim']);
+    assert.equal(Object.hasOwn(r, 'warnings'), false);
+  }
+  assert.deepEqual(p.rows.map(r => r.status), ['valid', ...Array(19).fill('duplicate')]);
+});
+test('VIN enrichment caps distinct attempts and carries skipped-row warnings through confirm', async () => {
+  const {call, calls} = await setup();
+  const rows = Array.from({length: MAX_VIN_DECODES_PER_IMPORT + 2}, (_, i) => row({
+    0: i === MAX_VIN_DECODES_PER_IMPORT ? '2003' : '',
+    1: i === MAX_VIN_DECODES_PER_IMPORT ? 'Honda' : '',
+    2: i === MAX_VIN_DECODES_PER_IMPORT ? 'Accord' : '',
+    3: `1HGCM82633A${String(i).padStart(6, '0')}`, 4: `S${i}`, 9: '',
+  }));
+  // A cached VIN still enriches after the budget is exhausted.
+  rows.push([...rows[0]]);
+  const source = csv(rows);
+  const p: ImportPreview = (await call({csv: source, enrich: true})).data;
+  assert.equal(calls(), MAX_VIN_DECODES_PER_IMPORT);
+  for (const r of p.rows.slice(0, MAX_VIN_DECODES_PER_IMPORT)) {
+    assert.equal(r.status, 'valid');
+    assert.equal(Object.hasOwn(r, 'warnings'), false);
+  }
+  const [optional, required, cached] = p.rows.slice(MAX_VIN_DECODES_PER_IMPORT);
+  assert.equal(optional.status, 'valid');
+  assert.equal(optional.vehicle?.trim, '');
+  assert.deepEqual([optional.vehicle?.year, optional.vehicle?.make, optional.vehicle?.model], [2003, 'Honda', 'Accord']);
+  assert.equal(required.status, 'error');
+  assert.deepEqual(required.errors.map(e => e.field).sort(), ['make', 'model', 'year']);
+  for (const r of [optional, required]) assert.match(r.warnings?.[0] ?? '', /VIN decode skipped.*per-import decode limit.*manually.*split/);
+  assert.equal(cached.vehicle?.make, 'Decoded');
+  assert.equal(cached.status, 'duplicate');
+  assert.equal(Object.hasOwn(cached, 'warnings'), false);
+  const result: ImportResult = (await call({csv: source, enrich: true}, '/vehicles/import')).data;
+  assert.equal(calls(), MAX_VIN_DECODES_PER_IMPORT * 2);
+  assert.equal(result.importedCount, MAX_VIN_DECODES_PER_IMPORT + 1);
+  assert.deepEqual(result.skipped.find(r => r.rowNumber === required.rowNumber)?.warnings, required.warnings);
+  assert.equal(Object.hasOwn(result.skipped.find(r => r.rowNumber === cached.rowNumber)!, 'warnings'), false);
+});
+test('VIN enrichment memoizes failures and counts them against the per-preview budget', async () => {
+  const {call, calls} = await setup(true);
+  const rows = Array.from({length: MAX_VIN_DECODES_PER_IMPORT + 1}, (_, i) => row({0: '', 1: '', 2: '', 3: `1HGCM82633A${String(i).padStart(6, '0')}`, 4: `S${i}`}));
+  rows.splice(1, 0, ...Array.from({length: 19}, () => [...rows[0]]));
+  const source = csv(rows);
+  const p: ImportPreview = (await call({csv: source, enrich: true})).data;
+  assert.equal(calls(), MAX_VIN_DECODES_PER_IMPORT);
+  for (const r of p.rows) {
+    assert.equal(r.status, 'error');
+    assert.deepEqual(r.errors.map(e => e.field).sort(), ['make', 'model', 'year']);
+  }
+  assert.ok(p.rows.slice(0, -1).every(r => !Object.hasOwn(r, 'warnings')));
+  assert.match(p.rows.at(-1)?.warnings?.[0] ?? '', /per-import decode limit/);
+  await call({csv: csv([rows[0]]), enrich: true});
+  assert.equal(calls(), MAX_VIN_DECODES_PER_IMPORT + 1);
 });
 test('import row boundaries, aliases, dollar formats, and invalid earlier rows', async () => {
   const {call} = await setup();

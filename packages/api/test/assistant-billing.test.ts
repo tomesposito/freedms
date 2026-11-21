@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import type { AssistantPlan, AuthClaims, OutboxEvent } from '@freedms/shared';
-import { AssistantBilling, assistantCycleDates, proratedAssistantCredits, priceForTool, PHOTO_PRICE } from '../src/assistant-billing.js';
+import { AssistantBilling, assistantCycleDates, proratedAssistantCredits, priceForTool, PHOTO_PRICE, zeroUsage } from '../src/assistant-billing.js';
 import { MemoryRepositories } from '../src/memory.js';
 import { createHandler } from '../src/handler.js';
 import { runAssistant } from '../src/assistant.js';
@@ -95,9 +95,9 @@ test('assistant billing debits read and write exactly; the answer after charged 
   const result = await s.chat(); assert.equal(result.status, 200); assert.equal(result.data.creditsUsed, 4);
   assert.ok(result.data.transcript.every((r: {ok: boolean}) => r.ok));
   const rows = await s.repo.assistantLedger('2026-01-01');
-  assert.deepEqual(rows.map(r => r.credits), [1, 2, 1]);
-  assert.deepEqual(rows.map(r => r.inputTokens), [10, 0, 0]);
-  for (const [key, total] of Object.entries({inputTokens: 10, outputTokens: 5, cacheReadTokens: 3, cacheWriteTokens: 2})) assert.equal(rows.reduce((sum, row) => sum + row[key as 'inputTokens'], 0), total);
+  assert.deepEqual(rows.map(r => r.credits), [1, 2, 1, 0]);
+  assert.deepEqual(rows.map(r => r.inputTokens), [10, 0, 0, 10]);
+  for (const [key, total] of Object.entries({inputTokens: 20, outputTokens: 10, cacheReadTokens: 6, cacheWriteTokens: 4})) assert.equal(rows.reduce((sum, row) => sum + row[key as 'inputTokens'], 0), total);
   assert.ok(rows.every(row => !('messages' in row) && !('input' in row)));
   assert.equal((await s.get('/assistant/pool')).data.balanceCredits, 71);
 });
@@ -120,6 +120,10 @@ test('assistant answer after a charged action is delivered even when the pool or
     const s = await setup(new Fake([calls('search_vehicles'), reply])); await s.plan(cap ? {perRequestCreditCap: 1} : {});
     if (!cap) await s.balance(1);
     const result = await s.chat(); assert.equal(result.data.creditsUsed, 1); assert.equal(result.data.reply, 'Done');
+    const rows = await s.repo.assistantLedger('2026-01-01');
+    assert.deepEqual(rows.map(row => row.credits), [1, 0]);
+    assert.equal(rows.reduce((sum, row) => sum + row.inputTokens, 0), 20);
+    assert.equal((await s.billing.pool(s.actor)).balanceCredits, cap ? 74 : 0);
   }
 });
 test('assistant never exposes an unpaid no-tool answer when the pool is exhausted', async () => {
@@ -248,7 +252,8 @@ test('assistant ledger retries never replay a tool and settlement failures retai
     if (mode === 'offline' || mode === 'exhausted') {
       assert.match(result.reply, /DID execute successfully/); assert.equal(result.creditsUsed, 0);
       assert.equal(attempts, mode === 'offline' ? 1 : 5); assert.equal(rows.length, 0);
-    } else { assert.equal(result.reply, 'Done'); assert.equal(result.creditsUsed, 2); assert.equal(rows.length, 1); }
+    } else { assert.equal(result.reply, 'Done'); assert.equal(result.creditsUsed, 2); assert.equal(rows.length, 2);
+      assert.deepEqual(rows.map(row => row.credits), [2, 0]); }
     if (mode === 'conflict' || mode === 'exhausted') assert.equal(ids[0], ids[1]);
   }
 });
@@ -462,4 +467,88 @@ for (const kind of ['memory', 'dynamo'] as const) test(`${kind}: paid renewal re
   assert.deepEqual(await s.repo.assistantLedger(cycle.cycleStart), []);
   await s.repo.commitAssistantLedger([{...entry, cycleStart: cycle.cycleStart}], cycle, plan.version);
   assert.equal((await s.repo.assistantLedger(cycle.cycleStart)).length, 1);
+});
+
+for (const kind of ['memory', 'dynamo'] as const) {
+  for (const [name, script, credits, actions, usageRows] of [
+    ['lookup then free answer', [calls('search_vehicles'), reply], 1, 1, 1],
+    ['failed rounds then answer', [calls('unknown'), calls('get_vehicle'), reply], 1, 1, 2],
+    ['mixed calls and multiple rounds', [calls('unknown', 'get_vehicle', 'search_vehicles', 'search_vehicles'), calls('unknown'), calls('get_vehicle', 'search_vehicles'), reply], 3, 3, 2],
+    ['answer only', [reply], 1, 1, 0],
+  ] as const) test(`${kind}: reconciles every provider round: ${name}`, async () => {
+    const s = await settlementSetup(kind, credits);
+    const fake = new Fake([...script]);
+    const result = await runAssistant([{role: 'user', content: [{text: 'Help'}]}], fake,
+      {sub: 'user-A', 'custom:tenant_id': 'A'} as AuthClaims,
+      async () => ({statusCode: 200, headers: {}, body: JSON.stringify({data: []})}), await s.billing.meter(s.actor));
+    assert.equal(result.reply, 'Done'); assert.equal(result.creditsUsed, credits);
+    const rows = await s.repo.assistantLedger('2026-01-01');
+    assert.equal(rows.filter(row => row.actionClass === 'usage').length, usageRows);
+    for (const key of Object.keys(fake.lastUsage) as (keyof typeof fake.lastUsage)[])
+      assert.equal(rows.reduce((sum, row) => sum + row[key], 0), fake.lastUsage[key] * fake.count);
+    const usage = (await s.billing.usage(s.actor)).byUser[0];
+    assert.equal(usage.actions, actions); assert.equal(usage.credits, credits); assert.deepEqual(usage.skills, {});
+    for (const key of Object.keys(fake.lastUsage) as (keyof typeof fake.lastUsage)[])
+      assert.equal(usage[key], fake.lastUsage[key] * fake.count);
+    assert.equal((await s.billing.pool(s.actor)).balanceCredits, 0);
+    assert.deepEqual(await s.repositories.forTenant('B').assistantLedger('2026-01-01'), []);
+  });
+
+  test(`${kind}: usage-only validation, atomic retry and zero-token noise`, async () => {
+    const s = await settlementSetup(kind, 1), meter = await s.billing.meter(s.actor);
+    await meter.recordUsage!(zeroUsage);
+    assert.deepEqual(await s.repo.assistantLedger('2026-01-01'), []);
+    await meter.charge('answer', {actionClass: 'answer', credits: 1});
+    const commit = s.repo.commitAssistantLedger;
+    s.repo.commitAssistantLedger = async (...args) => { await commit(...args); throw new Error('lost ack'); };
+    await meter.recordUsage!(new Fake().lastUsage);
+    assert.equal(await meter.finish(), 1);
+    const rows = await s.repo.assistantLedger('2026-01-01');
+    assert.equal(rows.length, 2); assert.equal(rows[1].credits, 0);
+    s.repo.commitAssistantLedger = commit;
+    const cycle = (await s.repo.assistantCycle('2026-01-01'))!, plan = (await s.repo.assistantPlan())!;
+    for (const patch of [{actionClass: 'usage' as const, credits: 1}, {actionClass: 'read' as const, credits: 0}])
+      await assert.rejects(s.repo.commitAssistantLedger([{...rows[1], id: randomUUID(), ...patch}], cycle, plan.version), /Invalid assistant ledger/);
+    assert.equal((await s.billing.pool(s.actor)).balanceCredits, 0);
+  });
+}
+
+test('usage recording failures and deadlines preserve the free answer', async () => {
+  for (const mode of ['throw', 'timeout'] as const) {
+    const s = await setup(); await s.plan(); await s.balance(1);
+    const meter = await s.billing.meter(s.actor);
+    let clock = 0, recordings = 0, answerClockReads = 0;
+    meter.recordUsage = async () => {
+      recordings++;
+      if (mode === 'throw') throw new Error('offline');
+      return new Promise<void>(() => {});
+    };
+    const fake = new Fake([calls('search_vehicles'), reply]);
+    const converse = fake.converse.bind(fake);
+    fake.converse = async () => { const message = await converse(); if (fake.count === 2 && mode === 'timeout') clock = 44_990; return message; };
+    // Leave work time for the answer, then only 10ms for usage settlement.
+    const result = await runAssistant([{role: 'user', content: [{text: 'Help'}]}], fake,
+      {sub: 'user-A', 'custom:tenant_id': 'A'} as AuthClaims,
+      async () => ({statusCode: 200, headers: {}, body: '{}'}), meter,
+      {now: () => mode === 'timeout' && fake.count === 2 ? (++answerClockReads === 1 ? 39_990 : 44_990) : clock});
+    assert.equal(result.reply, 'Done'); assert.equal(result.creditsUsed, 1); assert.equal(recordings, 1);
+  }
+});
+
+test('step and time limits retain usage from every returned round', async () => {
+  for (const mode of ['steps', 'time'] as const) {
+    const s = await setup(); await s.plan();
+    const fake = new Fake(Array.from({length: 11}, () => calls('search_vehicles')));
+    let clock = 0;
+    const converse = fake.converse.bind(fake);
+    fake.converse = async () => { const message = await converse(); if (mode === 'time' && fake.count === 2) clock = 40_000; return message; };
+    const result = await runAssistant([{role: 'user', content: [{text: 'Help'}]}], fake,
+      {sub: 'user-A', 'custom:tenant_id': 'A'} as AuthClaims,
+      async () => ({statusCode: 200, headers: {}, body: '{}'}), await s.billing.meter(s.actor), {now: () => clock});
+    assert.match(result.reply, mode === 'steps' ? /step limit/ : /ran out of time/);
+    assert.equal(result.creditsUsed, mode === 'steps' ? 10 : 1);
+    const rows = await s.repo.assistantLedger('2026-01-01');
+    for (const key of Object.keys(fake.lastUsage) as (keyof typeof fake.lastUsage)[])
+      assert.equal(rows.reduce((sum, row) => sum + row[key], 0), fake.lastUsage[key] * fake.count);
+  }
 });

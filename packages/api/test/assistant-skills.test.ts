@@ -1,5 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { PHOTO_PREP_SKILL } from '@freedms/shared';
+import { facebookRow } from '../src/facebook-feed.js';
+import { buildPublicInventory } from '../src/public-inventory.js';
+import { MemoryDocumentStore } from '../src/document-store.js';
 import type { AuthClaims, Customer, OutboxEvent } from '@freedms/shared';
 import { createHandler } from '../src/handler.js';
 import { AssistantBilling } from '../src/assistant-billing.js';
@@ -18,7 +22,8 @@ async function setup(seed = true) {
   const repositories = new MemoryRepositories(), provider = new Provider();
   const event = (tenantId: string, id: string, type: OutboxEvent['type'], version = 1): OutboxEvent => ({id: `${id}-${version}`, tenantId, actorId: `user-${tenantId}`, aggregateId: id, aggregateVersion: version, type, occurredAt: date.toISOString(), deliveryStatus: 'pending'});
   for (const tenantId of ['A', 'B']) await repositories.forTenant(tenantId).provision({id: tenantId, name: tenantId, createdAt: date.toISOString()}, {id: `user-${tenantId}`, name: 'User'}, {tenantId, userId: `user-${tenantId}`, role: 'admin', active: true}, event(tenantId, tenantId, 'tenant.created'));
-  const handle = createHandler(repositories, {decode: async () => {throw Error('offline');}}, () => date, undefined, undefined, undefined, undefined, {assistantProvider: provider, assistantSeedLocalPlan: seed});
+  const documents = new MemoryDocumentStore();
+  const handle = createHandler(repositories, {decode: async () => {throw Error('offline');}}, () => date, documents, undefined, undefined, undefined, {assistantProvider: provider, assistantSeedLocalPlan: seed});
   const req = async (path: string, body?: unknown, tenant = 'A', method = body === undefined ? 'GET' : 'POST') => {
     const url = new URL(path, 'http://offline');
     const result = await handle({path: url.pathname, query: Object.fromEntries(url.searchParams), method, claims: auth(tenant), ...(body !== undefined ? {body: JSON.stringify(body)} : {})});
@@ -206,4 +211,68 @@ test('skills refresh the write fence and preserve completed outcomes on settleme
     assert.deepEqual(data.transcript, [{tool: 'get_customer', ok: true}, ...(mode === 'settlement' ? [{tool: 'update_customer', ok: true}] : [])]);
     assert.equal((await s.repo.assistantLedger('2026-11-04')).length, 1);
   }
+});
+
+test('photo prep settles successful photos before continuing and leaves a review-only result', async () => {
+  const s = await setup();
+  const v = await s.addVehicle({photoUrls: ['https://example.test/one.jpg', 'https://example.test/two.jpg', 'https://example.test/three.jpg']});
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+  const url = `/vehicles/${v.id}`;
+  const before = (await s.req('/assistant/pool')).data.balanceCredits;
+  const list = await s.req(`/assistant/skills?surface=vehicle&id=${v.id}`);
+  assert.equal(list.data.skills.find((skill: {id: string}) => skill.id === PHOTO_PREP_SKILL).costCredits, 9);
+  const ledgerRows: number[] = [];
+  s.provider.converse = async messages => {
+    ledgerRows.push((await s.repo.assistantLedger('2026-11-04')).length);
+    const vision = messages[0].content?.some(item => item.image);
+    const reply = vision
+      ? JSON.stringify({label: 'exterior', coverScore: 85, vin: '1HGCM82633A004353', mileage: 81000, damage: 'Bumper scuff'})
+      : '2003 Honda Accord.';
+    return {role: 'assistant', content: [{text: reply}]};
+  };
+  const input = {skill: PHOTO_PREP_SKILL, surface: 'vehicle', id: v.id, version: v.version,
+    images: [{index: 0, jpeg}, {index: 1}, {index: 2, jpeg}]};
+  const run = (body = input, tenant = 'A') => s.req('/assistant/skills/run', body, tenant);
+  assert.equal((await run(input, 'B')).status, 404);
+  const pass = await run();
+  assert.equal(pass.status, 200);
+  assert.equal(pass.data.creditsUsed, 6);
+  assert.deepEqual(ledgerRows, [0, 1, 2]);
+  assert.deepEqual(pass.data.transcript.slice(0, 3).map((row: {ok: boolean}) => row.ok), [true, false, true]);
+  assert.ok(pass.data.prep.suggestions.some((row: {kind: string; matches?: boolean}) => row.kind === 'vin' && row.matches === false));
+  assert.deepEqual((await s.req(url)).data, v);
+  assert.equal((await s.req('/assistant/pool')).data.balanceCredits, before - 6);
+
+  const approved = {version: v.version, photoPrep: {order: [2, 0, 1], derivatives: [{index: 0, display: jpeg, thumb: jpeg, hero: jpeg, feed: jpeg}],
+    mileage: 81000, listingDescription: 'Edited description.', damage: [{index: 2, note: 'Bumper scuff'}]}};
+  assert.equal((await s.req(url, approved, 'B', 'PUT')).status, 404);
+  const update = await s.req(url, approved, 'A', 'PUT');
+  assert.equal(update.status, 200);
+  assert.equal(update.data.version, v.version + 1);
+  assert.equal(update.data.vin, v.vin);
+  assert.equal(update.data.mileage, 81000);
+  assert.equal(update.data.listingDescription, 'Edited description.');
+  assert.equal(facebookRow(update.data, 'A', 'Demo Dealer', update.data.photoUrls).description, 'Edited description.');
+  assert.ok(!JSON.stringify(buildPublicInventory('Demo Dealer', [{...update.data, status: 'available'}])).includes('Edited description.'));
+  assert.match(update.data.notes, /Photo 3.*Bumper scuff/);
+  assert.equal(update.data.photos[0].url, v.photoUrls[2]);
+  assert.equal(update.data.photos.at(-1).derivedFrom, v.photoUrls[0]);
+  assert.equal((await s.req(url, approved, 'A', 'PUT')).status, 409);
+  assert.equal((await s.repo.events()).filter(e => e.type === 'vehicle.updated').length, 1);
+  assert.equal((await s.req('/assistant/pool')).data.balanceCredits, before - 6);
+});
+
+test('photo prep uses the shared cap and never calls the provider when disabled', async () => {
+  const s = await setup();
+  const v = await s.addVehicle({photoUrls: ['https://example.test/photo.jpg']});
+  const body = {skill: PHOTO_PREP_SKILL, surface: 'vehicle', id: v.id, version: v.version, images: [], descriptionOnly: true};
+  const run = () => s.req('/assistant/skills/run', body);
+  await s.req('/assistant/admin/settings', {perRequestCreditCap: 2}, 'A', 'PUT');
+  const capped = await run();
+  assert.equal(capped.data.creditsUsed, 0);
+  assert.match(capped.data.reply, /credit cap/);
+  await s.req('/assistant/admin/settings', {disabled: true}, 'A', 'PUT');
+  assert.equal((await run()).status, 403);
+  assert.equal((await s.req(`/assistant/skills?surface=vehicle&id=${v.id}`)).status, 403);
+  assert.equal(s.provider.seen.length, 0);
 });

@@ -2,7 +2,7 @@ import { inventoryCsvRows, inventoryCsvHeaders } from '@freedms/shared';
 import type { ImportPreview, ImportResult, ImportRowResult, InventoryImport } from '@freedms/shared';
 import { escapeHtml as e } from './format';
 import type { UI } from './desking';
-const reasons = (row: {errors?: ImportRowResult['errors']; duplicate?: ImportRowResult['duplicate']}) => [...(row.errors ?? []).map(err => `${err.field}: ${err.message}`), ...(row.duplicate ? [row.duplicate.reason] : [])].join(' ');
+const reasons = (row: {errors?: ImportRowResult['errors']; duplicate?: ImportRowResult['duplicate']; warnings?: ImportRowResult['warnings']}) => [...(row.errors ?? []).map(err => `${err.field}: ${err.message}`), ...(row.duplicate ? [row.duplicate.reason] : []), ...(row.warnings ?? [])].join(' ');
 export async function importRoute(ui: UI): Promise<void> {
   ui.shell(`<a class="back" href="#/">← Inventory</a><h1>Import inventory</h1><p>Preview first. Nothing is written until you confirm. CSV cost and price are in dollars. Common header aliases are accepted. Stock number is optional: missing or blank values become IMP- plus the last 8 characters of the uppercase VIN, with -2, -3, … added if needed for uniqueness.</p><form id="import-form" class="card"><label>Vehicle CSV<input id="import-file" type="file" accept=".csv,text/csv"></label><label><input id="import-enrich" type="checkbox"> Fill missing year/make/model from VIN decode</label><button id="import-preview">Preview import</button></form><p id="import-error" role="alert"></p><section id="import-results" aria-live="polite"></section><section class="card"><h2>Import history</h2><div id="import-history">Loading imports…</div></section>`);
   const file = document.querySelector<HTMLInputElement>('#import-file')!;

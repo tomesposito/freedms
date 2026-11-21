@@ -17,7 +17,7 @@ async function setup() {
   const create = async (invites = payload().invites) => {
     const result = await localSession(JSON.stringify({...payload(), invites}), repositories, tokens, now);
     assert.equal(result.statusCode, 201);
-    return JSON.parse(result.body).data as {token: string; invites: Invite[]};
+    return JSON.parse(result.body).data as {token: string; invites: (Invite & {token: string})[]};
   };
   const call = async (path: string, token = '', method = 'GET', body?: unknown) => {
     const result = await handler({path, method, body: body === undefined ? undefined : JSON.stringify(body), ...localAuth(path, false, token, tokens)});
@@ -34,6 +34,8 @@ test('wizard provisions the profile, admin email and seven-day pending invites w
   for (const invite of created.invites) {
     assert.equal(invite.status, 'pending'); assert.equal(invite.expiresAt, '2026-11-01T12:00:00.000Z');
     assert.equal(invite.tokenHash, createHash('sha256').update(invite.token).digest('hex'));
+    const persisted = (await repo.crmGet('invite', invite.id))!;
+    assert.equal('token' in persisted, false); assert.equal(persisted.tokenHash, invite.tokenHash);
     assert.deepEqual((await s.call(`/invite/${invite.token}`)).data, {valid: true, dealership: 'Test Motors', inviter: 'Owner', name: invite.name, email: invite.email, role: invite.role});
   }
   const events = (await repo.events()).filter(e => e.type === 'invite.created'); assert.equal(events.length, 2);
@@ -64,7 +66,7 @@ test('reissue rotates credentials, stale writes fail, revoke is final, and mutat
   assert.equal((await s.call(`/invite/${reissued.data.token}`)).data.valid, true);
   assert.equal((await s.call(`${path}/revoke`, a.token, 'POST', {version: 1})).status, 409);
   const revoked = await s.call(`${path}/revoke`, a.token, 'POST', {version: 2}); assert.equal(revoked.status, 200);
-  assert.equal(revoked.data.token, ''); assert.equal(revoked.data.tokenHash, ''); assert.equal(revoked.data.status, 'revoked');
+  assert.equal('token' in revoked.data, false); assert.equal(revoked.data.tokenHash, ''); assert.equal(revoked.data.status, 'revoked');
   assert.equal((await s.call(`/invite/${reissued.data.token}`)).data.valid, false);
   for (const action of ['reissue', 'revoke']) assert.equal((await s.call(`${path}/${action}`, a.token, 'POST', {version: 3})).status, 409);
   const events = await s.repositories.forTenant(old.tenantId).events();
@@ -97,7 +99,7 @@ test('acceptance is atomic, single-use, role-fixed, isolated and signs in as sta
   assert.equal((await repo.tenant())!.inviteAcceptedAt, now.toISOString());
   assert.equal((await other.tenant())!.inviteAcceptedAt, undefined);
   assert.equal(accepted.status, 'accepted'); assert.equal(accepted.acceptedAt, now.toISOString()); assert.equal(accepted.acceptedName, 'New Name');
-  assert.equal(accepted.token, ''); assert.equal(accepted.tokenHash, '');
+  assert.equal('token' in accepted, false); assert.equal(accepted.tokenHash, '');
   assert.deepEqual(await repo.crmList('invite'), invitesBefore.map(row => row.id === accepted.id ? accepted : row));
   const rows = await repo.workspaceUsers(); assert.equal(rows.length, 2);
   assert.equal(rows[1].user.id, accepted.acceptedUserId); assert.equal(rows[1].membership.role, 'staff'); assert.equal(rows[1].membership.active, true);
@@ -118,7 +120,7 @@ test('acceptance is atomic, single-use, role-fixed, isolated and signs in as sta
 });
 test('revoked, expired and unknown acceptance links refuse; existing members keep pending invites', async () => {
   const s = await setup(), a = await s.create(), [invite, expiring] = a.invites;
-  const accept = (i: Invite) => s.call(`/invite/${i.token}/accept`, '', 'POST', {name: i.name, email: i.email});
+  const accept = (i: Invite & {token: string}) => s.call(`/invite/${i.token}/accept`, '', 'POST', {name: i.name, email: i.email});
   await s.call('/admin/users', a.token, 'POST', {name: 'Existing', email: invite.email, role: 'staff'});
   assert.equal((await accept(invite)).data.outcome, 'already-member');
   const repo = s.repositories.forTenant(invite.tenantId);
@@ -154,6 +156,7 @@ test('Dynamo acceptance conditions invite and membership guard in the same trans
   assert.equal(items[1].Put?.ExpressionAttributeValues?.[':v'], invite.version);
   assert.equal(items[1].Put?.ConditionExpression, '#d.#v = :v');
   assert.equal(items[1].Put?.Item?.data.status, 'accepted');
+  assert.equal('token' in items[1].Put!.Item!.data, false);
   assert.equal(items[3].Put?.Item?.data.role, 'staff');
   assert.deepEqual(items.slice(4, 6).map(i => i.Put?.Item?.data.type), ['invite.accepted', 'user.added']);
   assert.equal(items[6].Put?.Item?.SK, 'PROFILE');
@@ -172,12 +175,14 @@ test('post-signup invitations are tenant-scoped, seven-day, single-use and role-
   const input = {name: 'New colleague', email: ' NEW@example.test ', role: 'staff'};
   const created = await s.call('/admin/invites', a.token, 'POST', input);
   assert.equal(created.status, 201);
-  const invite: Invite = created.data;
+  const invite: Invite & {token: string} = created.data;
   assert.equal(invite.name, input.name); assert.equal(invite.email, 'new@example.test');
   assert.equal(invite.tenantId, tenantId); assert.equal(invite.status, 'pending');
   assert.equal(invite.expiresAt, new Date(now.getTime() + 7 * 86400000).toISOString());
   assert.equal(invite.tokenHash, createHash('sha256').update(invite.token).digest('hex'));
-  assert.deepEqual((await s.call('/admin/invites', a.token)).data, [invite]);
+  const {token: _token, ...stored} = invite;
+  assert.deepEqual(await repo.crmGet('invite', invite.id), stored);
+  assert.deepEqual((await s.call('/admin/invites', a.token)).data, [stored]);
   assert.deepEqual((await s.call('/admin/invites', b.token)).data, []);
   for (const action of ['reissue', 'revoke']) assert.equal((await s.call(`/admin/invites/${invite.id}/${action}`, b.token, 'POST', {version: 1})).status, 404);
   // The same address in another workspace must not block creation.
@@ -284,4 +289,34 @@ test('Dynamo signup writes identity, acceptance and metadata event in one condit
   assert.equal(record.email, 'owner@example.test');
   assert.ok(items.every((i: any) => i.Put.Item.PK === `TENANT#${record.tenantId}` && i.Put.ConditionExpression === 'attribute_not_exists(PK)'));
   assert.equal(items.filter((i: any) => i.Put.Item.data.type === 'terms-acceptance.created').length, 1);
+});
+
+// Seed directly through the repository to represent records written before hash-only storage.
+test('legacy plaintext is hidden by lists and removed by reissue, revoke and acceptance', async () => {
+  for (const action of ['reissue', 'revoke', 'accept']) {
+    const s = await setup(), a = await s.create(), invite = a.invites[0];
+    const repo = s.repositories.forTenant(invite.tenantId);
+    await repo.crmWrite([{record: {...invite, version: 2}, expectedVersion: 1,
+      event: {id: `legacy-${action}`, tenantId: invite.tenantId, actorId: 'legacy', aggregateId: invite.id,
+        aggregateVersion: 2, type: 'invite.updated', occurredAt: now.toISOString(), deliveryStatus: 'pending'}}]);
+    assert.equal('token' in (await repo.crmGet('invite', invite.id))!, true);
+    const listed = (await s.call('/admin/invites', a.token)).data;
+    assert.ok(listed.every((row: object) => !('token' in row)));
+    if (action === 'accept') {
+      assert.equal((await s.call(`/invite/${invite.token}/accept`, '', 'POST', {name: invite.name, email: invite.email})).data.outcome, 'accepted');
+    } else {
+      const result = await s.call(`/admin/invites/${invite.id}/${action}`, a.token, 'POST', {version: 2});
+      assert.equal(result.status, 200);
+      if (action === 'reissue') {
+        const rotated = (await repo.crmGet('invite', invite.id))!;
+        assert.equal('token' in rotated, false);
+        assert.equal(rotated.tokenHash, result.data.tokenHash);
+        assert.equal(result.data.tokenHash, createHash('sha256').update(result.data.token).digest('hex'));
+        assert.equal((await s.call(`/invite/${result.data.token}`)).data.valid, true);
+        assert.equal((await s.call(`/invite/${result.data.token}/accept`, '', 'POST', {name: invite.name, email: invite.email})).data.outcome, 'accepted');
+      }
+    }
+    assert.equal('token' in (await repo.crmGet('invite', invite.id))!, false);
+    assert.equal((await s.call(`/invite/${invite.token}`)).data.valid, false);
+  }
 });

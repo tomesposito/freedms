@@ -4,6 +4,13 @@ export class LocalAssistantProvider implements AssistantProvider {
   configured = true;
   async converse(messages: AssistantMessage[]): Promise<AssistantMessage> {
     const last = messages.at(-1)?.content ?? [];
+    if (last[0]?.text?.startsWith('Photo prep observations.') && last.some(block => block.image)) {
+      return {role: 'assistant', content: [{text: JSON.stringify({label: 'exterior', coverScore: 80, visible: 'Exterior shown'})}]};
+    }
+    if (last[0]?.text?.startsWith('Photo prep description.')) {
+      const {year, make, model, trim} = JSON.parse(last[0].text.split('Data: ').at(-1)!);
+      return {role: 'assistant', content: [{text: [year, make, model, trim].filter(Boolean).join(' ')}]};
+    }
     const result = last.find(block => block.toolResult)?.toolResult;
     if (result) {
       if (result.status === 'error') return {role: 'assistant', content: [{text: 'Local test double: the inventory lookup failed.'}]};

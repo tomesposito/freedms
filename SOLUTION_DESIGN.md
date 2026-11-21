@@ -280,6 +280,17 @@ audit, subscriptions, and agent context without requiring full event sourcing.
 Keep sensitive documents and unnecessary personal fields out of event payloads;
 retention/deletion must also cover logs, backups, and derived stores.
 
+Scheduled webhook discovery uses secret-free per-endpoint rows under
+`OPERATOR#WEBHOOKS`, maintained in the endpoint/outbox transaction. A durable
+migration marker gates a one-time, paginated legacy scan and conditional backfill;
+the Scan permission remains for that compatibility path. Dispatch queries event
+pages with server-side subscription and terminal-pair filters, then uses delivery
+point reads to retain only claimable pairs. Terminal saves atomically mark the
+corresponding event/endpoint pair; legacy terminal pairs acquire that marker on
+first lookup. Exact `remaining` counts require examining all candidate pairs,
+while retained memory and transferred dispatch results exclude terminal history.
+Generic event and delivery history APIs retain their existing contracts.
+
 Tenant identity comes from authenticated membership, never a client-supplied ID
 alone. Enforce tenant scope in database access and authorization, object access,
 search, caches, queues, exports, integrations, and agent tools. Test cross-tenant

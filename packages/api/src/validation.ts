@@ -27,7 +27,7 @@ export function version(value: unknown): number {
 }
 export function vehicleInput(value: unknown, now: Date): VehicleInput {
   const b = object(value);
-  onlyKeys(b, ['stockNumber', 'vin', 'year', 'mileage', 'make', 'model', 'trim', 'status', 'listPrice', 'cost', 'reconCosts', 'dateStocked', 'location', 'notes']);
+  onlyKeys(b, ['photoUrls', 'listingDescription', 'stockNumber', 'vin', 'year', 'mileage', 'make', 'model', 'trim', 'status', 'listPrice', 'cost', 'reconCosts', 'dateStocked', 'location', 'notes']);
   if (typeof b.year !== 'number' || !Number.isInteger(b.year) || b.year < 1886 || b.year > now.getUTCFullYear() + 2) throw invalid('Invalid model year.');
   if (!vehicleStatuses.includes(b.status as VehicleInput['status'])) throw invalid('Invalid vehicle status.');
   const mileage = b.mileage ?? null;
@@ -36,7 +36,9 @@ export function vehicleInput(value: unknown, now: Date): VehicleInput {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStocked) || !Number.isFinite(Date.parse(dateStocked)) || new Date(dateStocked).toISOString().slice(0, 10) !== dateStocked || dateStocked > now.toISOString().slice(0, 10)) throw invalid('Date stocked must be a valid date no later than today (UTC).');
   if (!Array.isArray(b.reconCosts) || b.reconCosts.length > 100) throw invalid('Recon costs must be an array with at most 100 line items.');
   const reconCosts = b.reconCosts.map(value => { const row = object(value); onlyKeys(row, ['description', 'amount']); return {description: text(row.description, 'Recon description', 200), amount: money(row.amount, 'Recon amount')}; });
-  return {stockNumber: text(b.stockNumber, 'Stock number', 50), vin: vin(b.vin), year: b.year, mileage,
+  const photos = b.photoUrls;
+  if (photos !== undefined && (!Array.isArray(photos) || photos.length > 20 || photos.some(url => typeof url !== 'string' || url.length > 2000 || !/^https?:\/\//i.test(url)))) throw invalid('Photos must be at most 20 HTTP(S) URLs.');
+  return {...(b.listingDescription === undefined ? {} : {listingDescription: text(b.listingDescription, 'Listing description', 5000, true)}), ...(photos === undefined ? {} : {photoUrls: photos as string[]}), stockNumber: text(b.stockNumber, 'Stock number', 50), vin: vin(b.vin), year: b.year, mileage,
     make: text(b.make, 'Make'), model: text(b.model, 'Model'), trim: text(b.trim, 'Trim', 120, true), status: b.status as VehicleInput['status'],
     listPrice: money(b.listPrice, 'List price'), cost: money(b.cost, 'Cost'), reconCosts, dateStocked,
     location: text(b.location, 'Location', 200, true), notes: text(b.notes, 'Notes', 10000, true)};

@@ -1,4 +1,5 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
 import type { MfaRecord, OutboxEvent, Principal, PublicMfaStatus } from '@freedms/shared';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
@@ -6,7 +7,29 @@ import type { TenantRepository } from './repository.js';
 import { invalid, onlyKeys } from './validation.js';
 import { generateTotpSecret, otpauthUrl, verifyTotp } from './totp.js';
 const normalize = (code: string) => code.replace(/[-\s]/g, '').toUpperCase();
-const hash = (code: string) => createHash('sha256').update(normalize(code)).digest('hex');
+const scryptV1 = {N: 16384, r: 8, p: 1};
+const deriveKey = promisify((code: string, salt: Buffer, callback: (error: Error | null, key: Buffer) => void) => scrypt(code, salt, 32, scryptV1, callback));
+async function hashRecoveryCode(code: string): Promise<string> {
+  const salt = randomBytes(16);
+  const key = await deriveKey(normalize(code), salt);
+  return `scrypt:v1:${salt.toString('hex')}:${key.toString('hex')}`;
+}
+async function matchRecoveryCode(code: string, hashes: string[]): Promise<number> {
+  const candidate = normalize(code);
+  let legacyKey: Buffer | undefined;
+  for (const [index, entry] of hashes.entries()) {
+    const match = /^scrypt:v1:([0-9a-f]{32}):([0-9a-f]{64})$/.exec(entry);
+    if (match) {
+      const key = await deriveKey(candidate, Buffer.from(match[1], 'hex'));
+      if (timingSafeEqual(key, Buffer.from(match[2], 'hex'))) return index;
+    } else if (/^[0-9a-f]{64}$/i.test(entry)) {
+      // Read-only compatibility until the user's next recovery-code regeneration.
+      legacyKey ??= createHash('sha256').update(candidate).digest();
+      if (timingSafeEqual(legacyKey, Buffer.from(entry, 'hex'))) return index;
+    }
+  }
+  return -1;
+}
 const recoveryAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function recoveryCodes(): string[] {
   const codes = new Set<string>();
@@ -62,8 +85,9 @@ export async function mfa(request: ApiRequest, principal: Principal, repo: Tenan
   const allowRecovery = action === 'verify' || action === 'disable';
   if (typeof code !== 'string' || (!/^\d{6}$/.test(code) && !(allowRecovery && /^[A-HJ-NP-Z2-9]{8}$/.test(normalize(code))))) throw invalid('Enter a six-digit TOTP code or, where supported, a recovery code.');
   const step = verifyTotp(action === 'enable' ? record.pendingSecret! : record.secret!, code, now);
-  const recoveryIndex = allowRecovery ? record.recoveryHashes.indexOf(hash(code)) : -1;
-  if ((step === null || (record.lastTotpStep !== null && step <= record.lastTotpStep)) && recoveryIndex < 0) {
+  const freshTotp = step !== null && (record.lastTotpStep === null || step > record.lastTotpStep);
+  const recoveryIndex = !freshTotp && allowRecovery ? await matchRecoveryCode(code, record.recoveryHashes) : -1;
+  if (!freshTotp && recoveryIndex < 0) {
     record.failedAttempts++;
     if (record.failedAttempts >= 5) { record.lockedUntil = new Date(now.getTime() + 15 * 60000).toISOString(); record.failedAttempts = 0; }
     // mfa.verified records verification attempts as well as successes; no code or
@@ -77,7 +101,7 @@ export async function mfa(request: ApiRequest, principal: Principal, repo: Tenan
   if (action === 'disable') { Object.assign(record, cleared); await save('mfa.disabled'); return response(200, {data: publicMfaStatus(userId, record)}); }
   if (action === 'enable' || action === 'recovery-codes') {
     if (action === 'enable') { record.enabled = true; record.secret = record.pendingSecret; record.pendingSecret = null; }
-    const codes = recoveryCodes(); record.recoveryHashes = codes.map(hash);
+    const codes = recoveryCodes(); record.recoveryHashes = await Promise.all(codes.map(hashRecoveryCode));
     await save(action === 'enable' ? 'mfa.enabled' : 'mfa.recovery_regenerated');
     return response(200, {data: {enabled: true, recoveryCodes: codes}});
   }

@@ -59,16 +59,17 @@ export async function submitAccessRequest(request: ApiRequest, repositories: Rep
   const message = text(body.message ?? '', 'Message', 2000, true);
   const repository = repositories.forTenant(OPERATOR_TENANT_ID);
   const existing = await repository.accessRequest(email);
+  if (existing) return response(201, {data: {received: true}});
   const timestamp = now.toISOString();
   const record: AccessRequest = {
-    id: existing?.id ?? randomUUID(), tenantId: OPERATOR_TENANT_ID, email,
+    id: randomUUID(), tenantId: OPERATOR_TENANT_ID, email,
     contactName, dealershipName, phone, inventorySize, currentDms, message,
-    status: existing?.status ?? 'pending', handledAt: existing?.handledAt ?? null,
-    version: (existing?.version ?? 0) + 1, createdAt: existing?.createdAt ?? timestamp, updatedAt: timestamp
+    status: 'pending', handledAt: null,
+    version: 1, createdAt: timestamp, updatedAt: timestamp
   };
-  await repository.saveAccessRequest(record, existing?.version ?? 0);
+  await repository.saveAccessRequest(record, 0);
   const notifyTo = mail?.notifyTo?.trim();
-  if (!existing && mail?.sender.configured && notifyTo) {
+  if (mail?.sender.configured && notifyTo) {
     try {
       await mail.sender.send({
         to: notifyTo, replyTo: record.email,

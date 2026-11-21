@@ -847,7 +847,7 @@ const documentInput = {name: 'Proof.txt', type: 'other', content: Buffer.from('o
 const userInput = {name: 'New user', email: 'new@example.test', role: 'staff'};
 const webhookInput = {url: 'https://receiver.example.test/events', eventTypes: ['vehicle.created']};
 const feedInput = {formats: ['csv', 'json'], includedStatuses: ['available'], requirePrice: true, schedule: 'manual'};
-const reportInput = {name: 'Inventory', dataset: 'inventory', columns: ['stockNumber', 'vehicle'], from: '2020-01-01', to: '2026-10-30'};
+const reportInput = {name: 'Inventory', dataset: 'inventory', columns: ['stockNumber', 'vehicle'], from: '2026-01-01', to: '2026-10-30'};
 async function staffToken(s: Awaited<ReturnType<typeof setup>>) {
   const user = data(await s.call('create_user', {...userInput, email: 'staff76@example.test'}));
   const jwt = token({sub: user.userId});
@@ -910,12 +910,12 @@ test('admin MCP user and invite mutations preserve confirmations, last admin and
   assert.equal((await repo.membership(user.userId))!.active, true);
   const input = {...userInput, email: 'invite@example.test'};
   let invite = data(await s.call('invite_user', input)); assert.ok(invite.token);
-  assert.deepEqual(await repo.crmGet('invite', invite.id), invite);
+  assert.deepEqual(await repo.crmGet('invite', invite.id), Object.fromEntries(Object.entries(invite).filter(([key]) => key !== 'token')));
   refused(await s.call('invite_user', input), 'CONFLICT');
   refused(await s.call('invite_user', userInput), 'CONFLICT');
   const oldToken = invite.token;
   invite = data(await s.call('reissue_invite', {id: invite.id, version: invite.version}));
-  assert.notEqual(invite.token, oldToken); assert.deepEqual(await repo.crmGet('invite', invite.id), invite);
+  assert.notEqual(invite.token, oldToken); assert.deepEqual(await repo.crmGet('invite', invite.id), Object.fromEntries(Object.entries(invite).filter(([key]) => key !== 'token')));
   const revokeBefore = (await repo.events()).length;
   for (const confirm of [undefined, false, 'true']) refused(await s.call('revoke_invite', {id: invite.id, version: invite.version, confirm}), 'VALIDATION');
   assert.equal((await repo.events()).length, revokeBefore);
@@ -961,6 +961,7 @@ test('settings MCP preserves versions, webhook secret visibility, stub dispatch 
 
 test('reports MCP saves definitions and exports every CSV byte for byte as REST', async () => {
   const s = await setup(), repo = s.repositories.forTenant('A'), staff = await staffToken(s), before = (await repo.events()).length;
+  refused(await s.call('create_saved_report', {...reportInput, from: '2020-01-01'}, staff), 'VALIDATION');
   let saved = data(await s.call('create_saved_report', reportInput, staff));
   assert.deepEqual(await repo.crmGet('saved-report', saved.id), saved);
   const update = {...reportInput, name: 'Renamed', id: saved.id, version: 1};
@@ -1045,7 +1046,7 @@ test('parity MCP foreign IDs refuse without events and collection reads match te
     for (const id of [doc.id, user.userId, invite.id, endpoint.id, saved.id, run.id]) assert.ok(!result.content[0].text.includes(id), t.name);
   }
   assert.deepEqual(await repo.events(), before); assert.deepEqual(await other.events(), otherBefore);
-  assert.deepEqual(await other.crmGet('document', doc.id), doc); assert.deepEqual(await other.crmGet('invite', invite.id), invite);
+  assert.deepEqual(await other.crmGet('document', doc.id), doc); assert.deepEqual(await other.crmGet('invite', invite.id), Object.fromEntries(Object.entries(invite).filter(([key]) => key !== 'token')));
   assert.deepEqual(await other.webhookEndpoint(endpoint.id), endpoint); assert.deepEqual(await other.crmGet('saved-report', saved.id), saved);
   assert.equal((await other.membership(user.userId))!.active, true); assert.deepEqual(await other.feedRun(run.id), run);
   // ID-free writes and singleton settings always bind to A, even when B has the same email/config.

@@ -14,6 +14,7 @@ import '../packages/web/test/analytics.test.js';
 
 import '../packages/api/test/import.test.js';
 import '../packages/api/test/feed.test.js';
+import '../packages/api/test/public-inventory.test.js';
 import '../packages/web/test/feed.test.js';
 import '../packages/api/test/webhooks.test.js';
 import '../packages/web/test/webhooks.test.js';
@@ -99,3 +100,7 @@ import '../packages/api/test/search.test.js';
 import '../packages/web/test/command-bar.test.js';
 
 import '../packages/web/test/overview.test.js';
+
+import '../packages/api/test/facebook-feed.test.js';
+
+import '../packages/api/test/dealer-site.test.js';

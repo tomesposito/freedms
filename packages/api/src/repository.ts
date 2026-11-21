@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry, AssistantWaitlistEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
 import type { McpGrant, Idea } from '@freedms/shared';
@@ -62,6 +63,7 @@ export interface TenantRepository {
   webhookEndpoints(): Promise<WebhookEndpoint[]>;
   webhookEndpoint(id: string): Promise<WebhookEndpoint | undefined>;
   saveWebhookEndpoint(record: WebhookEndpoint, expectedVersion: number, event: OutboxEvent): Promise<void>;
+  webhookDispatchCandidates(endpoints: WebhookEndpoint[], now: Date): Promise<WebhookDispatchCandidate[]>;
   webhookDeliveries(): Promise<WebhookDelivery[]>;
   /** Atomically create, or replace the exact stale pending claim read by the caller. */
   claimWebhookDelivery(record: WebhookDelivery, staleUpdatedAt?: string): Promise<boolean>;
@@ -427,7 +429,7 @@ export function assertAssistantCycle(tenantId: string, record: AssistantCycle, e
 }
 export function assertAssistantLedger(tenantId: string, record: AssistantLedgerEntry) {
   assertScope(tenantId, record);
-  const prices = {read: 1, write: 2, photo: 3, answer: 1};
+  const prices = {read: 1, write: 2, photo: 3, answer: 1, usage: 0};
   if (prices[record.actionClass] !== record.credits || !record.action || !record.actorId ||
       !Number.isFinite(Date.parse(record.cycleStart)) || !Number.isFinite(Date.parse(record.createdAt)) ||
       [record.inputTokens, record.outputTokens, record.cacheReadTokens, record.cacheWriteTokens].some(n => !Number.isSafeInteger(n) || n < 0)) throw new Error('Invalid assistant ledger');
@@ -453,7 +455,10 @@ export interface CommandSearchRows {
   deals: {deal: Deal; customer?: Customer; vehicle?: Vehicle}[];
 }
 
-/** Consume repository order without retaining rejected rows or full join tables. */
+export const COMMAND_SEARCH_MAX_EXAMINED_PER_PASS = 100;
+export const COMMAND_SEARCH_MAX_JOIN_GETS = 50;
+
+/** Consume bounded repository order, retaining only bounded join caches. */
 export async function commandSearchSelection(
   search: string,
   rows: (kind: 'customer' | 'lead' | 'deal') => AsyncIterable<CrmEntity> | Iterable<CrmEntity>,
@@ -462,7 +467,18 @@ export async function commandSearchSelection(
   relatedGet: (kind: 'lead' | 'deal', id: string) => Promise<Lead | Deal | undefined>,
 ): Promise<CommandSearchRows> {
   const result: CommandSearchRows = {people: [], deals: []};
-  for await (const row of rows('customer')) {
+  // Without a search index, bounded passes deliberately return partial results.
+  async function* boundedRows(kind: 'customer' | 'lead' | 'deal') {
+    let examined = 0;
+    for await (const row of rows(kind)) {
+      yield row;
+      if (++examined === COMMAND_SEARCH_MAX_EXAMINED_PER_PASS) break;
+    }
+  }
+  const customers = new Map<string, Customer | undefined>();
+  const vehicles = new Map<string, Vehicle | undefined>();
+  for await (const row of boundedRows('customer')) {
+    if (row.kind === 'customer') customers.set(row.id, row);
     if (row.kind !== 'customer' || ![row.name, row.phone, row.email].join(' ').toLowerCase().includes(search)) continue;
     result.people.push({customer: row});
     if (result.people.length === 5) break;
@@ -470,7 +486,7 @@ export async function commandSearchSelection(
   for (const kind of ['lead', 'deal'] as const) {
     const pending = new Set(result.people.map(p => p.customer.id));
     if (!pending.size) continue;
-    for await (const row of rows(kind)) {
+    for await (const row of boundedRows(kind)) {
       if ((row.kind !== 'lead' && row.kind !== 'deal') || !pending.has(row.customerId)) continue;
       const person = result.people.find(p => p.customer.id === row.customerId)!;
       // Discover the first reference in list order, then resolve only that row.
@@ -481,13 +497,28 @@ export async function commandSearchSelection(
       if (!pending.size) break;
     }
   }
-  for await (const row of rows('deal')) {
+  let joinGets = 0;
+  // Deals carry neither customer name nor stock number, so joins must precede
+  // matching. Reuse examined customers and cache even missing joins within budget.
+  for await (const row of boundedRows('deal')) {
     if (row.kind !== 'deal') continue;
-    const customer = await customerGet(row.customerId);
-    const vehicle = await vehicleGet(row.vehicleId);
-    if (![customer?.name, vehicle?.stockNumber].join(' ').toLowerCase().includes(search)) continue;
-    result.deals.push({deal: row, customer, vehicle});
-    if (result.deals.length === 5) break;
+    if (!customers.has(row.customerId)) {
+      if (joinGets === COMMAND_SEARCH_MAX_JOIN_GETS) break;
+      joinGets++;
+      customers.set(row.customerId, await customerGet(row.customerId));
+    }
+    if (!vehicles.has(row.vehicleId)) {
+      if (joinGets === COMMAND_SEARCH_MAX_JOIN_GETS) break;
+      joinGets++;
+      vehicles.set(row.vehicleId, await vehicleGet(row.vehicleId));
+    }
+    const customer = customers.get(row.customerId);
+    const vehicle = vehicles.get(row.vehicleId);
+    if ([customer?.name, vehicle?.stockNumber].join(' ').toLowerCase().includes(search)) {
+      result.deals.push({deal: row, customer, vehicle});
+      if (result.deals.length === 5) break;
+    }
+    if (joinGets === COMMAND_SEARCH_MAX_JOIN_GETS) break;
   }
   return result;
 }
@@ -506,4 +537,28 @@ export async function searchRecords(repo: TenantRepository, query: string) {
       href: lead ? `#/leads/${lead.id}` : deal ? `#/deals/${deal.id}` : `#/leads?customerId=${encodeURIComponent(c.id)}`})),
     deals: rows.deals.map(({deal: d, customer, vehicle}) => ({id: d.id, title: customer?.name ?? 'Customer unavailable', meta: `${vehicle?.stockNumber ?? 'Vehicle unavailable'} · ${d.status}`, href: `#/deals/${d.id}`})),
   };
+}
+
+export function deliveryId(endpointId: string, eventId: string): string {
+  const bytes = createHash('sha256').update(JSON.stringify([endpointId, eventId])).digest().subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x80; // UUID v8: application-defined hash.
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export interface WebhookDispatchCandidate {event: OutboxEvent; endpointId: string; previous?: WebhookDelivery}
+
+/** Keep only claimable pairs; exact remaining requires examining every candidate,
+ * even after the send limit is filled. Never retain terminal history. */
+export async function webhookCandidates(events: AsyncIterable<OutboxEvent> | Iterable<OutboxEvent>, endpoints: WebhookEndpoint[], now: Date,
+  lookup: (id: string) => Promise<WebhookDelivery | undefined>): Promise<WebhookDispatchCandidate[]> {
+  const pairs: WebhookDispatchCandidate[] = [];
+  for await (const event of events) for (const endpoint of endpoints) {
+    if (!endpoint.enabled || !endpoint.eventTypes.includes(event.type as import('@freedms/shared').WebhookEventType)) continue;
+    const previous = await lookup(deliveryId(endpoint.id, event.id));
+    if (previous && (previous.status !== 'pending' || !(Date.parse(previous.updatedAt) < now.getTime() - 15 * 60_000))) continue;
+    pairs.push({event, endpointId: endpoint.id, ...(previous ? {previous} : {})});
+  }
+  return pairs.sort((a, b) => a.event.occurredAt.localeCompare(b.event.occurredAt) || a.event.id.localeCompare(b.event.id) || a.endpointId.localeCompare(b.endpointId));
 }

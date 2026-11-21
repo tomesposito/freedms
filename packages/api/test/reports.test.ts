@@ -10,7 +10,7 @@ import { countLeads } from '../src/repository.js';
 import { MemoryRepositories } from '../src/memory.js';
 import { createHandler, type ApiRequest } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
-import { inventoryReport, salesReport, inventoryCsv, leadReport, leadCsv, salesCsv, soldDate, toCsv } from '../src/reports.js';
+import { dateRange, inventoryReport, salesReport, inventoryCsv, leadReport, leadCsv, salesCsv, soldDate, toCsv } from '../src/reports.js';
 
 function parseCsv(csv: string): string[][] {
   const rows: string[][] = []; let row: string[] = [], cell = '', quoted = false;
@@ -132,6 +132,37 @@ test('RFC 4180 escaping is conditional and round-trips commas, quotes, CR and LF
   const rows = [['plain', 'comma,value', 'a"b', 'CR\rvalue', 'LF\nvalue', 'both\r\nvalue', '', '-450.00']];
   assert.equal(toCsv(rows), 'plain,"comma,value","a""b","CR\rvalue","LF\nvalue","both\r\nvalue",,-450.00\r\n');
   assert.deepEqual(parseCsv(toCsv(rows)), rows);
+});
+
+test('toCsv neutralizes formula-leading cells before RFC 4180 escaping', () => {
+  const dangerous = ['=2+5+cmd', '@SUM(1+1)', '+2+2', '-2+2', ' =HYPERLINK(...)', '\t=2+2', '\r=2+2', ' @SUM(1+1)', ' \t=2+2', '\tplain', '\rplain'];
+  for (const cell of dangerous) {
+    const prefixed = `'${cell}`;
+    const expected = cell.includes('\r') ? `"${prefixed}"\r\n` : `${prefixed}\r\n`;
+    assert.equal(toCsv([[cell]]), expected);
+    assert.deepEqual(parseCsv(toCsv([[cell]])), [[prefixed]]);
+  }
+  assert.equal(toCsv([['=SUM(1,2)', '=HYPERLINK("url","label")']]), '"\'=SUM(1,2)","\'=HYPERLINK(""url"",""label"")"\r\n');
+});
+
+test('toCsv preserves plain numbers and ordinary text byte-for-byte', () => {
+  const cells = ['-450.00', '+450', '-450', '+450.00', '-0.50', '450.00', ' -450.00 ', 'plain', '', 'Pat Buyer', 'STOCK-123', '2026-10-01', "'=2+2"];
+  assert.equal(toCsv([cells]), cells.join(',') + '\r\n');
+  assert.deepEqual(parseCsv(toCsv([cells])), [cells]);
+});
+
+test('sales and accounting CSV builders neutralize buyer formulas and preserve JSON data', async () => {
+  const s = await setup();
+  await s.sell('2026-10-01', 1);
+  const data = await s.json<SalesReport>('/reports/sales');
+  data.rows[0].buyer = '=2+5+cmd';
+  data.rows[0].frontGross = -45000;
+  for (const accounting of [false, true]) {
+    const cells = parseCsv(salesCsv(data, accounting));
+    assert.equal(cells[1][2], "'=2+5+cmd");
+    assert.equal(cells[1][accounting ? 9 : 5], '-450.00');
+  }
+  assert.equal(data.rows[0].buyer, '=2+5+cmd');
 });
 
 test('sold date uses the last sold history entry in UTC, falling back to updatedAt', async () => {
@@ -427,4 +458,43 @@ test('overview settles source failures independently and sanitizes errors', asyn
   assert.equal(data.inventory.status, 'rejected');
   assert.equal(data.sales.status, 'fulfilled'); assert.equal(data.leads.status, 'fulfilled');
   assert.doesNotMatch(JSON.stringify(data), /private database/);
+});
+
+
+test('report routes enforce the inclusive 366-day limit before JSON or CSV generation', async () => {
+  const s = await setup();
+  const routes = ['sales', 'sales.csv', 'accounting.csv', 'overview', 'fixed-ops',
+    'turn', 'turn.csv', 'fi', 'fi.csv', 'custom', 'custom.csv', 'technicians', 'departments', 'forecasts']
+    .map(name => `/reports/${name}`)
+    .concat(['journal', 'trial-balance', 'departmental', 'commissions'].map(name => `/accounting/${name}`));
+  for (const path of routes) {
+    const extra = path.startsWith('/reports/custom') ? {dataset: 'sales', columns: 'soldDate'} : {};
+    for (const range of [{from: '2024-01-01', to: '2025-01-01'}, {from: '0001-01-01', to: '9999-12-31'}]) {
+      const result = await s.request(path, {...extra, ...range});
+      assert.equal(result.statusCode, 400, path);
+      assert.deepEqual(JSON.parse(result.body).error, {code: 'VALIDATION', message: 'Date range must be 366 days or fewer.'}, path);
+    }
+    assert.equal((await s.request(path, {...extra, from: '2024-01-01', to: '2024-12-31'})).statusCode, 200, path);
+  }
+  const data = await s.json<SalesReport>('/reports/sales', 'GET', undefined, {from: '2024-01-01', to: '2024-12-31'});
+  assert.equal(data.trend.length, 366);
+  assert.deepEqual(data.trend[0], {date: '2024-01-01', count: 0});
+  assert.deepEqual(data.trend.at(-1), {date: '2024-12-31', count: 0});
+  assert.ok(data.trend.every(bucket => bucket.count === 0));
+  // Treasury validates individual dates with this same single-sided call.
+  assert.deepEqual(dateRange({from: '0001-01-01'}), {from: '0001-01-01', to: null});
+  assert.deepEqual(dateRange({to: '9999-12-31'}), {from: null, to: '9999-12-31'});
+});
+
+test('sales trend rejects excessive literal and observed ranges before zero-filling', async () => {
+  const s = await setup(), repo = s.repositories.forTenant('A');
+  const error = {status: 400, code: 'VALIDATION', message: 'Date range must be 366 days or fewer.'};
+  for (const range of [{from: '0001-01-01', to: '9999-12-31'}, {from: '2024-01-01', to: '2025-01-01'}]) {
+    await assert.rejects(salesReport(repo, range), error);
+  }
+  await s.sell('2024-01-01', 1);
+  await s.sell('2025-01-01', 2);
+  for (const range of [{from: null, to: null}, {from: '2024-01-01', to: null}, {from: null, to: '2025-01-01'}]) {
+    await assert.rejects(salesReport(repo, range), error);
+  }
 });

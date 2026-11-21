@@ -1,3 +1,4 @@
+import { webhookCandidates } from './repository.js';
 import { assertAssistantBalance } from './assistant-settlement.js';
 import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry, AssistantWaitlistEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
@@ -183,6 +184,10 @@ export class MemoryRepositories implements RepositoryFactory {
         assertWebhookEndpoint(tenantId, record, expectedVersion, event); requireId(record.id); check(event);
         if ((s.webhookEndpoints.get(record.id)?.version ?? 0) !== expectedVersion) throw conflict();
         s.webhookEndpoints.set(record.id, structuredClone(record)); s.events.set(event.id, structuredClone(event));
+      },
+      webhookDispatchCandidates: (endpoints, now) => {
+        for (const endpoint of endpoints) assertScope(tenantId, endpoint);
+        return webhookCandidates(s.events.values(), endpoints, now, async id => s.webhookDeliveries.get(id)).then(pairs => structuredClone(pairs));
       },
       webhookDeliveries: async () => structuredClone([...s.webhookDeliveries.values()]),
       claimWebhookDelivery: async (record, staleUpdatedAt) => {

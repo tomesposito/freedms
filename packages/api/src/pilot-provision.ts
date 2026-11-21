@@ -4,7 +4,7 @@ import type { RepositoryFactory } from './repository.js';
 import { requireId } from './errors.js';
 import { emailAddress } from './users.js';
 import { text } from './validation.js';
-import { newInvite, inviteWrite } from './invites.js';
+import { newInvite, inviteWrite, storedInvite } from './invites.js';
 
 export interface PilotPerson { tenantId: string; name: string; email: string }
 export interface PilotIdentity { ensure(person: PilotPerson): Promise<string> }
@@ -64,7 +64,7 @@ export async function invitePilot(repositories: RepositoryFactory, identity: Pil
   const pending = (await repo.crmList('invite')).find(i => i.email === p.email && i.status === 'pending');
   if (pending) {
     if (pending.role !== input.role || pending.expiresAt <= now.toISOString()) throw new Error('Review the existing invitation in Users');
-    return pending;
+    return storedInvite(pending);
   }
   const invite = newInvite(p.tenantId, {...p, role: input.role}, now);
   await repo.crmWrite([inviteWrite(invite, actorId)]);

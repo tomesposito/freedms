@@ -1,3 +1,4 @@
+export * from './photo-prep.js';
 export * from './mcp-grants.js';
 export * from './ideas.js';
 import type { TermsAcceptance } from './legal.js';
@@ -35,7 +36,26 @@ export const vehicleStatuses = ['available', 'reserved', 'sold', 'in recon'] as 
 export type VehicleStatus = typeof vehicleStatuses[number];
 export interface ReconItem { description: string; amount: number }
 /** All money is integer USD cents. Dates stocked are UTC calendar dates. */
+export type VehiclePhotoType = 'image/jpeg' | 'image/png' | 'image/webp';
+export type VehiclePhoto =
+  | {source: 'url'; url: string}
+  | {source: 'upload'; id: string; name: string; type: VehiclePhotoType; size: number; createdAt: string; derivedFrom?: string};
+export const MAX_VEHICLE_PHOTOS = 20;
+export const MAX_VEHICLE_PHOTO_BYTES = 10 * 1024 * 1024;
+export const VEHICLE_PHOTO_PART_BYTES = 3 * 1024 * 1024;
+export function effectiveVehiclePhotos(vehicle: Pick<VehicleInput, 'photos' | 'photoUrls'>): VehiclePhoto[] {
+  return vehicle.photos ?? (vehicle.photoUrls ?? []).map(url => ({source: 'url', url}));
+}
+export type VehiclePhotoSize = 'display' | 'thumb' | 'hero' | 'feed';
+export function vehiclePhotoUrl(photo: VehiclePhoto, tenantId: string, base = '', size: VehiclePhotoSize = 'display'): string {
+  if (photo.source === 'url') return photo.url;
+  const suffix = size === 'thumb' || (size !== 'display' && photo.derivedFrom) ? `-${size}` : '';
+  return `${base}/public/${encodeURIComponent(tenantId)}/photos/${encodeURIComponent(photo.id + suffix)}`;
+}
 export interface VehicleInput {
+  photos?: VehiclePhoto[];
+  photoUrls?: string[];
+  listingDescription?: string;
   stockNumber: string; vin: string; year: number; make: string; model: string; trim: string;
   mileage: number | null;
   status: VehicleStatus; listPrice: number; cost: number; reconCosts: ReconItem[];
@@ -48,7 +68,7 @@ export interface VehicleView extends Vehicle { agingDays: number; reconTotal: nu
 export interface OutboxEvent {
   actorType?: 'agent';
   id: string; tenantId: string; actorId: string; aggregateId: string; aggregateVersion: number;
-  type: 'assistant-billing.updated' | 'assistant-plan.updated' | 'assistant-waitlist.updated' | 'assistant-waitlist.removed' | 'mcp-grant.recorded' | 'mcp-grant.revoked' | 'idea.submitted' | 'idea.status_changed' | 'terms-acceptance.created' | 'parts-reservation.created' | 'parts-reservation.updated' | 'privacy-request.created' | 'privacy-request.updated' | 'signature.created' | 'parts-po.created' | 'parts-po.updated' | 'parts-return.created' | 'pricing-matrix.created' | 'pricing-matrix.updated' | 'technician.created' | 'technician.updated' | 'labor-rate.created' | 'labor-rate.updated' | 'invite.created' | 'invite.updated' | 'invite.accepted' | 'part.created' | 'part.updated' | 'parts-sale.created' | 'service-appointment.created' | 'service-appointment.updated' | 'repair-order.created' | 'repair-order.updated' | 'compliance.created' | 'compliance.updated' | 'compliance-check.created' | 'saved-report.created' | 'saved-report.updated' | 'deal-share.created' | 'deal-share.updated' | 'share-response.created' | 'user.added' | 'user.role_changed' | 'user.deactivated' | 'user.reactivated' | 'accounting-lock.created' | 'accounting-lock.updated' | 'bank-reconciliation.created' | 'bank-reconciliation.updated' | 'credit-application.created' | 'credit-application.updated' | 'payoff-quote.created' | 'gl-account.created' | 'gl-account.updated' | 'journal-entry.created' | 'fi-product.created' | 'fi-product.updated' | 'retention.created' | 'retention.updated' | 'document.disposed' | 'mfa.setup' | 'mfa.enabled' | 'mfa.disabled' | 'mfa.reset' | 'mfa.recovery_regenerated' | 'mfa.verified' | 'webhook.created' | 'webhook.updated' | 'feed.configured' | 'feed.generated' | 'vehicle.imported' | 'document.created' | 'document.updated' | 'deal.created' | 'deal.updated' | 'settings.created' | 'settings.updated' | 'vehicle.created' | 'vehicle.updated' | 'vehicle.deleted' | 'tenant.created' | 'customer.created' | 'customer.updated' | 'lead.created' | 'lead.updated' | 'intake.created' | 'intake.updated';
+  type: 'website-settings.created' | 'website-settings.updated' | 'assistant-billing.updated' | 'assistant-plan.updated' | 'assistant-waitlist.updated' | 'assistant-waitlist.removed' | 'mcp-grant.recorded' | 'mcp-grant.revoked' | 'idea.submitted' | 'idea.status_changed' | 'terms-acceptance.created' | 'parts-reservation.created' | 'parts-reservation.updated' | 'privacy-request.created' | 'privacy-request.updated' | 'signature.created' | 'parts-po.created' | 'parts-po.updated' | 'parts-return.created' | 'pricing-matrix.created' | 'pricing-matrix.updated' | 'technician.created' | 'technician.updated' | 'labor-rate.created' | 'labor-rate.updated' | 'invite.created' | 'invite.updated' | 'invite.accepted' | 'part.created' | 'part.updated' | 'parts-sale.created' | 'service-appointment.created' | 'service-appointment.updated' | 'repair-order.created' | 'repair-order.updated' | 'compliance.created' | 'compliance.updated' | 'compliance-check.created' | 'saved-report.created' | 'saved-report.updated' | 'deal-share.created' | 'deal-share.updated' | 'share-response.created' | 'user.added' | 'user.role_changed' | 'user.deactivated' | 'user.reactivated' | 'accounting-lock.created' | 'accounting-lock.updated' | 'bank-reconciliation.created' | 'bank-reconciliation.updated' | 'credit-application.created' | 'credit-application.updated' | 'payoff-quote.created' | 'gl-account.created' | 'gl-account.updated' | 'journal-entry.created' | 'fi-product.created' | 'fi-product.updated' | 'retention.created' | 'retention.updated' | 'document.disposed' | 'mfa.setup' | 'mfa.enabled' | 'mfa.disabled' | 'mfa.reset' | 'mfa.recovery_regenerated' | 'mfa.verified' | 'webhook.created' | 'webhook.updated' | 'feed.configured' | 'feed.generated' | 'vehicle.imported' | 'document.created' | 'document.updated' | 'deal.created' | 'deal.updated' | 'settings.created' | 'settings.updated' | 'vehicle.created' | 'vehicle.updated' | 'vehicle.deleted' | 'tenant.created' | 'customer.created' | 'customer.updated' | 'lead.created' | 'lead.updated' | 'intake.created' | 'intake.updated';
   causeId?: string;
   action?: string;
   disposal?: {documentId: string; name: string; type: DealDocument['type']; dealId: string; disposedBy: string; disposedAt: string};
@@ -76,8 +96,9 @@ export interface Lead extends CrmRecord {
 export interface IntakeCredential extends CrmRecord { kind: 'intake'; hash: string }
 export * from './fi.js';
 import type { FiProduct } from './fi.js';
-export interface Invite extends CrmRecord { kind: 'invite'; name: string; email: string; role: Role; token: string; tokenHash: string; expiresAt: string; status: 'pending' | 'revoked' | 'accepted'; closedTokenHash?: string; acceptedAt?: string; acceptedUserId?: string; acceptedName?: string }
-export type CrmEntity = TermsAcceptance | PartsReservation | PrivacyRequest | SignatureRecord | PartsPurchaseOrder | PartsReturn | PricingMatrix | Technician | LaborRate | Invite | Part | PartsSale | ServiceAppointment | RepairOrder | ComplianceRecord | ComplianceCheck | SavedReport | DealShare | ShareResponse | AccountingLock | BankReconciliation | CreditApplication | PayoffQuote | GlAccount | JournalEntry | FiProduct | Customer | Lead | IntakeCredential | Deal | WorkspaceSettings | DealDocument | DocumentRetention;
+export interface Invite extends CrmRecord { kind: 'invite'; name: string; email: string; role: Role; tokenHash: string; expiresAt: string; status: 'pending' | 'revoked' | 'accepted'; closedTokenHash?: string; acceptedAt?: string; acceptedUserId?: string; acceptedName?: string }
+export interface WebsiteSettings extends CrmRecord { kind: 'website-settings'; storeName: string; logoUrl: string; phone: string; address: string; hours: string; about: string; primaryColor: string; storePhotoUrl: string }
+export type CrmEntity = WebsiteSettings | TermsAcceptance | PartsReservation | PrivacyRequest | SignatureRecord | PartsPurchaseOrder | PartsReturn | PricingMatrix | Technician | LaborRate | Invite | Part | PartsSale | ServiceAppointment | RepairOrder | ComplianceRecord | ComplianceCheck | SavedReport | DealShare | ShareResponse | AccountingLock | BankReconciliation | CreditApplication | PayoffQuote | GlAccount | JournalEntry | FiProduct | Customer | Lead | IntakeCredential | Deal | WorkspaceSettings | DealDocument | DocumentRetention;
 export interface LeadView extends Lead { customer: Customer; overdue: boolean }
 export function isOverdue(task: FollowUp, now: Date): boolean { return !task.done && !task.dismissed && Date.parse(task.dueAt) < now.getTime(); }
 export * from './reports.js';

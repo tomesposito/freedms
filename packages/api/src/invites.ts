@@ -28,19 +28,22 @@ export function validateOnboarding(input: Record<string, unknown>) {
   });
   return {email, profile, invites};
 }
-export function newInvite(tenantId: string, row: Pick<Invite, 'name' | 'email' | 'role'>, now: Date): Invite {
-  // Retain the plain token only in tenant-scoped, admin-only records for repeat copying.
-  // Public lookup verifies the hash and never returns either credential; events contain metadata only.
+/** Strip transient credentials and plaintext fields left by older stored records. */
+export function storedInvite(invite: Invite): Invite {
+  const {token: _token, ...record} = invite as Invite & {token?: string};
+  return record;
+}
+export function newInvite(tenantId: string, row: Pick<Invite, 'name' | 'email' | 'role'>, now: Date): Invite & {token: string} {
   return {...row, ...credentials(tenantId), id: randomUUID(), kind: 'invite', tenantId, version: 1, createdAt: now.toISOString(), updatedAt: now.toISOString(), expiresAt: new Date(now.getTime() + 7 * 86400000).toISOString(), status: 'pending'};
 }
 export function inviteWrite(record: Invite, actorId: string, expectedVersion = 0): CrmWrite {
-  return {record, expectedVersion, event: {id: randomUUID(), tenantId: record.tenantId, actorId, aggregateId: record.id, aggregateVersion: record.version, type: expectedVersion ? 'invite.updated' : 'invite.created', occurredAt: record.updatedAt, deliveryStatus: 'pending'}};
+  return {record: storedInvite(record), expectedVersion, event: {id: randomUUID(), tenantId: record.tenantId, actorId, aggregateId: record.id, aggregateVersion: record.version, type: expectedVersion ? 'invite.updated' : 'invite.created', occurredAt: record.updatedAt, deliveryStatus: 'pending'}};
 }
 export async function manageInvites(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date) {
   if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can manage invites.');
   const path = request.path.replace(/\/$/, ''), method = request.method.toUpperCase();
   onlyKeys(request.query ?? {}, []);
-  if (path === '/admin/invites' && method === 'GET') return response(200, {data: await repo.crmList('invite')});
+  if (path === '/admin/invites' && method === 'GET') return response(200, {data: (await repo.crmList('invite')).map(storedInvite)});
   if (path === '/admin/invites' && method === 'POST') {
     const body = parseBody(request.body); onlyKeys(body, ['name', 'email', 'role']);
     const name = text(body.name, 'Name'), email = emailAddress(body.email);
@@ -59,9 +62,10 @@ export async function manageInvites(request: ApiRequest, principal: Principal, r
   const body = parseBody(request.body); onlyKeys(body, ['version']);
   const old = await repo.crmGet('invite', requireId(match[1])); if (!old) throw missing();
   if (body.version !== old.version || old.status !== 'pending') throw conflict();
-  const record: Invite = {...old, version: old.version + 1, updatedAt: now.toISOString(), ...(match[2] === 'reissue' ? {...credentials(principal.tenantId), status: 'pending', expiresAt: new Date(now.getTime() + 7 * 86400000).toISOString()} : {status: 'revoked', closedTokenHash: old.tokenHash, token: '', tokenHash: ''})};
+  const fresh = match[2] === 'reissue' ? credentials(principal.tenantId) : undefined;
+  const record: Invite = {...storedInvite(old), version: old.version + 1, updatedAt: now.toISOString(), ...(match[2] === 'reissue' ? {tokenHash: fresh!.tokenHash, status: 'pending', expiresAt: new Date(now.getTime() + 7 * 86400000).toISOString()} : {status: 'revoked', closedTokenHash: old.tokenHash, tokenHash: ''})};
   await repo.crmWrite([inviteWrite(record, principal.userId, old.version)]);
-  return response(200, {data: record});
+  return response(200, {data: fresh ? {...record, token: fresh.token} : record});
 }
 /** Validate against the stored invite inside the repository write boundary. */
 export function acceptanceWrite(tenantId: string, current: Invite | undefined, supplied: Invite, user: User, rows: WorkspaceUser[], now: Date, tenant: Tenant | undefined) {
@@ -71,7 +75,7 @@ export function acceptanceWrite(tenantId: string, current: Invite | undefined, s
   if (rows.some(r => r.user.email?.toLowerCase() === current.email.toLowerCase() && r.membership.active)) return undefined;
   // Inactive identities require administrator review; never create a duplicate identity.
   if (rows.some(r => r.user.email?.toLowerCase() === current.email.toLowerCase())) throw new ApiError(409, 'INACTIVE_MEMBER', 'Ask your admin to reactivate your existing membership.');
-  const record: Invite = {...current, status: 'accepted', version: current.version + 1, updatedAt: now.toISOString(), acceptedAt: now.toISOString(), acceptedUserId: user.id, acceptedName: user.name, closedTokenHash: current.tokenHash, token: '', tokenHash: ''};
+  const record: Invite = {...storedInvite(current), status: 'accepted', version: current.version + 1, updatedAt: now.toISOString(), acceptedAt: now.toISOString(), acceptedUserId: user.id, acceptedName: user.name, closedTokenHash: current.tokenHash, tokenHash: ''};
   const member = {tenantId, userId: user.id, role: current.role, active: true, version: 1};
   const event = {...inviteWrite(record, user.id, current.version).event, type: 'invite.accepted' as const};
   const memberEvent = {...event, id: randomUUID(), aggregateId: user.id, aggregateVersion: 1, type: 'user.added' as const};

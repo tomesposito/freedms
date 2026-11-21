@@ -50,6 +50,17 @@ Real captures from the local app on the current build — the same screens the
 verification tours use. The sample dealership data is local-only; the app itself
 always starts empty.
 
+**Dealer website**
+
+The tenant's public site includes home, inventory, vehicle, about, and contact
+pages. Prices and available vehicles render live; inquiries land in that dealer's
+CRM. These captures use the real local API and a seeded Demo Motors tenant with
+no photos, showing the intentional photo placeholders. Website controls live in
+Deals → Workspace settings → Website; sites are free with the DMS.
+
+![Demo Motors public home](docs/screenshots/dealer-site-home.png)
+![Demo Motors public inventory](docs/screenshots/dealer-site-inventory.png)
+
 **Lot overview**
 
 Current inventory and lead snapshots alongside trailing 30-day sales, using the
@@ -84,6 +95,16 @@ change first — nothing writes until you accept it, and merge proposals are
 flagged for a person, never run.
 
 ![AI assistant vehicle summary skill with cost chip and receipt](docs/screenshots/ai-assistant-skills.png)
+
+From a vehicle with photos, choose **Prep listing photos** to estimate a pass
+against the workspace balance. Whole-vehicle and selected-photo passes use three
+credits per successfully processed photo. Review the proposed cover, light and
+color fixes, readings, damage notes, and editable description in the dock.
+Approved descriptions appear on the dealer site and Facebook feed.
+
+![Photo prep estimate with the workspace credit balance](docs/screenshots/ai-assistant-photo-prep-estimate.png)
+
+![Photo prep suggestions, approval controls, and credit receipt](docs/screenshots/ai-assistant-photo-prep-results.png)
 
 **AI assistant admin**
 
@@ -198,9 +219,15 @@ the record on the Users screen.
 
 ![Invite welcome](docs/screenshots/invite-welcome.png)
 
-**Inventory** — vehicles in pages of 100, with mileage, aging, cost, and status.
+**Inventory** — vehicles in pages of 100, with cover photos, mileage, aging, cost, and status.
 
-![Inventory list with unified search and assistant command bar](docs/screenshots/inventory-list.png)
+![Inventory list with cover thumbnails and no-photo placeholders](docs/screenshots/inventory-list.png)
+
+**Vehicle photos** — upload JPEG, PNG, or WebP files, add photos by URL, and set the cover. The cover leads the inventory list, dealer site, and Facebook feed.
+
+![Vehicle detail with an uploaded cover photo and photo controls](docs/screenshots/vehicle-photos.png)
+
+Truck photos by Kevauto, resized and cropped in the app. [Front photo](https://commons.wikimedia.org/wiki/File:2021_Ford_F-150_SuperCrew,_front_4.28.21.jpg) and [rear photo](https://commons.wikimedia.org/wiki/File:2021_Ford_F-150_SuperCrew,_rear_4.28.21.jpg) are licensed [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
 
 **Slim sidebar** — an icon rail leaves more room for the workspace.
 
@@ -990,7 +1017,7 @@ Invalid input and unauthenticated requests are not metered. This is a metering s
 only: no billing, prices, credits, or spend limits. Usage contains no prompt/image
 content and has no public listing endpoint. Offline tests use injected fakes.
 
-### Listing feed exports (local only)
+### Listing feed exports
 
 Open **Feeds** at `#/feeds` to save formats, included statuses, price requirements,
 and a manual/daily/weekly cadence preference. Generation happens only when you
@@ -1003,14 +1030,24 @@ USD cents. Public files exclude dealer cost, recon, notes, and aging. Run snapsh
 are limited to 300 KB; oversized generations fail before saving anything.
 Local in-memory configurations and runs are cleared when the API restarts.
 
+Facebook Marketplace vehicle catalog feeds are free with the DMS. Enable the
+Facebook option in Feeds, save, generate, then paste the public feed URL into Meta
+Commerce Manager → Catalog → Data feeds and choose a pull schedule. Sold or
+removed cars drop out on the next generation; sold cars are always excluded.
+Photos are currently unavailable and image fields are empty. Meta controls
+catalog approval, eligibility (including country, account type, and page standing),
+and ranking; placement is never promised. freeDMS holds no Facebook credentials
+and makes no calls to Meta. Meta can pull the URL when the app is hosted.
+
 | Method | Path | Result |
 | --- | --- | --- |
-| GET | `/feeds/config` | Saved config or `null`, defaults, and local-only generation/scheduling flags |
-| PUT | `/feeds/config` | Save formats, includedStatuses, requirePrice, schedule; authenticated write role |
+| GET | `/feeds/config` | Saved config or `null`, defaults, local generation/scheduling flags, and Facebook feed status |
+| PUT | `/feeds/config` | Save formats, includedStatuses, requirePrice, schedule, facebookEnabled; authenticated write role |
 | POST | `/feeds/generate` | Body `{}`; save an immutable run with counts, included identities, excluded identities/reasons, and public snapshot rows |
 | GET | `/feeds/runs` | Tenant run history, newest first |
 | GET | `/feeds/runs/{id}.csv` | Download CSV snapshot if generated for this run |
 | GET | `/feeds/runs/{id}.json` | Download JSON array snapshot if generated for this run |
+| GET | `/public/{tenantId}/facebook.csv` | Public, unauthenticated CSV; 404 unless enabled with a generated Facebook feed |
 
 ### Webhooks (local build)
 
