@@ -664,6 +664,10 @@ Deploy the routing/configuration migration with the live Lambda artifact
 preserved, update the private release baseline, then promote the tested,
 attested application build. Verify discovery, registration and arrival at the
 Cognito sign-in page; the user completes credentials and MFA personally.
+The bridge also accepts Codex's `application_type: native` registration hint
+(or `web`), validates that value, and preserves the same redirect, scope and
+public-client restrictions. The full discovery test includes Codex's actual
+registration fields so discovery success alone cannot mask registration failure.
 
 ### D-11 — Billing rail for paid AI
 

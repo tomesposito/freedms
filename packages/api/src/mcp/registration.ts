@@ -33,8 +33,12 @@ function strings(value: unknown, label: string, allowed?: string[]): string[] {
 }
 function metadata(request: ApiRequest) {
   const body = parseBody(request.body, 16 * 1024);
-  onlyKeys(body, ['client_name', 'redirect_uris', 'grant_types', 'response_types', 'token_endpoint_auth_method', 'scope']);
+  onlyKeys(body, ['client_name', 'redirect_uris', 'grant_types', 'response_types', 'token_endpoint_auth_method', 'scope', 'application_type']);
   const client_name = text(body.client_name, 'Client name', 128);
+  // Native MCP clients (including Codex) send this standard registration hint.
+  // It never changes redirect validation, scopes or the public-client policy.
+  const application_type = body.application_type;
+  if (application_type !== undefined && application_type !== 'native' && application_type !== 'web') throw invalid('Invalid application_type.');
   const redirect_uris = strings(body.redirect_uris, 'redirect_uris');
   for (const uri of redirect_uris) {
     let url: URL;
@@ -50,7 +54,7 @@ function metadata(request: ApiRequest) {
   const scope = body.scope ?? 'freedms/mcp.read';
   if (typeof scope !== 'string' || !scope.trim()) throw invalid('Invalid scope.');
   const scopes = strings(scope.trim().split(/ +/), 'scope', ['freedms/mcp.read', 'freedms/mcp.write']);
-  return {client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method: 'none', scope: scopes.join(' '), scopes};
+  return {client_name, ...(application_type === undefined ? {} : {application_type}), redirect_uris, grant_types, response_types, token_endpoint_auth_method: 'none', scope: scopes.join(' '), scopes};
 }
 export async function registerMcpClient(request: ApiRequest, repositories: RepositoryFactory, now: Date, config?: RegistrationConfig): Promise<ApiResponse> {
   if (request.method.toUpperCase() !== 'POST') return response(405, {error: 'invalid_request', error_description: 'Method not allowed.'});

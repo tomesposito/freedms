@@ -52,7 +52,7 @@ test('OAuth discovery from the MCP challenge reaches public Cognito registration
     scopes_supported: ['freedms/mcp.read', 'freedms/mcp.write'],
   });
   const registration = await s.request(metadata.registration_endpoint, 'POST', {
-    client_name: 'Codex', redirect_uris: ['http://127.0.0.1:43210/callback'],
+    client_name: 'Codex', application_type: 'native', redirect_uris: ['http://127.0.0.1:43210/callback'],
     grant_types: metadata.grant_types_supported, response_types: metadata.response_types_supported,
     token_endpoint_auth_method: 'none', scope: metadata.scopes_supported.join(' '),
   });
