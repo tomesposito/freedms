@@ -379,6 +379,7 @@ Resources:
           TOKEN_AUDIENCE: !Ref UserPoolClient
           MCP_CLIENT_ID: !Ref McpClient
           MCP_RESOURCE_URI: !Sub 'https://app.${RootDomain}/api/mcp'
+          MCP_OAUTH_DOMAIN: !Sub 'https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com'
       Policies:
         - Statement:
             - Effect: Allow
@@ -432,6 +433,13 @@ Resources:
           Properties:
             ApiId: !Ref Api
             Path: /.well-known/oauth-protected-resource
+            Method: GET
+            Auth: {Authorizer: NONE}
+        McpAuthorizationMetadata:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /.well-known/oauth-authorization-server
             Method: GET
             Auth: {Authorizer: NONE}
         StripeWebhook:
@@ -710,6 +718,17 @@ Resources:
             - EventType: viewer-request
               FunctionARN: !GetAtt ViewerFunction.FunctionARN
         CacheBehaviors:
+          - PathPattern: /.well-known/oauth-authorization-server
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD]
+            CachedMethods: [GET, HEAD]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt ViewerFunction.FunctionARN
           - PathPattern: /assets/*
             TargetOriginId: frontend
             ViewerProtocolPolicy: redirect-to-https

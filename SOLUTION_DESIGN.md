@@ -646,10 +646,24 @@ revoke — grants recorded by the API and enforced on MCP calls, so revocation
 never depends on storing token values. A home-grown authorization server is
 rejected: token issuance is the most security-critical surface in the product
 and Cognito does it well; the bridge adds only the one verb Cognito lacks.
-Open detail, not a blocker: advertising the registration endpoint through
-pure discovery is constrained because the authorization-server metadata lives
-on Cognito's domain — consumers that accept a registration address directly
-are unaffected; a metadata facade is a later option.
+**Discovery follow-through — November 21, 2026 (#182):** Codex cannot reach
+sign-in from the MCP URL because Cognito metadata omits the registration
+bridge. The API now serves an RFC 8414 metadata facade at the application
+origin's `/.well-known/oauth-authorization-server`. Protected-resource metadata
+names that same origin as its authorization server, and the facade's `issuer`
+matches it. The document advertises `/api/mcp/register`, Cognito's hosted
+authorization/token/revocation endpoints, authorization code and refresh grants,
+public-client authentication (`none`), PKCE S256, and the two MCP scopes.
+This is OAuth discovery, not OpenID Connect discovery: Cognito continues to
+issue tokens, and the API still validates their Cognito issuer, signature,
+registered client, scope and live membership. No token proxy or new token issuer
+is introduced. The Cognito domain comes from deployment configuration, never
+request headers. An exact GET-only CloudFront behavior and public API route
+expose the facade; the existing origin guard and private REST routes stay in force.
+Deploy the routing/configuration migration with the live Lambda artifact
+preserved, update the private release baseline, then promote the tested,
+attested application build. Verify discovery, registration and arrival at the
+Cognito sign-in page; the user completes credentials and MFA personally.
 
 ### D-11 — Billing rail for paid AI
 
