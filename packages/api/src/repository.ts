@@ -403,7 +403,7 @@ export function assertMcpGrant(tenantId: string, record: McpGrant, expectedVersi
   assertScope(tenantId, record, ...(event ? [event] : []));
   if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || record.version !== expectedVersion + 1) throw new Error('Invalid grant version');
   if ((!expectedVersion || record.revokedAt) && !event) throw new Error('Grant changes require an outbox event');
-  if (event) assertEvent(record.id, record.version, event, expectedVersion ? 'mcp-grant.revoked' : 'mcp-grant.recorded');
+  if (event) assertEvent(record.id, record.version, event, record.oauthAuthorizationId && !record.revokedAt ? 'mcp-grant.authorized' : expectedVersion ? 'mcp-grant.revoked' : 'mcp-grant.recorded');
 }
 
 function assertAssistantVersion(record: {version: number}, expected: number) {

@@ -1,8 +1,10 @@
 import { createPublicKey, verify, type JsonWebKey } from 'node:crypto';
 import { requireId } from '../errors.js';
-export interface AccessClaims { sub: string; iss: string; exp: number; client_id: string; token_use: string; scope: string }
+export interface AccessClaims { sub: string; iss: string; exp: number; client_id: string; token_use: string; scope: string; grant_id?: string }
 export interface McpConfig {
   issuer: string; clientId: string; resource: string;
+  customOAuth?: boolean;
+  verifyOpaqueToken?: (token: string) => Promise<AccessClaims>;
   oauthDomain?: string;
   jwks?: () => Promise<{keys: (JsonWebKey & {kid?: string; alg?: string; use?: string})[]}>;
   now?: () => number;
@@ -19,6 +21,10 @@ export function accessVerifier(config: McpConfig) {
   });
   return async (authorization = ''): Promise<AccessClaims> => {
     if (!/^Bearer [^ ]+$/i.test(authorization)) throw Error('Unauthorized');
+    if (authorization.slice(7).startsWith('fdm_')) {
+      if (!config.verifyOpaqueToken) throw Error('Unauthorized');
+      return config.verifyOpaqueToken(authorization.slice(7));
+    }
     const [header, payload, signature, extra] = authorization.slice(7).split('.');
     if (!header || !payload || !signature || extra) throw Error('Unauthorized');
     const h = JSON.parse(Buffer.from(header, 'base64url').toString());
@@ -44,6 +50,6 @@ export function accessVerifier(config: McpConfig) {
 }
 export function mcpConfig(): McpConfig {
   return {issuer: process.env.TOKEN_ISSUER ?? 'http://127.0.0.1:3001/mock-cognito',
-    oauthDomain: process.env.MCP_OAUTH_DOMAIN,
+    oauthDomain: process.env.MCP_OAUTH_DOMAIN, customOAuth: process.env.MCP_CUSTOM_OAUTH_ENABLED === '1',
     clientId: process.env.MCP_CLIENT_ID ?? 'freedms-local-mcp', resource: process.env.MCP_RESOURCE_URI ?? 'http://127.0.0.1:3001/mcp'};
 }

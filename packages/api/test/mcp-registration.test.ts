@@ -32,7 +32,7 @@ test('DCR creates distinct public Cognito clients with exact configuration and o
   assert.equal(JSON.parse((await s.post()).body).client_id, 'client-2');
   const repo = s.repositories.forTenant('operator');
   const record = await repo.mcpRegistration('client-1');
-  assert.deepEqual(record, {tenantId: 'operator', client_id: 'client-1', client_name: fields.client_name, redirect_uris: fields.redirect_uris, scopes: fields.scope.split(' '), createdAt: start.toISOString()});
+  assert.deepEqual(record, {tenantId: 'operator', client_id: 'client-1', client_name: fields.client_name, redirect_uris: fields.redirect_uris, grant_types: fields.grant_types, scopes: fields.scope.split(' '), createdAt: start.toISOString()});
   assert.equal((await repo.mcpRegistrations()).length, 2); assert.deepEqual(await repo.events(), []);
   const other = s.repositories.forTenant('dealer');
   assert.equal(await other.mcpRegistration('client-1'), undefined); assert.deepEqual(await other.mcpRegistrations(), []);

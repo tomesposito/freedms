@@ -5,11 +5,11 @@ import { response, type ApiRequest, type ApiResponse } from './handler.js';
 import type { RepositoryFactory } from './repository.js';
 import { onlyKeys } from './validation.js';
 
-export const grantEvent = (grant: McpGrant, actorId: string, type: 'mcp-grant.recorded' | 'mcp-grant.revoked'): OutboxEvent => ({
+export const grantEvent = (grant: McpGrant, actorId: string, type: 'mcp-grant.recorded' | 'mcp-grant.revoked' | 'mcp-grant.authorized'): OutboxEvent => ({
   id: randomUUID(), tenantId: grant.tenantId, actorId, aggregateId: grant.id, aggregateVersion: grant.version,
   type, occurredAt: grant.revokedAt ?? grant.firstGrantedAt, deliveryStatus: 'pending'
 });
-const view = ({tenantId: _tenant, clientId: _client, ...grant}: McpGrant): McpGrantView => grant;
+const view = ({tenantId: _tenant, clientId: _client, oauthAuthorizationId: _authorization, ...grant}: McpGrant): McpGrantView => grant;
 export async function aiConnections(request: ApiRequest, principal: Principal, repositories: RepositoryFactory, now: Date): Promise<ApiResponse> {
   const path = request.path.replace(/\/$/, ''), method = request.method.toUpperCase();
   onlyKeys(request.query ?? {}, []);

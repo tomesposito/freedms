@@ -688,3 +688,43 @@ version before applying these branding resources. The flag defaults to false so 
 For Muse (`custom.freedms`), `https://agent.meta.ai/api/hatch/oauth/callback` is pre-registered by default in the template. The only remaining operator registration step is a stack deploy/update with a reviewed stack parameter update. For an existing stack with an explicit `McpCallbackURLs` value, include Muse's callback in that value; an override replaces the default, so include every callback you intend to retain.
 
 For ChatGPT, create a custom MCP server at `https://app.<RootDomain>/api/mcp` using OAuth and the dedicated client ID. Copy the exact production redirect URI from its management screen into `McpCallbackURLs`; do not guess a callback ID or use a wildcard. New connections can use callback-specific URLs when the issuer does not advertise RFC 9207 support. See [OpenAI authentication documentation](https://developers.openai.com/plugins/build/auth). Register the callback with a reviewed stack parameter update, then sign in and approve the requested scopes in ChatGPT. Public endpoint checks alone do not verify the final OAuth connection.
+
+
+### Branded MCP OAuth rollout (#188)
+
+The custom connector flow uses the ordinary FreeDMS login/MFA components and an
+explicit app/dealership/permissions consent page at `/?mcp_oauth=1`. Passwords and
+MFA stay with Cognito. Normal web/app sign-in and its session storage are unchanged.
+
+1. Hold the operator infrastructure migration lock and snapshot current release,
+   configuration and Lambda code/configuration. Preserve all current stack
+   parameters and the live Lambda `CodeUri`. Add `McpOAuthTable` (encrypted,
+   on-demand, TTL `expiresAt`), narrow Get/Put/Update permissions, and the exact
+   public `/mcp/oauth/{interaction,authorize,token,revoke}` routes. Stage
+   `McpCustomOAuthEnabled=0`. New environment keys are `MCP_OAUTH_TABLE`,
+   `MCP_CALLBACK_URLS` and `MCP_CUSTOM_OAUTH_ENABLED`.
+2. Review the change set, execute, verify the existing Lambda code digest and
+   unrelated settings, then record the new template digest and configuration
+   fingerprint in the private release baseline before releasing the lock.
+3. Promote the tested, attested master release through preflight and deploy.
+4. Under a fresh migration lock, change `McpCustomOAuthEnabled` to `1`, preserve
+   the just-deployed Lambda code, verify the configuration and update its baseline.
+5. Verify discovery advertises the application-domain authorize/token/revoke
+   endpoints. Register a real connector, complete sign-in and MFA personally,
+   review consent, verify tool discovery, refresh and revoke. Anonymous endpoint
+   checks do not prove the authenticated flow.
+
+The cookie is Secure/HttpOnly/SameSite=Strict and host-only; interaction endpoints
+require the configured application Origin and a separate CSRF secret. The existing API Gateway browser-origin policy is unchanged; native/server
+OAuth clients can call the public token/revoke endpoints. CloudFront
+must forward cookies, Origin and Content-Type on `/api/*` (the existing API
+behavior does). Opaque codes/access/refresh tokens are stored only as hashes;
+TTL cleanup never substitutes for expiry validation. Code or refresh replay
+invalidates the authorization family. Reconsent creates a new generation so old
+tokens stay invalid. Account → AI connections remains the user's removal control.
+
+Rollback discovery with `McpCustomOAuthEnabled=0` and the same locked baseline
+procedure. Keep this release or a compatible successor running to honor existing
+opaque connections. If rolling back to older code, those clients must reconnect
+through Cognito. Keep the classic branding assets and registration bridge for
+this fallback. Never delete the token table to implement rollback or revocation.

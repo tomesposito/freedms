@@ -105,3 +105,5 @@ import '../packages/web/test/overview.test.js';
 import '../packages/api/test/facebook-feed.test.js';
 
 import '../packages/api/test/dealer-site.test.js';
+
+import '../packages/api/test/mcp-oauth.test.js';
