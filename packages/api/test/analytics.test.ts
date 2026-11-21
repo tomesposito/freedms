@@ -50,25 +50,48 @@ test('strict behavioral firewall rejects unknown fields and values before own lo
   assert.equal((await s.call('A', '/analytics/events')).statusCode, 405);
   assert.equal((await s.call('A', '/analytics/funnel', 'POST', {})).statusCode, 405);
 });
-test('unconfigured vendor is a silent no-op; configured capture has only tenant identity and typed properties', async () => {
+const analyticsEnv = {ANALYTICS_ENABLED: '1', ANALYTICS_VENDOR_KEY: 'key', ANALYTICS_IDENTITY_SECRET: 'a'.repeat(32)};
+const delivery = {id: '607838eb-025e-4055-bd2b-5b48a51fc986', occurredAt: now.toISOString()};
+test('capture is opt-in and sends only pseudonymous workspace usage with matching log IDs and timestamps', async () => {
   const calls: {url: unknown; init: RequestInit}[] = [];
+  const results: unknown[] = [];
   const request = (async (url, init) => { calls.push({url, init: init!}); return new Response('{}'); }) as typeof fetch;
-  for (const env of [{}, {ANALYTICS_ENABLED: '1'}, {ANALYTICS_VENDOR_KEY: 'key'}, {ANALYTICS_ENABLED: '0', ANALYTICS_VENDOR_KEY: 'key'}, {ANALYTICS_ENABLED: '1', ANALYTICS_VENDOR_KEY: '  '}]) {
-    await analyticsFromEnv(env, request)('A', valid[0]);
+  for (const env of [{}, {ANALYTICS_ENABLED: '1'}, {ANALYTICS_VENDOR_KEY: 'key'}, {...analyticsEnv, ANALYTICS_ENABLED: '0'}, {...analyticsEnv, ANALYTICS_VENDOR_KEY: '  '}, {...analyticsEnv, ANALYTICS_IDENTITY_SECRET: ''}, {...analyticsEnv, ANALYTICS_IDENTITY_SECRET: 'too-short'}]) {
+    await analyticsFromEnv(env, request)('A', valid[0], delivery);
   }
   assert.equal(calls.length, 0);
-  const s = await setup(analyticsFromEnv({ANALYTICS_ENABLED: '1', ANALYTICS_VENDOR_KEY: 'key'}, request));
+  const vendor = analyticsFromEnv(analyticsEnv, request, result => results.push(result));
+  const s = await setup(vendor);
   for (const data of valid) await s.json('/analytics/events', 'POST', data);
   assert.equal(calls.length, valid.length);
+  const rows = await s.repositories.forTenant('A').analytics();
+  const distinctId = JSON.parse(String(calls[0].init.body)).distinct_id;
+  assert.match(distinctId, /^workspace_[a-f0-9]{64}$/);
   calls.forEach(({url, init}, i) => {
     const {event, ...properties} = valid[i];
     assert.equal(url, 'https://us.i.posthog.com/i/v0/e/'); assert.equal(init.method, 'POST'); assert.equal(init.redirect, 'error'); assert.ok(init.signal);
-    assert.deepEqual(JSON.parse(String(init.body)), {api_key: 'key', distinct_id: 'A', event, properties});
+    assert.deepEqual(JSON.parse(String(init.body)), {api_key: 'key', uuid: rows[i].id, timestamp: rows[i].occurredAt, distinct_id: distinctId, event,
+      properties: {...properties, source: 'freedms_app', $process_person_profile: false, $geoip_disable: true, $ip: null, $is_server: true}});
+    assert.deepEqual(results[i], {component: 'analytics', destination: 'posthog', eventId: rows[i].id, outcome: 'accepted', status: 200});
   });
-  for (const request of [(async () => { throw new Error('offline'); }) as typeof fetch, (async () => new Response('', {status: 500})) as typeof fetch]) {
-    const failing = await setup(analyticsFromEnv({ANALYTICS_ENABLED: '1', ANALYTICS_VENDOR_KEY: 'key'}, request));
+  await vendor('B', valid[0], delivery);
+  assert.notEqual(JSON.parse(String(calls.at(-1)!.init.body)).distinct_id, distinctId);
+  await analyticsFromEnv({...analyticsEnv, ANALYTICS_IDENTITY_SECRET: 'b'.repeat(32)}, request, () => {})('A', valid[0], delivery);
+  assert.notEqual(JSON.parse(String(calls.at(-1)!.init.body)).distinct_id, distinctId);
+  const count = calls.length;
+  await assert.rejects(vendor('A', {...valid[0], email: 'private@example.test'} as unknown as BehavioralEvent, delivery));
+  assert.equal(calls.length, count);
+});
+test('network and HTTP vendor failures preserve app events and report no credentials or payloads', async () => {
+  for (const status of [null, 400, 429, 500]) {
+    const results: unknown[] = [];
+    const request = (async () => { if (status === null) throw new Error('private network error containing credentials'); return new Response('private vendor response', {status}); }) as typeof fetch;
+    const failing = await setup(analyticsFromEnv(analyticsEnv, request, result => results.push(result)));
     await failing.json('/analytics/events', 'POST', valid[0]);
-    assert.equal((await failing.repositories.forTenant('A').analytics()).length, 1);
+    const rows = await failing.repositories.forTenant('A').analytics();
+    assert.equal(rows.length, 1);
+    assert.deepEqual(results, [{component: 'analytics', destination: 'posthog', eventId: rows[0].id,
+      outcome: status === null ? 'unavailable' : 'rejected', ...(status === null ? {} : {status})}]);
   }
 });
 test('memory and Dynamo analytics writes reject foreign tenants; scoped reads paginate', async () => {

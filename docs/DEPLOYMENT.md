@@ -62,6 +62,44 @@ uses the displayed record version so a newer submission cannot be silently
 overwritten. It does not send email, create an account, or issue an invitation.
 The existing operator CLI remains available for reviewing and handling requests.
 
+## In-app analytics
+
+The API forwards allowlisted `quick_entry_used`, `report_exported`,
+`pencil_grid_viewed`, and `jacket_checklist_completed` events to the existing US
+PostHog project. This is server-side delivery; it adds no browser SDK, cookies,
+session replay, or autocapture to the app. Feed generation and activation/funnel
+projections remain local to FreeDMS.
+
+Set `AnalyticsVendorKey` to the project's capture token and
+`AnalyticsIdentitySecret` to a separately generated private random key of at
+least 32 characters. Both parameters are masked and remain in Lambda's encrypted
+environment; do not use a PostHog personal API key. Keep the identity secret stable
+across releases to retain workspace trends. Rotating it creates new pseudonyms.
+`AnalyticsEnabled` defaults to `0`; enable with `1` only after deploying the
+compatible application artifact. For an existing stack, first add the parameters
+with delivery disabled, update the private release infrastructure/configuration
+baseline, promote the attested application release, then enable delivery and
+record the final Lambda configuration fingerprint under the operator migration
+lock. Preserve all unrelated stack parameters and the live Lambda artifact.
+
+Properties are categorical only, with `source=freedms_app`. Distinct IDs are
+HMAC workspace pseudonyms, never user or public dealership IDs. Each event disables
+person-profile processing and GeoIP enrichment and forwards no client IP. The
+event UUID and timestamp match its tenant-scoped analytics row. To discard even
+server IPs from stored events, use PostHog's project-level **Discard client IP
+data** setting; `$ip: null` alone is not a project-level retention guarantee.
+
+Verify a real app action (for example an inventory CSV export) in both the owned
+analytics log and PostHog's event explorer, matching UUID and occurrence time.
+Inspect properties for the expected category and privacy flags, with no customer
+content, user identity, or geographic enrichment. HTTP acceptance alone is not
+proof of ingestion. CloudWatch API logs record `component=analytics`, event UUID,
+and `accepted`, `rejected`, or `unavailable`; they contain no token, workspace ID,
+event payload, response body, or exception text. Failures preserve local events
+and do not fail the workflow. Delivery has a two-second timeout, no retry queue,
+and no historical backfill. Set `AnalyticsEnabled=0` to stop external delivery
+while retaining local analytics. No new AWS resources or permissions are needed.
+
 ## AI assistant
 
 The assistant is off by default. With `AssistantModelId` empty, the stack behaves
