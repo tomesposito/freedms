@@ -503,7 +503,10 @@ Protected Resource Metadata is served at
 requests advertise that URL in the Bearer challenge. CloudFront strips `/api`;
 the API routes are `POST /mcp` and `GET /.well-known/oauth-protected-resource`.
 `MCP_RESOURCE_URI` supplies the canonical endpoint and `TOKEN_ISSUER` the Cognito
-pool issuer. Local defaults use `http://127.0.0.1:3001/mcp` and a mock issuer.
+pool issuer used for token validation. `MCP_OAUTH_DOMAIN` supplies the Cognito
+hosted OAuth origin, derived from `CognitoDomainPrefix` in the template.
+Local defaults use `http://127.0.0.1:3001/mcp` and a mock token issuer; set
+`MCP_OAUTH_DOMAIN` to a test authorization server to exercise local discovery.
 The local adapter mounts the same handler; offline tests inject RSA JWKS and a
 clock rather than contacting Cognito. Local web ID tokens are not MCP credentials.
 
@@ -521,8 +524,32 @@ by signing in and consenting, without copying IDs or registering callbacks.
 Self-registration replaces the operator's console app-client creation and
 callback entry for these consumers. The ChatGPT manual callback procedure below
 remains the fallback for consumers that cannot use this registration address.
-Cognito discovery does not advertise `registration_endpoint`; a metadata facade
-is outside this change.
+Cognito discovery does not advertise `registration_endpoint`. FreeDMS therefore
+publishes an OAuth authorization-server metadata facade at
+`https://app.<RootDomain>/.well-known/oauth-authorization-server` (#182).
+Protected-resource metadata names `https://app.<RootDomain>` as its authorization
+server; the facade's `issuer` exactly matches that origin. It advertises the
+registration bridge, Cognito authorization/token/revocation endpoints, public
+clients (`none`), PKCE S256, authorization-code/refresh grants and the MCP scopes.
+It is not an OpenID Connect document: access tokens still have the Cognito pool
+issuer and are validated against that issuer and its keys. Existing registered
+clients and direct registration URLs continue to work.
+
+For an existing deployment, apply the template's exact GET-only CloudFront
+behavior, public API route and `MCP_OAUTH_DOMAIN` environment value as an operator
+infrastructure migration. Preserve the live Lambda `CodeUri`, all stack parameters
+and unrelated settings. Review the change set, hold the release migration lock,
+verify the deployed configuration, and update the private release infrastructure
+digest and Lambda configuration fingerprint before approving the new attested
+application release through the normal promotion workflow. The new route returns
+no usable metadata until that application build is promoted.
+
+Verify the unauthenticated MCP challenge, follow its resource metadata URL, fetch
+the named authorization server's `/.well-known/oauth-authorization-server`, and
+check that `registration_endpoint` is the public `/api/mcp/register` address.
+Starting `codex mcp login freedms` should register a public client and open Cognito
+sign-in; the person completes sign-in and MFA. The `/api/session` route must still
+reject anonymous requests, and the marketing host must not expose discovery.
 
 The API role adds only `cognito-idp:CreateUserPoolClient` and
 `cognito-idp:DeleteUserPoolClient`, scoped to `UserPool.Arn`. The pool ID is derived

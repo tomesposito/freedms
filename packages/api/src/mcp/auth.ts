@@ -3,6 +3,7 @@ import { requireId } from '../errors.js';
 export interface AccessClaims { sub: string; iss: string; exp: number; client_id: string; token_use: string; scope: string }
 export interface McpConfig {
   issuer: string; clientId: string; resource: string;
+  oauthDomain?: string;
   jwks?: () => Promise<{keys: (JsonWebKey & {kid?: string; alg?: string; use?: string})[]}>;
   now?: () => number;
   isRegisteredClient?: (clientId: string) => Promise<boolean>;
@@ -43,5 +44,6 @@ export function accessVerifier(config: McpConfig) {
 }
 export function mcpConfig(): McpConfig {
   return {issuer: process.env.TOKEN_ISSUER ?? 'http://127.0.0.1:3001/mock-cognito',
+    oauthDomain: process.env.MCP_OAUTH_DOMAIN,
     clientId: process.env.MCP_CLIENT_ID ?? 'freedms-local-mcp', resource: process.env.MCP_RESOURCE_URI ?? 'http://127.0.0.1:3001/mcp'};
 }

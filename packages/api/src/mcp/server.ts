@@ -8,17 +8,34 @@ import { OPERATOR_TENANT_ID, type RepositoryFactory } from '../repository.js';
 import { object, onlyKeys } from '../validation.js';
 import { accessVerifier, type McpConfig } from './auth.js';
 import { tools } from './tools.js';
-export const isMcpPath = (path: string) => ['/mcp', '/mcp/register', '/.well-known/oauth-protected-resource'].includes(path.replace(/\/$/, ''));
+export const isMcpPath = (path: string) => ['/mcp', '/mcp/register', '/.well-known/oauth-protected-resource', '/.well-known/oauth-authorization-server'].includes(path.replace(/\/$/, ''));
 export function createMcpHandler(repositories: RepositoryFactory, execute: (request: ApiRequest) => Promise<ApiResponse>, config: McpConfig) {
   const verify = accessVerifier({...config,
     isRegisteredClient: async clientId => !!await repositories.forTenant(OPERATOR_TENANT_ID).mcpRegistration(clientId)});
   const metadata = new URL('./.well-known/oauth-protected-resource', config.resource).href;
+  // Discovery identifies our registration facade; access-token verification still
+  // trusts only the Cognito issuer and keys in config.issuer.
+  const authorizationServer = new URL(config.resource).origin;
   const rpc = (id: unknown, result: unknown) => response(200, {jsonrpc: '2.0', id, result});
   const fail = (id: unknown, code: number, message: string) => response(200, {jsonrpc: '2.0', id, error: {code, message}});
   return async (request: ApiRequest): Promise<ApiResponse> => {
     if (request.path.replace(/\/$/, '') === '/.well-known/oauth-protected-resource') return request.method === 'GET'
-      ? response(200, {resource: config.resource, authorization_servers: [config.issuer], scopes_supported: ['freedms/mcp.read', 'freedms/mcp.write'], bearer_methods_supported: ['header']})
+      ? response(200, {resource: config.resource, authorization_servers: [authorizationServer], scopes_supported: ['freedms/mcp.read', 'freedms/mcp.write'], bearer_methods_supported: ['header']})
       : response(405, {error: {code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.'}});
+    if (request.path.replace(/\/$/, '') === '/.well-known/oauth-authorization-server') {
+      if (request.method !== 'GET') return response(405, {error: {code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.'}});
+      if (!config.oauthDomain) return response(503, {error: {code: 'OAUTH_UNAVAILABLE', message: 'OAuth discovery is not configured.'}});
+      return response(200, {
+        issuer: authorizationServer,
+        authorization_endpoint: new URL('/oauth2/authorize', config.oauthDomain).href,
+        token_endpoint: new URL('/oauth2/token', config.oauthDomain).href,
+        revocation_endpoint: new URL('/oauth2/revoke', config.oauthDomain).href,
+        registration_endpoint: `${config.resource.replace(/\/$/, '')}/register`,
+        response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'],
+        token_endpoint_auth_methods_supported: ['none'], code_challenge_methods_supported: ['S256'],
+        scopes_supported: ['freedms/mcp.read', 'freedms/mcp.write'],
+      });
+    }
     let access;
     try { access = await verify(request.authorization); } catch {
       const result = response(401, {error: {code: 'UNAUTHORIZED', message: 'Sign in to continue.'}});
