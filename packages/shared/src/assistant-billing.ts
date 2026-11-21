@@ -23,7 +23,15 @@ export interface AssistantCycle {
   paidCapacity?: number;
 }
 export interface AssistantTokenUsage { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
+export interface PhotoBackgroundUsage {
+  job: 'photo-background';
+  provider: 'bria' | 'stub';
+  outcome: 'success' | 'failure';
+  // Nominal vendor price, including for failures whose invoice outcome is unknown.
+  costBasisMills: number;
+}
 export interface AssistantLedgerEntry extends AssistantTokenUsage {
+  photoBackgroundUsage?: PhotoBackgroundUsage;
   id: string; tenantId: string; actorId: string; action: string;
   actionClass: 'read' | 'write' | 'photo' | 'answer' | 'usage'; credits: number; cycleStart: string; createdAt: string;
 }

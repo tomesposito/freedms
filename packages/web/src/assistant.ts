@@ -1,5 +1,5 @@
 import { effectiveVehiclePhotos, PHOTO_PREP_SKILL, type VehicleView } from '@freedms/shared';
-import { approvalFields, preparePhotoInputs, reviewHtml, scopeHtml, type PhotoPrepScope, type PrepReview } from './assistant-photo-prep';
+import { approvalFields, prepareBackgroundMedia, preparePhotoInputs, reviewHtml, scopeHtml, type PhotoPrepScope, type PrepReview } from './assistant-photo-prep';
 import { escapeHtml as e } from './format';
 import { renderMarkdown } from './markdown';
 
@@ -15,7 +15,7 @@ export function assistantContextFromHash(hash: string): AssistantContext | null 
   if (!match || ['new', 'settings', 'equity', 'reports'].includes(match[2])) return null;
   return {surface: {vehicles: 'vehicle', leads: 'lead', deals: 'deal'}[match[1]] as AssistantContext['surface'], id: match[2]};
 }
-export interface AssistantSkill {id: string; name: string; costCredits: number; kind: 'summary' | 'cleanup' | 'photo'; perPhotoCredits?: number}
+export interface AssistantSkill {id: string; name: string; costCredits: number; kind: 'summary' | 'cleanup' | 'photo'; perPhotoCredits?: number; backgroundAvailable?: boolean}
 export interface AssistantProposal {proposalId: string; kind: 'fix' | 'missing' | 'stale' | 'duplicate'; label: string; current?: string; proposed?: string; customerId?: string}
 export function skillChipsHtml(skills: AssistantSkill[], busy = false): string {
   return `<div class="assistant-skills">${skills.map(s => `<button type="button" data-assistant-skill="${e(s.id)}" ${busy ? 'disabled' : ''}>${e(s.name)} · ${e(s.costCredits)} credits</button>`).join('')}</div>`;
@@ -230,7 +230,8 @@ async function runSkill(id: string, source?: AssistantTurn, accepted?: string[])
     try {
       const vehicle = await api<VehicleView>(`/vehicles/${encodeURIComponent(context.id)}`);
       if (generation === current && hash === location.hash) {
-        photoScope = {vehicle, selected: new Set(effectiveVehiclePhotos(vehicle).map((_, index) => index)), mode: 'whole'};
+        photoScope = {vehicle, selected: new Set(effectiveVehiclePhotos(vehicle).map((_, index) => index)), mode: 'whole',
+          backgroundAvailable: skill.backgroundAvailable === true, replaceBackground: false};
       }
     } catch (error) {
       if (generation === current) skillsError = error instanceof Error ? error.message : 'Could not open photo prep.';
@@ -334,6 +335,12 @@ function bindPhotoPrep(panel: HTMLElement): void {
     paint(false, true);
     panel.querySelector<HTMLInputElement>(`[data-prep-photo="${index}"]`)?.focus();
   });
+  panel.querySelector<HTMLInputElement>('[data-prep-background]')?.addEventListener('change', event => {
+    if (!photoScope) return;
+    photoScope.replaceBackground = (event.currentTarget as HTMLInputElement).checked;
+    paint(false, true);
+    panel.querySelector<HTMLInputElement>('[data-prep-background]')?.focus();
+  });
   panel.querySelector<HTMLButtonElement>('[data-prep-run]')?.addEventListener('click', () => { void runPhotoPrep(); });
   panel.querySelector<HTMLButtonElement>('[data-prep-cancel]')?.addEventListener('click', () => { photoScope = undefined; paint(); });
   panel.querySelectorAll<HTMLElement>('[data-prep-review]').forEach(element => {
@@ -349,6 +356,7 @@ function bindPhotoPrep(panel: HTMLElement): void {
     element.querySelectorAll<HTMLButtonElement>('[data-prep-dismiss]').forEach(button => button.onclick = () => {
       const [row] = review.suggestions.splice(Number(button.dataset.prepDismiss), 1);
       if (row.kind === 'light') review.media.delete(row.index);
+      if (row.kind === 'background') review.backgroundMedia.delete(row.index);
       paint(false, true);
     });
     element.querySelector<HTMLButtonElement>('[data-prep-approve-all]')?.addEventListener('click', () => {
@@ -367,14 +375,17 @@ async function runPhotoPrep() {
     const {images, media} = await preparePhotoInputs(scope);
     if (generation !== current) return;
     const result = await api<Reply & {prep: Pick<PrepReview, 'suggestions' | 'missing' | 'version'>}>('/assistant/skills/run', 'POST',
-      {skill: PHOTO_PREP_SKILL, surface: 'vehicle', id: scope.vehicle.id, version: scope.vehicle.version, images, descriptionOnly: scope.mode === 'description'});
+      {skill: PHOTO_PREP_SKILL, surface: 'vehicle', id: scope.vehicle.id, version: scope.vehicle.version, images, descriptionOnly: scope.mode === 'description',
+        ...(scope.mode !== 'description' && scope.replaceBackground ? {replaceBackground: true} : {})});
     if (generation !== current) return;
     const {prep, ...reply} = result;
     turn.result = reply;
     const order = effectiveVehiclePhotos(scope.vehicle).map((_, index) => index);
     const successful = new Set(prep.suggestions.flatMap(row => row.kind === 'light' ? [row.index] : []));
     for (const index of media.keys()) if (!successful.has(index)) media.delete(index);
-    turn.prep = {...prep, scope, media, order, vehiclePhotoCount: order.length};
+    const backgroundMedia = await prepareBackgroundMedia(prep.suggestions);
+    if (generation !== current) return;
+    turn.prep = {...prep, scope, media, backgroundMedia, order, vehiclePhotoCount: order.length};
   } catch (error) {
     if (generation !== current) return;
     const next = chatErrorState(error as ApiError);
@@ -404,7 +415,10 @@ async function approvePhotoPrep(turn: AssistantTurn, accepted: PrepReview['sugge
     review.vehiclePhotoCount = effectiveVehiclePhotos(saved).length;
     while (review.order.length < review.vehiclePhotoCount) review.order.push(review.order.length);
     review.suggestions = review.suggestions.filter(row => !accepted.includes(row));
-    for (const row of accepted) if (row.kind === 'light') review.media.delete(row.index);
+    for (const row of accepted) {
+      if (row.kind === 'light') review.media.delete(row.index);
+      if (row.kind === 'background') review.backgroundMedia.delete(row.index);
+    }
     document.dispatchEvent(new CustomEvent('vehicle-photo-prep-approved', {detail: saved}));
   } catch (error) {
     if (generation === current) turn.error = error instanceof Error ? error.message : 'Could not approve changes.';

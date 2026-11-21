@@ -1,4 +1,5 @@
 import { BedrockRuntimeClient, ConverseCommand, type Message, type Tool, type ConverseCommandOutput } from '@aws-sdk/client-bedrock-runtime';
+import { BriaPhotoPrepEditor } from './bria-photo-prep.js';
 import { ApiError } from './errors.js';
 export type AssistantMessage = Message;
 export type AssistantToolSpec = Tool;
@@ -7,6 +8,20 @@ export interface AssistantProvider {
   lastUsage?: import('@freedms/shared').AssistantTokenUsage;
   configured: boolean;
   converse(messages: AssistantMessage[], toolSpecs: AssistantToolSpec[], options?: AssistantConverseOptions): Promise<AssistantMessage>;
+}
+export interface PhotoPrepImageEditor {
+  readonly configured: boolean;
+  readonly source: 'bria' | 'stub' | 'unconfigured';
+  replaceBackground(jpeg: Uint8Array, signal: AbortSignal): Promise<Uint8Array>;
+}
+class UnconfiguredPhotoPrepEditor implements PhotoPrepImageEditor {
+  readonly configured = false;
+  readonly source = 'unconfigured';
+  async replaceBackground(): Promise<Uint8Array> { throw assistantUnavailable(); }
+}
+export function photoPrepImageEditorFromEnv(env: NodeJS.ProcessEnv = process.env): PhotoPrepImageEditor {
+  const key = env.FREEDMS_BRIA_API_KEY?.trim();
+  return key ? new BriaPhotoPrepEditor(key) : new UnconfiguredPhotoPrepEditor();
 }
 export const assistantUnavailable = () => new ApiError(503, 'ASSISTANT_UNAVAILABLE', "AI assistant isn't set up.");
 export const assistantFailure = () => new ApiError(502, 'ASSISTANT_PROVIDER_FAILED', 'AI assistant could not complete this turn. Please retry.');

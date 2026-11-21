@@ -1,5 +1,5 @@
 import { effectiveVehiclePhotos, PHOTO_PREP_BODY_LIMIT, PHOTO_PREP_SKILL } from '@freedms/shared';
-import type { AssistantProvider } from './assistant-provider.js';
+import type { AssistantProvider, PhotoPrepImageEditor } from './assistant-provider.js';
 import { assistantUnavailable } from './assistant-provider.js';
 import { runPhotoPrep } from './assistant-photo-prep.js';
 import type { AuthClaims, Principal, Customer, LeadView, Vehicle, DealView, FeedConfig, FeedOptions, CustomerTimelineEntry } from '@freedms/shared';
@@ -94,21 +94,21 @@ function cleanupProposals(customers: Customer[], leads: LeadView[], now: Date): 
 }
 class SkillStop extends Error {}
 const dealHistory = (deals: DealView[]) => `Deal history: ${deals.length} deal(s).${deals.map(d => `\n${d.type}: ${d.status}`).join('')}`;
-export async function assistantSkillsEndpoint(request: ApiRequest, principal: Principal, entitlement: AssistantEntitlement, execute: Execute, now: Date, provider?: AssistantProvider) {
+export async function assistantSkillsEndpoint(request: ApiRequest, principal: Principal, entitlement: AssistantEntitlement, execute: Execute, now: Date, provider?: AssistantProvider, imageEditor?: PhotoPrepImageEditor) {
   if (entitlement instanceof AssistantBilling) await entitlement.requireEntitlement(principal);
   else if (!await entitlement.check(principal)) throw new ApiError(402, 'ASSISTANT_PLAN_REQUIRED', 'An AI assistant plan is required.');
   const listing = request.method.toUpperCase() === 'GET';
   const input = listing ? request.query ?? {} : parseBody(request.body, request.path.replace(/\/$/, '') === '/assistant/skills/run' ? PHOTO_PREP_BODY_LIMIT : undefined);
   const apply = request.path.replace(/\/$/, '').endsWith('/apply');
   const photo = !listing && !apply && input.skill === PHOTO_PREP_SKILL;
-  onlyKeys(input, photo ? ['skill', 'surface', 'id', 'version', 'images', 'descriptionOnly'] : listing ? ['surface', 'id'] : apply ? ['skill', 'surface', 'id', 'accepted'] : ['skill', 'surface', 'id']);
+  onlyKeys(input, photo ? ['skill', 'surface', 'id', 'version', 'images', 'descriptionOnly', 'replaceBackground'] : listing ? ['surface', 'id'] : apply ? ['skill', 'surface', 'id', 'accepted'] : ['skill', 'surface', 'id']);
   const context = parseAssistantContext({surface: input.surface, ...(input.id !== undefined ? {id: input.id} : {})});
   if (listing) {
     const record = await resolveAssistantContext(context, request.claims!, execute);
     if (context.id && !record) return response(200, {data: {context: null, skills: []}});
     const photos = context.surface === 'vehicle' && record ? effectiveVehiclePhotos(record as Vehicle) : [];
     return response(200, {data: {context, skills: assistantSkills.filter(s => s.surfaces.includes(context.surface) && (s.kind !== 'photo' || (provider?.configured && photos.length))).map(s => ({
-      id: s.id, name: s.name, kind: s.kind, ...(s.kind === 'photo' ? {perPhotoCredits: PHOTO_PRICE.credits} : {}), costCredits: s.kind === 'photo' ? photos.length * PHOTO_PRICE.credits : readPlan(s, context, record).reduce((sum, tool) => sum + priceForTool(tool)!.credits, 0),
+      id: s.id, name: s.name, kind: s.kind, ...(s.kind === 'photo' ? {perPhotoCredits: PHOTO_PRICE.credits, ...(imageEditor?.configured ? {backgroundAvailable: true} : {})} : {}), costCredits: s.kind === 'photo' ? photos.length * PHOTO_PRICE.credits : readPlan(s, context, record).reduce((sum, tool) => sum + priceForTool(tool)!.credits, 0),
     }))}});
   }
   const skill = assistantSkills.find(s => s.id === input.skill && s.surfaces.includes(context.surface));
@@ -117,7 +117,7 @@ export async function assistantSkillsEndpoint(request: ApiRequest, principal: Pr
     if (!(entitlement instanceof AssistantBilling) || !provider?.configured) throw assistantUnavailable();
     const record = await resolveAssistantContext(context, request.claims!, execute);
     if (!record) throw new ApiError(404, 'NOT_FOUND', 'Vehicle not found.');
-    return response(200, {data: await runPhotoPrep(input, record as Vehicle, principal, entitlement, provider)});
+    return response(200, {data: await runPhotoPrep(input, record as Vehicle, principal, entitlement, provider, imageEditor)});
   }
   if (apply && (!Array.isArray(input.accepted) || input.accepted.some(id => typeof id !== 'string') || input.accepted.length > 1000)) throw invalid('Provide accepted proposal IDs.');
   const accepted = new Set((input.accepted ?? []) as string[]);

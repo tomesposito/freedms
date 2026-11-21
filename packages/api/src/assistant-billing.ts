@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { assistantTiers, type AssistantPlan, type AssistantCycle, type AssistantLedgerEntry, type AssistantTokenUsage, type AssistantWaitlistEntry, type Principal } from '@freedms/shared';
+import { assistantTiers, type AssistantPlan, type AssistantCycle, type AssistantLedgerEntry, type AssistantTokenUsage, type PhotoBackgroundUsage, type AssistantWaitlistEntry, type Principal } from '@freedms/shared';
 import type { TenantRepository } from './repository.js';
 import type { AssistantEntitlement } from './assistant.js';
 import { tools } from './mcp/tools.js';
@@ -37,8 +37,8 @@ type Actor = Pick<Principal, 'tenantId' | 'userId' | 'role'>;
 export interface AssistantMeter {
   stop(price: {credits: number}): string | undefined;
   beforeWrite(price: {credits: number}): Promise<string | undefined>;
-  charge(action: string, price: Pick<AssistantLedgerEntry, 'actionClass' | 'credits'>, usage?: AssistantTokenUsage): Promise<string | undefined>;
-  recordUsage?(usage: AssistantTokenUsage): Promise<void>;
+  charge(action: string, price: Pick<AssistantLedgerEntry, 'actionClass' | 'credits'>, usage?: AssistantTokenUsage, photoBackgroundUsage?: PhotoBackgroundUsage): Promise<string | undefined>;
+  recordUsage?(usage: AssistantTokenUsage, photoBackgroundUsage?: PhotoBackgroundUsage): Promise<void>;
   finish(): Promise<number>;
 }
 export class AssistantBilling implements AssistantEntitlement {
@@ -133,9 +133,9 @@ export class AssistantBilling implements AssistantEntitlement {
         }
         return stop(price);
       },
-      charge: async (action, price, usage = zeroUsage) => {
+      charge: async (action, price, usage = zeroUsage, photoBackgroundUsage) => {
         const entry: AssistantLedgerEntry = {id: randomUUID(), tenantId: actor.tenantId, actorId: actor.userId, action, ...price, ...usage,
-          cycleStart: pool.cycleStart, createdAt: this.now().toISOString()};
+          ...(photoBackgroundUsage ? {photoBackgroundUsage} : {}), cycleStart: pool.cycleStart, createdAt: this.now().toISOString()};
         try {
           for (let attempt = 0; attempt < 5; attempt++) {
             // Retry only the ledger with the SAME id; never replay a business action.
@@ -162,9 +162,9 @@ export class AssistantBilling implements AssistantEntitlement {
             : `The action ${action} DID execute successfully, but its credit settlement could not be confirmed. No further actions ran. Review the completed action before retrying.`;
         }
       },
-      recordUsage: async usage => {
-        if (Object.values(usage).some(tokens => tokens !== 0))
-          await meter.charge('provider-usage', {actionClass: 'usage', credits: 0}, usage);
+      recordUsage: async (usage, photoBackgroundUsage) => {
+        if (photoBackgroundUsage || Object.values(usage).some(tokens => tokens !== 0))
+          await meter.charge('provider-usage', {actionClass: 'usage', credits: 0}, usage, photoBackgroundUsage);
       },
       finish: async () => total,
     };

@@ -7,7 +7,7 @@ import { billingAction, billingReturnUrl, stripeWebhook } from './assistant-stri
 import { UnconfiguredStripeBilling, type StripeBilling } from './stripe.js';
 import { AssistantBilling } from './assistant-billing.js';
 import { assistantChat, type AssistantEntitlement } from './assistant.js';
-import { UnconfiguredAssistantProvider, type AssistantProvider } from './assistant-provider.js';
+import { UnconfiguredAssistantProvider, type AssistantProvider, type PhotoPrepImageEditor } from './assistant-provider.js';
 import { registerMcpClient, deleteMcpRegistration, type RegistrationConfig } from './mcp/registration.js';
 import { aiConnections } from './ai-connections.js';
 import { ideas } from './ideas.js';
@@ -67,7 +67,7 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
   if (!body || Buffer.byteLength(body) > limit) throw invalid(`A JSON body of at most ${limit} bytes is required.`);
   try { return object(JSON.parse(body)); } catch (error) { if (error instanceof ApiError) throw error; throw invalid('Invalid JSON body.'); }
 }
-export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {oauth?: McpOAuth; stripe?: StripeBilling; appBaseUrl?: string; assistantSeedLocalPlan?: boolean; assistantProvider?: AssistantProvider; assistantEntitlement?: AssistantEntitlement; registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
+export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {oauth?: McpOAuth; stripe?: StripeBilling; appBaseUrl?: string; assistantSeedLocalPlan?: boolean; assistantProvider?: AssistantProvider; photoPrepImageEditor?: PhotoPrepImageEditor; assistantEntitlement?: AssistantEntitlement; registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
   const photoBase = vehiclePhotoBase(options.appBaseUrl);
   const publicInventory = createPublicInventoryHandler(documents, photoBase);
   const dealerSite = createDealerSiteHandler(photoBase);
@@ -177,7 +177,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         }
         if (path === '/assistant/pool' && method === 'GET') return response(200, {data: await billing.pool(principal)});
         if (path === '/assistant/usage' && method === 'GET') return response(200, {data: await billing.usage(principal)});
-        if ((path === '/assistant/skills' && method === 'GET') || (['/assistant/skills/run', '/assistant/skills/apply'].includes(path) && method === 'POST')) return assistantSkillsEndpoint(request, principal, options.assistantEntitlement ?? billing, handle, now(), options.assistantProvider);
+        if ((path === '/assistant/skills' && method === 'GET') || (['/assistant/skills/run', '/assistant/skills/apply'].includes(path) && method === 'POST')) return assistantSkillsEndpoint(request, principal, options.assistantEntitlement ?? billing, handle, now(), options.assistantProvider, options.photoPrepImageEditor);
         if (path === '/assistant/chat' && method === 'POST') return assistantChat(request, principal, options.assistantProvider ?? new UnconfiguredAssistantProvider(), options.assistantEntitlement ?? billing, handle);
         if (/^\/ai-connections(\/|$)/.test(path)) return await aiConnections(request, principal, repositories, now());
         if (/^\/(ideas|admin\/ideas)(\/|$)/.test(path)) return await ideas(request, principal, repositories, now(), options.pilotOperator);

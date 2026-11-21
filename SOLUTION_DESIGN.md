@@ -797,6 +797,14 @@ are sent only for `anthropic.claude-` model IDs. Whether D-13's wording
 should be generalized to a standing multi-provider clause is the owner's
 call — this note records the shipped fact without changing the decision.
 
+**Amendment (2026-11-21, Tom, #166 comment 7062962674):** The assistant uses
+Bedrock Converse for text and tools. Bria AI is the sole off-AWS vendor
+authorized under D-13, specifically for the optional photo prep background job
+(replace_background). The Bria key is configured through FREEDMS_BRIA_API_KEY.
+A vendor or model swap that changes the cost basis requires D-7 repricing review.
+The ledger records a $0.032 per-image cost basis for Bria. Launch requires comparing
+hosted usage and the first invoice against the $0.035 blended action guardrail.
+
 ### D-14 — Command bar and explicit search/ask routing (2026-11-04)
 
 Approved by Tom on November 4. A 42px navy (`#0B1F2C`) bar spans the content

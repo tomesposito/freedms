@@ -1,7 +1,15 @@
 /** LOCAL TEST DOUBLE ONLY. Imported solely by local.ts; never by Lambda or provider selection. */
-import type { AssistantMessage, AssistantProvider } from './assistant-provider.js';
+import type { AssistantMessage, AssistantProvider, PhotoPrepImageEditor } from './assistant-provider.js';
 export class LocalAssistantProvider implements AssistantProvider {
   configured = true;
+  readonly photoPrepImageEditor: PhotoPrepImageEditor = {
+    configured: true,
+    source: 'stub',
+    async replaceBackground(jpeg, signal) {
+      signal.throwIfAborted();
+      return jpeg;
+    },
+  };
   async converse(messages: AssistantMessage[]): Promise<AssistantMessage> {
     const last = messages.at(-1)?.content ?? [];
     if (last[0]?.text?.startsWith('Photo prep observations.') && last.some(block => block.image)) {

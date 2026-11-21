@@ -6,6 +6,8 @@ export interface PhotoPrepScope {
   vehicle: VehicleView;
   selected: Set<number>;
   mode: 'whole' | 'selected' | 'description';
+  backgroundAvailable: boolean;
+  replaceBackground: boolean;
 }
 export interface PrepMedia {
   display: string;
@@ -19,6 +21,7 @@ export interface PrepReview {
   missing: string[];
   version: number;
   media: Map<number, PrepMedia>;
+  backgroundMedia: Map<number, PrepMedia>;
   order: number[];
   vehiclePhotoCount: number;
 }
@@ -42,6 +45,32 @@ async function crop(bitmap: ImageBitmap, ratio: number, edge: number, bytes: num
   const cropped = await createImageBitmap(canvas);
   try { return await encode(await resize(cropped, 'image/jpeg', edge, bytes)); }
   finally { cropped.close(); }
+}
+
+async function prepMedia(bitmap: ImageBitmap): Promise<PrepMedia> {
+  const [display, thumb, hero, feed] = await Promise.all([
+    resize(bitmap, 'image/jpeg', 1200, PHOTO_PREP_IMAGE_BYTES).then(encode),
+    crop(bitmap, 1, 480, 24 * 1024),
+    crop(bitmap, 16 / 9, 1200, 48 * 1024),
+    crop(bitmap, 4 / 3, 1024, 32 * 1024),
+  ]);
+  return {display, thumb, hero, feed};
+}
+
+export async function prepareBackgroundMedia(suggestions: PhotoPrepSuggestion[]) {
+  const media = new Map<number, PrepMedia>();
+  await Promise.all(suggestions.map(async row => {
+    if (row.kind !== 'background') return;
+    try {
+      const bytes = Uint8Array.from(atob(row.jpeg), byte => byte.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], {type: 'image/jpeg'}));
+      try {
+        const variants = await prepMedia(bitmap);
+        media.set(row.index, {...variants, display: row.jpeg});
+      } finally { bitmap.close(); }
+    } catch { /* Leave the row visible with its preview unavailable. */ }
+  }));
+  return media;
 }
 
 async function preparePhoto(scope: PhotoPrepScope, index: number): Promise<{image: PhotoPrepImage; media?: PrepMedia}> {
@@ -92,13 +121,7 @@ async function preparePhoto(scope: PhotoPrepScope, index: number): Promise<{imag
       context.putImageData(image, 0, 0);
       const corrected = await createImageBitmap(canvas);
       try {
-        const [display, thumb, hero, feed] = await Promise.all([
-          resize(corrected, 'image/jpeg', 1200, PHOTO_PREP_IMAGE_BYTES).then(encode),
-          crop(corrected, 1, 480, 24 * 1024),
-          crop(corrected, 16 / 9, 1200, 48 * 1024),
-          crop(corrected, 4 / 3, 1024, 32 * 1024),
-        ]);
-        return {image: {index, jpeg, quality}, media: {display, thumb, hero, feed}};
+        return {image: {index, jpeg, quality}, media: await prepMedia(corrected)};
       } finally { corrected.close(); }
     } finally { bitmap.close(); }
   } catch {
@@ -132,8 +155,10 @@ export function scopeHtml(scope: PhotoPrepScope, balance: number, cap: number, o
     <label><input type="radio" name="prep-scope" value="description" ${scope.mode === 'description' ? 'checked' : ''}> Listing description only</label>
     ${scope.mode === 'selected' ? `<div class="prep-pick">${photos.map((_, index) =>
       `<label><img src="${e(photoUrl(scope.vehicle, index, 'thumb'))}" alt=""><span><input type="checkbox" data-prep-photo="${index}" ${scope.selected.has(index) ? 'checked' : ''}> Photo ${index + 1}</span></label>`).join('')}</div>` : ''}
+    ${scope.backgroundAvailable && scope.mode !== 'description' ? `<label><input type="checkbox" data-prep-background ${scope.replaceBackground ? 'checked' : ''}> Replace exterior photo backgrounds</label>` : ''}
     </fieldset>
     <div class="assistant-note prep-estimate"><strong>${scope.mode === 'description' ? 'Listing description' : `Photo prep · ${count} × ${price}`} = ${estimate} credits</strong><br>
+    ${scope.mode !== 'description' && scope.replaceBackground ? 'Includes background replacement for exterior photos.<br>' : ''}
     Your balance is ${e(balance)} credits. Failed photos and deterministic work are free.
     ${tooMuch ? `<br>${estimate > cap ? `This pass exceeds the ${cap}-credit request cap. Choose fewer photos.` : 'Choose fewer photos or add credits.'}` : ''}</div>
     <div class="prep-actions"><button class="primary" type="button" data-prep-run ${busy || tooMuch || !count ? 'disabled' : ''}>Run photo prep · ${estimate} credits</button>
@@ -145,7 +170,7 @@ export function reviewHtml(review: PrepReview, index: number, busy: boolean, loc
   const beforeAfter = (before: string, after: string, labels: [string, string]) => `<div class="prep-comparison">${[before, after].map((url, index) =>
     `<figure><img src="${e(url)}" alt=""><figcaption>${labels[index]}</figcaption></figure>`).join('')}</div>`;
   const disabled = busy || locked ? 'disabled' : '';
-  const lightFits = review.vehiclePhotoCount < MAX_VEHICLE_PHOTOS;
+  const derivativeFits = review.vehiclePhotoCount < MAX_VEHICLE_PHOTOS;
   const rows = review.suggestions.map((suggestion, i) => {
     let title: string, body: string;
     let approve = true;
@@ -155,12 +180,19 @@ export function reviewHtml(review: PrepReview, index: number, busy: boolean, loc
         title = 'Hero pick';
         body = `<p>Proposed order · ${suggestion.order.map(n => `Photo ${n + 1}`).join(' → ')}</p>` + beforeAfter(photoUrl(vehicle, 0, 'thumb'), photoUrl(vehicle, suggestion.order[0], 'thumb'), ['Current cover', 'Suggested cover']);
         break;
-      case 'light': {
-        title = `Light & color fix · Photo ${suggestion.index + 1}`;
-        const media = review.media.get(suggestion.index);
-        approve = !!media && lightFits;
+      case 'light':
+      case 'background': {
+        const background = suggestion.kind === 'background';
+        title = `${background ? 'Background replacement' : 'Light & color fix'} · Photo ${suggestion.index + 1}`;
+        const media = (background ? review.backgroundMedia : review.media).get(suggestion.index);
+        approve = !!media && derivativeFits;
         body = media ? beforeAfter(photoUrl(vehicle, suggestion.index, 'display'), `data:image/jpeg;base64,${media.display}`, ['Before', 'After']) : '<p>Preview unavailable.</p>';
-        if (!lightFits) body += '<p>The vehicle has reached its 20-photo limit.</p>';
+        if (suggestion.kind === 'background') {
+          body = (suggestion.stub
+            ? '<p>Local test preview. The after image is a copy of the input.</p>'
+            : '<p>Only the background was replaced. Check that the vehicle itself is unchanged before approving. The original is kept.</p>') + body;
+        }
+        if (!derivativeFits) body += '<p>The vehicle has reached its 20-photo limit.</p>';
         break;
       }
       case 'vin':
@@ -185,10 +217,11 @@ export function reviewHtml(review: PrepReview, index: number, busy: boolean, loc
       ${approve ? `<button type="button" class="primary" data-prep-approve="${i}" ${disabled}>Approve</button>` : ''}
       <button type="button" data-prep-dismiss="${i}" ${busy ? 'disabled' : ''}>Dismiss</button></div></section>`;
   });
-  const lights = review.suggestions.filter(s => s.kind === 'light' && review.media.has(s.index)).length;
+  const derivatives = review.suggestions.filter(s => (s.kind === 'light' && review.media.has(s.index)) ||
+    (s.kind === 'background' && review.backgroundMedia.has(s.index))).length;
   const mileage = new Set(review.suggestions.flatMap(s => s.kind === 'mileage' ? [s.mileage] : []));
-  const hasApprovable = lights > 0 || review.suggestions.some(s => s.kind !== 'vin' && s.kind !== 'light');
-  const canApproveAll = review.vehiclePhotoCount + lights <= MAX_VEHICLE_PHOTOS && mileage.size <= 1 && hasApprovable;
+  const hasApprovable = derivatives > 0 || review.suggestions.some(s => !['vin', 'light', 'background'].includes(s.kind));
+  const canApproveAll = review.vehiclePhotoCount + derivatives <= MAX_VEHICLE_PHOTOS && mileage.size <= 1 && hasApprovable;
   return `<div class="prep-review" data-prep-review="${index}">${rows.join('')}
     ${review.missing.length ? `<p class="assistant-note">Missing from reviewed photos · ${e(review.missing.join(', '))}</p>` : ''}
     <div class="prep-actions">${canApproveAll ? `<button type="button" class="primary" data-prep-approve-all ${disabled}>Approve all</button>` : ''}
@@ -201,9 +234,10 @@ export function approvalFields(review: PrepReview, accepted: PhotoPrepSuggestion
   for (const row of accepted) {
     switch (row.kind) {
       case 'hero': fields.order = [...row.order, ...review.order.filter(i => !row.order.includes(i))].map(index); break;
-      case 'light': {
-        const media = review.media.get(row.index);
-        if (media) fields.derivatives.push({index: index(row.index), ...media});
+      case 'light':
+      case 'background': {
+        const media = (row.kind === 'background' ? review.backgroundMedia : review.media).get(row.index);
+        if (media) fields.derivatives.push({index: index(row.index), kind: row.kind, ...media});
         break;
       }
       case 'mileage': fields.mileage = row.mileage; break;

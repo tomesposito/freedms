@@ -39,6 +39,11 @@ Parameters:
     Type: String
     Default: ''
     Description: Foundation model ID used by the configured inference profile
+  BriaApiKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: Optional Bria API key for listing photo background replacement
   StripeSecretArn:
     Type: String
     Default: ''
@@ -377,6 +382,7 @@ Resources:
           PILOT_OPERATOR_SUBJECT: !Ref PilotOperatorSubject
           PILOT_OPERATOR_TENANT_ID: !Ref PilotOperatorTenantId
           FREEDMS_ASSISTANT_MODEL: !Ref AssistantModelId
+          FREEDMS_BRIA_API_KEY: !Ref BriaApiKey
           FREEDMS_STRIPE_SECRET_ARN: !Ref StripeSecretArn
           FREEDMS_STRIPE_SECRET_KEY: !Ref StripeSecretKey
           FREEDMS_STRIPE_WEBHOOK_SECRET: !Ref StripeWebhookSecret

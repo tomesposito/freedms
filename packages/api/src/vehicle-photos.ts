@@ -132,13 +132,16 @@ export function preparePhotoApproval(value: unknown, vehicle: Vehicle, date: Dat
   }
   const derivatives = input.derivatives ?? [];
   if (!Array.isArray(derivatives) || originals.length + derivatives.length > MAX_VEHICLE_PHOTOS) throw invalid('Use at most 20 vehicle photos.');
-  const sources = new Set<number>();
+  const sources = new Set<string>();
   const uploads = derivatives.map(value => {
     const row = object(value);
-    onlyKeys(row, ['index', 'display', 'thumb', 'hero', 'feed']);
+    onlyKeys(row, ['index', 'kind', 'display', 'thumb', 'hero', 'feed']);
     const sourceIndex = index(row.index);
-    if (sources.has(sourceIndex)) throw invalid('Approve one light fix per source photo.');
-    sources.add(sourceIndex);
+    const kind = row.kind === undefined ? 'light' : row.kind;
+    if (kind !== 'light' && kind !== 'background') throw invalid('Invalid photo derivative kind.');
+    const key = sourceIndex + ':' + kind;
+    if (sources.has(key)) throw invalid('Approve each photo suggestion once.');
+    sources.add(key);
     const source = originals[sourceIndex];
     const type = 'image/jpeg';
     const display = verifyPhotoType(decodeBytes(row.display, PHOTO_PREP_IMAGE_BYTES), type);
@@ -147,7 +150,7 @@ export function preparePhotoApproval(value: unknown, vehicle: Vehicle, date: Dat
     const feed = verifyPhotoType(decodeBytes(row.feed, 32 * 1024), type);
     const id = `${vehicle.id}_${randomUUID()}`;
     const photo: VehiclePhoto = {source: 'upload', id, type, size: display.length, createdAt: date.toISOString(),
-      name: `Light & color fix · Photo ${sourceIndex + 1}`, derivedFrom: source.source === 'upload' ? source.id : source.url};
+      name: `${kind === 'background' ? 'Background replacement' : 'Light & color fix'} · Photo ${sourceIndex + 1}`, derivedFrom: source.source === 'upload' ? source.id : source.url};
     photos.push(photo);
     return {photo, files: [[id, display], [`${id}-display`, display], [`${id}-thumb`, thumb], [`${id}-hero`, hero], [`${id}-feed`, feed]] as const};
   });
