@@ -620,7 +620,62 @@ these four writes has a `confirm` argument. No token minting, attestation,
 signature, compliance sign-off, terms acceptance, or credit certification tools
 are exposed. Those actions remain human-only.
 
-When `EnableManagedLoginBranding=true`, both app clients have `AWS::Cognito::ManagedLoginBranding` resources with navy
+### MCP OAuth branding (classic hosted UI)
+
+The pilot's Lite pool uses classic hosted UI. Its default branding is versioned
+in `infra/cognito/classic.css` and `infra/cognito/logo.png` (#186). The logo is an
+unmodified raster rendering of `packages/web/src/assets/logo.svg`, within
+Cognito's 100 KB logo limit. The stylesheet uses the supported classic selectors
+and properties, and stays below 3 KB. It matches the app's white surfaces, navy
+`#0B1F2C`, orange `#FF6A00`, muted text, rounded 48px controls, system font stack
+and focus/error colors. No external font is loaded. The recovery link uses a
+darker orange for readable contrast on white. Classic retains its own layout
+and flow copy; it cannot reproduce the app's split photo layout. The web/app's
+custom sign-in is unchanged.
+
+This is a separate operator-owned Cognito setting, not an application release
+or a CloudFormation-managed resource. Use the stack's `CognitoUserPoolId` output;
+verify the AWS account, pool and active classic domain before applying it. Save
+`get-ui-customization --client-id ALL` and any previous logo in a private operator
+directory first. Then, from the repository root:
+
+```sh
+aws cognito-idp set-ui-customization \
+  --user-pool-id <CognitoUserPoolId> --client-id ALL \
+  --css file://infra/cognito/classic.css \
+  --image-file fileb://infra/cognito/logo.png
+aws cognito-idp get-ui-customization \
+  --user-pool-id <CognitoUserPoolId> --client-id ALL
+```
+
+Use `ALL` so existing and newly registered MCP clients inherit the same branding
+without adding Cognito permissions to the registration bridge. Check that those
+clients have no overriding customization. The web client's hosted fallback also
+inherits these defaults; the normal in-app SRP sign-in remains unchanged. Keep
+`EnableManagedLoginBranding=false`; enabling it is a different migration.
+
+Verify the CSS readback, served logo, and real OAuth sign-in/recovery screens at
+desktop and mobile widths. Allow up to one minute for Cognito's cache. Verify
+a newly created public client inherits the assets, then remove only that
+verification client (and its registration record if created through the bridge).
+MFA uses the same hosted styling; complete credential/MFA verification with the
+account owner when needed. Never submit
+dummy password-reset requests or print tokens in verification logs.
+
+To roll back, reapply the saved CSS and logo together using the same command.
+If the original pool had no branding, use empty CSS and an empty image file to
+reset the defaults, then verify the readback and hosted page. This does not
+change callbacks, tokens, MFA, pool tier, app code or the release baseline.
+For an updated app logo, render the SVG again with a trusted SVG renderer and
+visually compare it before replacing the PNG; on macOS `sips -s format png
+packages/web/src/assets/logo.svg --out infra/cognito/logo.png` preserves the
+existing artwork. Review the complete assets before applying an update.
+
+See [AWS classic branding](https://docs.aws.amazon.com/cognito/latest/developerguide/hosted-ui-classic-branding.html)
+and [SetUICustomization](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_SetUICustomization.html).
+
+The optional managed-login alternative remains in the template. When
+`EnableManagedLoginBranding=true`, both app clients have `AWS::Cognito::ManagedLoginBranding` resources with navy
 `#0B1F2C`, orange `#FF6A00`, rounded inputs/buttons and an embedded base64 copy of
 `packages/web/src/assets/logo.svg`. SVG is supported, so no raster conversion or
 external image hosting is necessary. Settings follow the
