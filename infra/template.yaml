@@ -2,6 +2,22 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: freeDMS invite-only pilot - deploy in us-east-1
 Parameters:
+  AnalyticsEnabled:
+    Type: String
+    Default: '0'
+    AllowedValues: ['0', '1']
+    Description: Forward allowlisted in-app usage events to the US PostHog project
+  AnalyticsVendorKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: PostHog project capture token (never a personal API key)
+  AnalyticsIdentitySecret:
+    Type: String
+    Default: ''
+    NoEcho: true
+    AllowedPattern: '^$|.{32,}'
+    Description: Random private HMAC key for stable workspace analytics pseudonyms; retain across releases
   EnableManagedLoginBranding:
     Type: String
     Default: 'false'
@@ -97,6 +113,14 @@ Conditions:
   ManagedLoginBrandingEnabled: !Equals [!Ref EnableManagedLoginBranding, 'true']
   Publish: !Equals [!Ref PublishSite, 'true']
 Rules:
+  AnalyticsConfiguration:
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref AnalyticsEnabled, '0']
+          - !And
+              - !Not [!Equals [!Ref AnalyticsVendorKey, '']]
+              - !Not [!Equals [!Ref AnalyticsIdentitySecret, '']]
+        AssertDescription: Analytics requires both the project capture token and a private identity secret
   DeploymentRegion:
     Assertions:
       - Assert: !Equals [!Ref 'AWS::Region', us-east-1]
@@ -331,6 +355,9 @@ Resources:
       Timeout: 60
       Environment:
         Variables:
+          ANALYTICS_ENABLED: !Ref AnalyticsEnabled
+          ANALYTICS_VENDOR_KEY: !Ref AnalyticsVendorKey
+          ANALYTICS_IDENTITY_SECRET: !Ref AnalyticsIdentitySecret
           PILOT_OPERATOR_SUBJECT: !Ref PilotOperatorSubject
           PILOT_OPERATOR_TENANT_ID: !Ref PilotOperatorTenantId
           FREEDMS_ASSISTANT_MODEL: !Ref AssistantModelId

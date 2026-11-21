@@ -987,10 +987,18 @@ no simulated extraction or local parser fallback. Requests time out after 15 sec
 Behavioral analytics always retains accepted events in the tenant-scoped own log.
 Vendor delivery is off by default. Set `ANALYTICS_ENABLED=1` and
 `ANALYTICS_VENDOR_KEY` to the project token for the single freeDMS US PostHog
-project to opt in; unset either to disable delivery. Project creation is manual.
-Only typed categorical properties and dealership identity go to the
+project, plus `ANALYTICS_IDENTITY_SECRET` to a private random key of at least 32
+characters; missing configuration disables delivery. Project creation is manual.
+Only typed categorical properties and a stable HMAC workspace pseudonym go to the
 [PostHog capture API](https://posthog.com/docs/api/capture); no customer content,
-user IDs, VINs, or economics. `GET /analytics/funnel` derives milestones from the
+user IDs, raw dealership IDs, client IPs, VINs, or economics are forwarded. Person
+profiles and GeoIP enrichment are disabled on each event. Events are tagged
+`source=freedms_app`, with the own-log UUID and occurrence time for verification.
+Delivery is best effort with a two-second timeout; sanitized delivery outcomes go
+to API logs. There is no retry queue or historical backfill. Feed generation and
+activation projections remain in the owned log only. See
+[deployment and verification](docs/DEPLOYMENT.md#in-app-analytics).
+`GET /analytics/funnel` derives milestones from the
 owned outbox joined to deal history and document metadata. Its activation projection
 uses the tenant's first invite acceptance as the cohort start and requires the first
 vehicle and first lead or deal within seven days (inclusive). Client signals use

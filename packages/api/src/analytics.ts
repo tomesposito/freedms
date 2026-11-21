@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { jacketChecklist, type BehavioralEvent, type Deal, type DealDocument, type Funnel, type FunnelStage, type OutboxEvent, type Principal } from '@freedms/shared';
+import { createHmac, randomUUID } from 'node:crypto';
+import { jacketChecklist, type AnalyticsRecord, type BehavioralEvent, type Deal, type DealDocument, type Funnel, type FunnelStage, type OutboxEvent, type Principal } from '@freedms/shared';
 import { assertScope, type TenantRepository } from './repository.js';
 import { object, onlyKeys, invalid } from './validation.js';
 import { choice } from './crm-validation.js';
@@ -21,24 +21,40 @@ export function behavioralEvent(value: unknown): BehavioralEvent {
     default: throw invalid('Unknown analytics event.');
   }
 }
-export type AnalyticsVendor = (tenantId: string, data: BehavioralEvent) => Promise<void>;
-export function analyticsFromEnv(env: NodeJS.ProcessEnv = process.env, request: typeof fetch = fetch): AnalyticsVendor {
+type Delivery = Pick<AnalyticsRecord, 'id' | 'occurredAt'>;
+type DeliveryResult = {component: 'analytics'; destination: 'posthog'; eventId: string; outcome: 'accepted' | 'rejected' | 'unavailable'; status?: number};
+export type AnalyticsVendor = (tenantId: string, data: BehavioralEvent, delivery: Delivery) => Promise<void>;
+export function analyticsFromEnv(env: NodeJS.ProcessEnv = process.env, request: typeof fetch = fetch, report: (result: DeliveryResult) => void = result => console.info(JSON.stringify(result))): AnalyticsVendor {
   const key = env.ANALYTICS_VENDOR_KEY?.trim();
-  if (env.ANALYTICS_ENABLED !== '1' || !key) return async () => {};
-  return async (tenantId, data) => {
+  const identityKey = env.ANALYTICS_IDENTITY_SECRET?.trim();
+  if (env.ANALYTICS_ENABLED !== '1' || !key || !identityKey || identityKey.length < 32) return async () => {};
+  return async (tenantId, data, delivery) => {
     const {event, ...properties} = behavioralEvent(data);
-    // One US PostHog project, dealership identity only. No SDK/autocapture/person identification.
-    await request('https://us.i.posthog.com/i/v0/e/', {method: 'POST', redirect: 'error', signal: AbortSignal.timeout(2000), headers: {'content-type': 'application/json'},
-      body: JSON.stringify({api_key: key, distinct_id: tenantId, event, properties})});
+    // Stable workspace pseudonym, separate from public dealer IDs and marketing visitors.
+    const distinctId = 'workspace_' + createHmac('sha256', identityKey).update(tenantId).digest('hex');
+    const result = {component: 'analytics' as const, destination: 'posthog' as const, eventId: delivery.id};
+    let response: Response;
+    try {
+      response = await request('https://us.i.posthog.com/i/v0/e/', {method: 'POST', redirect: 'error', signal: AbortSignal.timeout(2000), headers: {'content-type': 'application/json'},
+        body: JSON.stringify({api_key: key, uuid: delivery.id, timestamp: delivery.occurredAt, distinct_id: distinctId, event,
+          properties: {...properties, source: 'freedms_app', $process_person_profile: false, $geoip_disable: true, $ip: null, $is_server: true}})});
+      await response.body?.cancel();
+    } catch {
+      report({...result, outcome: 'unavailable'});
+      throw new Error('Analytics delivery unavailable');
+    }
+    report({...result, outcome: response.ok ? 'accepted' : 'rejected', status: response.status});
+    if (!response.ok) throw new Error('Analytics delivery rejected');
   };
 }
 export type Track = (data: BehavioralEvent) => Promise<void>;
 /** Validate even internal callers. Keep our log first; vendor failures never escape. */
 export async function track(repo: TenantRepository, principal: Principal, now: Date, input: BehavioralEvent, vendor: AnalyticsVendor): Promise<void> {
   const data = behavioralEvent(input);
-  await repo.appendAnalytics({id: randomUUID(), tenantId: principal.tenantId, occurredAt: now.toISOString(), data});
+  const record = {id: randomUUID(), tenantId: principal.tenantId, occurredAt: now.toISOString(), data};
+  await repo.appendAnalytics(record);
   if (data.event === 'quick_entry_used') await meterQuickEntryOutcome(repo, principal, now, data);
-  try { await vendor(principal.tenantId, data); } catch { /* No payloads or credentials in logs. */ }
+  try { await vendor(principal.tenantId, data, record); } catch { /* Vendor diagnostics must exclude payloads and credentials. */ }
 }
 const stage = (times: string[]): FunnelStage => ({reached: times.length > 0, firstAt: times.sort()[0] ?? null, count: times.length});
 /** Existing outbox is metadata-only. Resolve state from owned records/history, never behavioral claims.
