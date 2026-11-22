@@ -21,6 +21,7 @@ export interface AssistantBillingLink {
   seatChange?: {id: string; userIds: string[]; tier?: AssistantPlan['tier']; requestedAt: string};
 }
 export interface StripeCommit {eventId: string; paymentId?: string; plan: AssistantPlan; cycle?: AssistantCycle; previousCycle?: {id: string; version: number}; event: OutboxEvent}
+export interface FacebookFeedPointer { tenantId: string; runId: string; createdAt: string; fingerprint: string }
 /** An instance is permanently bound to ONE tenant; no method accepts an alternate tenant. */
 export interface TenantRepository {
   assistantBillingLink(): Promise<AssistantBillingLink | undefined>;
@@ -71,6 +72,8 @@ export interface TenantRepository {
   feedConfig(): Promise<FeedConfig | undefined>;
   saveFeedConfig(record: FeedConfig, expectedVersion: number, event: OutboxEvent): Promise<void>;
   appendFeedRun(record: FeedRun, event: OutboxEvent): Promise<void>;
+  /** Bounded pointer to the currently published Facebook feed (#171): written by appendFeedRun when a run carries facebookRows, never a scan of feed history. */
+  facebookFeedPointer(): Promise<FacebookFeedPointer | undefined>;
   feedRuns(): Promise<FeedRun[]>;
   feedRun(id: string): Promise<FeedRun | undefined>;
   appendImport(record: InventoryImport, event: OutboxEvent): Promise<void>;

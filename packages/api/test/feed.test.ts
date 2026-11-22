@@ -118,6 +118,13 @@ test('Dynamo feeds use scoped reads, conditional config versions and atomic appe
   await assert.rejects(repo.saveFeedConfig({...config, tenantId: 'B'}, 0, event), /scope/);
   await assert.rejects(repo.saveFeedConfig(config, 1, event), /version/);
   assert.equal(commands.length, 6);
+  // #171: a run carrying facebookRows also writes the single bounded pointer, and reading it back is one Get, never a FEEDRUN# scan.
+  const fbRun: FeedRun = {...run, id: 'fbrun', facebookRows: [], facebookFingerprint: 'fp1'};
+  await repo.appendFeedRun(fbRun, {...generated, id: 'event4', aggregateId: fbRun.id});
+  assert.deepEqual((commands[6] as TransactWriteCommand).input.TransactItems!.map(i => i.Put?.Item?.SK), ['FEEDRUN#fbrun', 'EVENT#event4', 'FEEDPUBLISH#current']);
+  await repo.facebookFeedPointer();
+  assert.deepEqual((commands[7] as GetCommand).input.Key, {PK: 'TENANT#A', SK: 'FEEDPUBLISH#current'});
+  assert.equal(commands.length, 8);
 });
 
 test('empty feed generation is honest and oversized snapshots fail without a partial run', async () => {

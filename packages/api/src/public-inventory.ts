@@ -1,6 +1,6 @@
 import type { DocumentStore } from './document-store.js';
 import { projectedPhotoUrls, publiclyVisibleVehicles, serveVehiclePhoto } from './vehicle-photos.js';
-import { facebookCsv, newestFacebookRun } from './facebook-feed.js';
+import { buildFacebookRows, facebookCsv, feedOptionsFingerprint } from './facebook-feed.js';
 import type { Vehicle } from '@freedms/shared';
 import { ApiError, missing } from './errors.js';
 import { response, type ApiRequest, type ApiResponse } from './handler.js';
@@ -61,12 +61,18 @@ export function createPublicInventoryHandler(documents?: DocumentStore, photoBas
     if (++bucket.count > 120) throw new ApiError(429, 'RATE_LIMITED', 'Too many requests. Try again later.');
     if (photoId) return serveVehiclePhoto(repo, photoId, documents?.forTenant(tenantId));
     if (format === 'facebook.csv') {
-      if (!(await repo.feedConfig())?.facebookEnabled) throw missing();
-      const latest = newestFacebookRun(await repo.feedRuns());
-      if (!latest) throw missing();
+      // Bounded published-feed pointer (#171): one config read, one pointer
+      // read, then rows rebuilt from current inventory so withdrawals and
+      // price/status/photo changes are reconciled at serve time. A settings
+      // change since generation invalidates the pointer until regeneration;
+      // feed history is never scanned on this public path.
+      const config = await repo.feedConfig();
+      if (!config?.facebookEnabled) throw missing();
+      const pointer = await repo.facebookFeedPointer();
+      if (!pointer || pointer.fingerprint !== feedOptionsFingerprint(config)) throw missing();
       const result = response(200, null);
       result.headers['content-type'] = 'text/csv; charset=utf-8';
-      result.body = facebookCsv(latest.facebookRows!);
+      result.body = facebookCsv(buildFacebookRows(await repo.list({}), config, tenantId, tenant.name, photoBase));
       return result;
     }
     // The agent index is a static pointer list: serve it without reading any

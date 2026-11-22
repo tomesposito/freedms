@@ -1,5 +1,5 @@
 import { feedExclusion, sortedFeedVehicles } from './feed-selection.js';
-import { buildFacebookRows, newestFacebookRun } from './facebook-feed.js';
+import { buildFacebookRows, feedOptionsFingerprint } from './facebook-feed.js';
 import { track } from './analytics.js';
 import { randomUUID } from 'node:crypto';
 import { defaultFeedOptions, vehicleStatuses, type FeedOptions, type FeedRun, type OutboxEvent, type Principal, type Vehicle } from '@freedms/shared';
@@ -51,8 +51,13 @@ export async function feeds(request: ApiRequest, principal: Principal, repo: Ten
   if (path === '/feeds/runs') return response(200, {data: (await repo.feedRuns()).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))});
   const config = await repo.feedConfig();
   if (method === 'GET') {
-    const latest = newestFacebookRun(await repo.feedRuns());
-    return response(200, {data: {config: config ?? null, defaults: defaultFeedOptions, local, facebook: {enabled: config?.facebookEnabled ?? false, feedUrl: `/public/${principal.tenantId}/facebook.csv`, lastGeneratedAt: latest?.createdAt ?? null, vehicleCount: latest?.facebookRows?.length ?? null}}});
+    // Bounded pointer, never a scan of feed history (#171). The count is the
+    // live reconciled count while the pointer is current, and null once the
+    // publication settings have moved on from the last generation.
+    const pointer = await repo.facebookFeedPointer();
+    const current = pointer && config && pointer.fingerprint === feedOptionsFingerprint(config) ? pointer : undefined;
+    const vehicleCount = current ? buildFacebookRows(await repo.list({}), config!, principal.tenantId, (await repo.tenant())!.name, photoBase).length : null;
+    return response(200, {data: {config: config ?? null, defaults: defaultFeedOptions, local, facebook: {enabled: config?.facebookEnabled ?? false, feedUrl: `/public/${principal.tenantId}/facebook.csv`, lastGeneratedAt: pointer?.createdAt ?? null, vehicleCount}}});
   }
   requireWrite(principal, method);
   const body = parseBody(request.body, FEED_BODY_LIMIT), date = now.toISOString();
@@ -65,7 +70,7 @@ export async function feeds(request: ApiRequest, principal: Principal, repo: Ten
   onlyKeys(body, []);
   const options = config ?? defaultFeedOptions;
   const vehicles = await repo.list({});
-  const run: FeedRun = {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, createdAt: date, formats: [...options.formats], ...buildFeed(vehicles, options), ...(options.facebookEnabled ? {facebookRows: buildFacebookRows(vehicles, options, principal.tenantId, (await repo.tenant())!.name, photoBase)} : {})};
+  const run: FeedRun = {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, createdAt: date, formats: [...options.formats], ...buildFeed(vehicles, options), ...(options.facebookEnabled ? {facebookRows: buildFacebookRows(vehicles, options, principal.tenantId, (await repo.tenant())!.name, photoBase), facebookFingerprint: feedOptionsFingerprint(options)} : {})};
   // Keep the immutable snapshot safely below Dynamo's 400 KB item limit in both adapters.
   if (Buffer.byteLength(JSON.stringify(run)) > 300000) throw invalid('Feed snapshot exceeds the local 300 KB run limit. Narrow the included statuses or reduce inventory before generating.');
   await repo.appendFeedRun(run, event('feed.generated', run.id));
