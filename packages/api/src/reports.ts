@@ -41,6 +41,9 @@ export async function inventoryReport(repo: TenantRepository, now: Date): Promis
     totals: {count: rows.length, totalCost: rows.reduce((sum, r) => sum + r.totalCost, 0), totalListPrice: rows.reduce((sum, r) => sum + r.listPrice, 0)}};
 }
 export async function salesReport(repo: TenantRepository, range: ReturnType<typeof dateRange>): Promise<SalesReport> {
+  // Explicit ranges keep the 366-day cap (dateRange enforces it at the routes;
+  // direct callers get the same contract here, before any rows are read).
+  if (range.from && range.to) checkReportSpan(range.from, range.to);
   const {deals, vehicles, customers} = await repo.salesReportRows(range);
   const vehicleMap = new Map(vehicles.map(v => [v.id, v])), customerMap = new Map(customers.map(c => [c.id, c]));
   const rows: SalesReport['rows'] = [];
@@ -54,19 +57,37 @@ export async function salesReport(repo: TenantRepository, range: ReturnType<type
   }
   rows.sort((a, b) => a.soldDate.localeCompare(b.soldDate) || a.dealId.localeCompare(b.dealId));
   const totalFrontGross = rows.reduce((sum, r) => sum + r.frontGross, 0);
-  const counts = new Map<string, number>();
-  for (const row of rows) counts.set(row.soldDate, (counts.get(row.soldDate) ?? 0) + 1);
-  // Bounded windows include zero days. Open ranges span the observed dates.
+  // The trend is bounded independently of the rows: explicit ranges are already
+  // capped at 366 days by dateRange(), and open ranges aggregate by month once
+  // the observed span passes a year instead of rejecting the whole report.
   const first = range.from ?? rows[0]?.soldDate, last = range.to ?? rows.at(-1)?.soldDate;
+  let trend: SalesReport['trend'] = [], trendGranularity: SalesReport['trendGranularity'] = 'day';
   if (first && last) {
-    checkReportSpan(first, last);
-    for (let day = Date.parse(first); day <= Date.parse(last); day += DAY_MS) {
-      const date = new Date(day).toISOString().slice(0, 10);
-      if (!counts.has(date)) counts.set(date, 0);
+    if (Date.parse(last) - Date.parse(first) <= (MAX_REPORT_RANGE_DAYS - 1) * DAY_MS) {
+      const counts = new Map<string, number>();
+      for (const row of rows) counts.set(row.soldDate, (counts.get(row.soldDate) ?? 0) + 1);
+      for (let day = Date.parse(first); day <= Date.parse(last); day += DAY_MS) {
+        const date = new Date(day).toISOString().slice(0, 10);
+        if (!counts.has(date)) counts.set(date, 0);
+      }
+      trend = [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({date, count}));
+    } else {
+      trendGranularity = 'month';
+      const counts = new Map<string, number>();
+      for (const row of rows) { const month = row.soldDate.slice(0, 7); counts.set(month, (counts.get(month) ?? 0) + 1); }
+      const [startYear, startMonth] = first.slice(0, 7).split('-').map(Number), [endYear, endMonth] = last.slice(0, 7).split('-').map(Number);
+      // Zero-fill the months in between, unless the span is so large that only observed months keep the output bounded.
+      if ((endYear - startYear) * 12 + endMonth - startMonth < 1200) {
+        for (let year = startYear, month = startMonth; year < endYear || (year === endYear && month <= endMonth);) {
+          const key = `${year}-${String(month).padStart(2, '0')}`;
+          if (!counts.has(key)) counts.set(key, 0);
+          if (++month > 12) { month = 1; year++; }
+        }
+      }
+      trend = [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([month, count]) => ({date: `${month}-01`, count}));
     }
   }
-  const trend = [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({date, count}));
-  return {...range, rows, trend, totals: {dealsSold: rows.length, totalFrontGross, totalFiGross: rows.reduce((sum, r) => sum + r.fiGross, 0), averageGross: rows.length ? Math.round(totalFrontGross / rows.length) : 0}};
+  return {...range, rows, trend, trendGranularity, totals: {dealsSold: rows.length, totalFrontGross, totalFiGross: rows.reduce((sum, r) => sum + r.fiGross, 0), averageGross: rows.length ? Math.round(totalFrontGross / rows.length) : 0}};
 }
 export async function leadReport(repo: TenantRepository): Promise<LeadReport> {
   return repo.leadSummary();
@@ -121,7 +142,7 @@ export async function overviewReport(repo: TenantRepository, now: Date, range: R
   };
   const [inventory, sales, leads] = await Promise.all([
     section(async () => { const {totals, buckets} = await inventoryReport(repo, now); return {totals, buckets}; }),
-    section(async () => { const {totals, trend, from, to} = await salesReport(repo, range); return {totals, trend, from, to}; }),
+    section(async () => { const {totals, trend, trendGranularity, from, to} = await salesReport(repo, range); return {totals, trend, trendGranularity, from, to}; }),
     section(async () => { const {byStage, total} = await leadReport(repo); return {byStage, total}; }),
   ]);
   return {inventory, sales, leads};
