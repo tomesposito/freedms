@@ -65,6 +65,8 @@ export interface TenantRepository {
   webhookEndpoint(id: string): Promise<WebhookEndpoint | undefined>;
   saveWebhookEndpoint(record: WebhookEndpoint, expectedVersion: number, event: OutboxEvent): Promise<void>;
   webhookDispatchCandidates(endpoints: WebhookEndpoint[], now: Date): Promise<WebhookDispatchCandidate[]>;
+  webhookDrainEndpoint(after?: string): Promise<WebhookEndpoint | undefined>;
+  webhookDrainPage(endpoint: WebhookEndpoint, now: Date, after?: string): Promise<WebhookDrainPage>;
   webhookDeliveries(): Promise<WebhookDelivery[]>;
   /** Atomically create, or replace the exact stale pending claim read by the caller. */
   claimWebhookDelivery(record: WebhookDelivery, staleUpdatedAt?: string): Promise<boolean>;
@@ -106,7 +108,17 @@ export interface TenantRepository {
   delete(id: string, expectedVersion: number, event: OutboxEvent): Promise<void>;
   provision(tenant: Tenant, user: User, membership: Membership, event: OutboxEvent, acceptance?: CrmWrite): Promise<void>;
 }
-export interface RepositoryFactory { webhookTenantIds?(): Promise<string[]>; tenantForStripeCustomer?(customerId: string): Promise<string | undefined>; ideasQueue?(): Promise<Idea[]>; assistantWaitlistQueue?(): Promise<AssistantWaitlistEntry[]>; tenantForSubject?(subject: string): Promise<string | undefined>; forTenant(tenantId: string): TenantRepository }
+export interface RepositoryFactory {
+  webhookTenantIds?(): Promise<string[]>;
+  webhookDrainTenants?(after: string | undefined, limit: number): Promise<string[]>;
+  webhookDrainCursor?(scope: WebhookDrainScope): Promise<string | undefined>;
+  saveWebhookDrainCursor?(scope: WebhookDrainScope, expected: string | undefined, cursor: string): Promise<void>;
+  tenantForStripeCustomer?(customerId: string): Promise<string | undefined>;
+  ideasQueue?(): Promise<Idea[]>;
+  assistantWaitlistQueue?(): Promise<AssistantWaitlistEntry[]>;
+  tenantForSubject?(subject: string): Promise<string | undefined>;
+  forTenant(tenantId: string): TenantRepository;
+}
 export function matches(vehicle: Vehicle, query: VehicleQuery): boolean {
   return (!query.status || vehicle.status === query.status) && (!query.search ||
     [vehicle.stockNumber, vehicle.vin, vehicle.make, vehicle.model, vehicle.trim, vehicle.location]
@@ -550,12 +562,17 @@ export function deliveryId(endpointId: string, eventId: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+// One endpoint per scheduled page bounds delivery reads to one per evaluated event.
+export const WEBHOOK_DRAIN_PAGE_SIZE = 25;
+export type WebhookDrainScope = [] | [tenantId: string] | [tenantId: string, endpointId: string];
+export interface WebhookDrainPage {candidates: WebhookDispatchCandidate[]; next?: string}
+
 export interface WebhookDispatchCandidate {event: OutboxEvent; endpointId: string; previous?: WebhookDelivery}
 
 /** Keep only claimable pairs; exact remaining requires examining every candidate,
  * even after the send limit is filled. Never retain terminal history. */
 export async function webhookCandidates(events: AsyncIterable<OutboxEvent> | Iterable<OutboxEvent>, endpoints: WebhookEndpoint[], now: Date,
-  lookup: (id: string) => Promise<WebhookDelivery | undefined>): Promise<WebhookDispatchCandidate[]> {
+  lookup: (id: string) => Promise<WebhookDelivery | undefined>, sort = true): Promise<WebhookDispatchCandidate[]> {
   const pairs: WebhookDispatchCandidate[] = [];
   for await (const event of events) for (const endpoint of endpoints) {
     if (!endpoint.enabled || !endpoint.eventTypes.includes(event.type as import('@freedms/shared').WebhookEventType)) continue;
@@ -563,5 +580,5 @@ export async function webhookCandidates(events: AsyncIterable<OutboxEvent> | Ite
     if (previous && (previous.status !== 'pending' || !(Date.parse(previous.updatedAt) < now.getTime() - 15 * 60_000))) continue;
     pairs.push({event, endpointId: endpoint.id, ...(previous ? {previous} : {})});
   }
-  return pairs.sort((a, b) => a.event.occurredAt.localeCompare(b.event.occurredAt) || a.event.id.localeCompare(b.event.id) || a.endpointId.localeCompare(b.endpointId));
+  return sort ? pairs.sort((a, b) => a.event.occurredAt.localeCompare(b.event.occurredAt) || a.event.id.localeCompare(b.event.id) || a.endpointId.localeCompare(b.endpointId)) : pairs;
 }

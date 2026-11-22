@@ -282,13 +282,20 @@ retention/deletion must also cover logs, backups, and derived stores.
 
 Scheduled webhook discovery uses secret-free per-endpoint rows under
 `OPERATOR#WEBHOOKS`, maintained in the endpoint/outbox transaction. A durable
-migration marker gates a one-time, paginated legacy scan and conditional backfill;
-the Scan permission remains for that compatibility path. Dispatch queries event
-pages with server-side subscription and terminal-pair filters, then uses delivery
-point reads to retain only claimable pairs. Terminal saves atomically mark the
-corresponding event/endpoint pair; legacy terminal pairs acquire that marker on
-first lookup. Exact `remaining` counts require examining all candidate pairs,
-while retained memory and transferred dispatch results exclude terminal history.
+migration marker gates a one-time, paginated legacy scan and conditional backfill.
+The Scan permission remains for that compatibility path. Scheduled invocations
+advance at most one migration page, then discover work for at most five tenants.
+A secret-free cursor rotates tenants across invocations, and each tenant rotates
+enabled endpoints. Each endpoint resumes its event scan from the last attempted
+event or the end of the evaluated page. A scheduled pass evaluates one page of
+up to 25 events per visited tenant, with at most one delivery lookup per event.
+Further rounds reuse those pages and allow one successful claim per tenant per
+round. Dispatch queries event pages with server-side subscription and
+terminal-pair filters, then uses delivery point reads to retain claimable pairs.
+Terminal saves atomically mark the corresponding event and endpoint pair. Legacy
+terminal pairs acquire that marker on first lookup. Exact `remaining` counts for
+manual and inline dispatch require examining all candidate pairs. Retained memory
+and transferred dispatch results exclude terminal history.
 Generic event and delivery history APIs retain their existing contracts.
 
 Tenant identity comes from authenticated membership, never a client-supplied ID

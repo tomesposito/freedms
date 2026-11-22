@@ -6,8 +6,9 @@ import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { DynamoDBDocumentClient, GetCommand, QueryCommand, ScanCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { webhookEventTypes, type OutboxEvent, type WebhookDelivery, type WebhookEndpoint } from '@freedms/shared';
+import { WEBHOOK_DRAIN_PAGE_SIZE } from '../src/repository.js';
 import { MemoryRepositories } from '../src/memory.js';
 import { DynamoRepositories } from '../src/dynamo.js';
 import { createHandler } from '../src/handler.js';
@@ -473,6 +474,49 @@ test('scheduled drain stops after a full round of lost claims and skips empty te
   assert.deepEqual(await drainWebhooks(repositories, async () => ({status: 204}), now, 3), {created: 1, delivered: 1, failed: 0});
 });
 
+test('scheduled drain rotates a single claim across continuously backlogged Memory tenants', async () => {
+  const {repositories, add, endpoint} = await setup();
+  await add('B'); await endpoint('A'); await endpoint('B');
+  const sent: string[] = [];
+  const sender: WebhookSender = async (_url, init) => { sent.push(JSON.parse(init.body).tenantId); return {status: 204}; };
+  for (let run = 0; run < 3; run++) {
+    const id = `backlog-${run}`;
+    await repositories.forTenant('A').create({...input, status: 'available', id, tenantId: 'A', version: 1, createdAt: date, updatedAt: date}, event('A', id, 'vehicle.created'));
+  }
+  await drainWebhooks(repositories, sender, now, 1);
+  await drainWebhooks(repositories, sender, now, 1);
+  assert.deepEqual(sent, ['A', 'B']);
+  assert.equal((await repositories.forTenant('A').webhookDeliveries()).length, 1);
+});
+
+test('Memory scheduled drain reuses one bounded page per tenant and resumes a partial page', async () => {
+  const {repositories, endpoint} = await setup();
+  await endpoint('A');
+  const repo = repositories.forTenant('A');
+  for (let i = 0; i < 300; i++) {
+    const id = `history-${i}`;
+    await repo.create({...input, status: 'available', id, tenantId: 'A', version: 1, createdAt: date, updatedAt: date}, event('A', id, 'vehicle.created'));
+  }
+  const original = repositories.forTenant.bind(repositories);
+  const pages: {after?: string; ids: string[]}[] = [];
+  repositories.forTenant = tenantId => ({...original(tenantId),
+    webhookDispatchCandidates: async () => { assert.fail('scheduled drain must not read full history'); },
+    webhookDrainPage: async (hook, clock, after) => {
+      const page = await repo.webhookDrainPage(hook, clock, after);
+      pages.push({after, ids: page.candidates.map(pair => pair.event.id)});
+      return page;
+    }
+  });
+  const sender: WebhookSender = async () => ({status: 204});
+  assert.equal((await drainWebhooks(repositories, sender, now, 3)).created, 3);
+  assert.equal(pages.length, 1);
+  assert.equal(pages[0].ids.length, WEBHOOK_DRAIN_PAGE_SIZE - 2); // Provision and endpoint events also count.
+  assert.equal((await drainWebhooks(repositories, sender, now, 3)).created, 3);
+  assert.equal(pages.length, 2);
+  assert.equal(pages[1].after, 'history-2');
+  assert.equal(pages[1].ids[0], 'history-3');
+});
+
 test('hosted mutation awaits the inline attempt and preserves commits when delivery fails', async () => {
   const started = deferred(), release = deferred();
   const {endpoint, add, repositories} = await setup(async () => { started.resolve(); await release.promise; return {status: 204}; }, true);
@@ -552,6 +596,38 @@ test('pre-registry endpoints backfill once, including paginated scans and empty 
     assert.equal(scans, firstScans); assert.equal(scans, empty ? 1 : 2);
     assert.ok([...registry.values()].every(item => !JSON.stringify(item).includes('secret')));
   }
+});
+
+test('scheduled registry backfill resumes a bounded scan across cold starts', async () => {
+  const next = {PK: 'TENANT#A', SK: 'EVENT#history'};
+  let cursor: string | undefined, migrated = false, scans = 0;
+  const client = {send: async (command: GetCommand | PutCommand | QueryCommand | ScanCommand | TransactWriteCommand) => {
+    if (command instanceof GetCommand) {
+      if (command.input.Key!.SK === 'MIGRATED') return {Item: migrated ? {SK: 'MIGRATED'} : undefined};
+      return {Item: cursor ? {cursor} : undefined};
+    }
+    if (command instanceof ScanCommand) {
+      scans++;
+      assert.equal(command.input.Limit, WEBHOOK_DRAIN_PAGE_SIZE);
+      assert.deepEqual(command.input.ExclusiveStartKey, scans === 1 ? undefined : next);
+      return {Items: [], LastEvaluatedKey: scans === 1 ? next : undefined};
+    }
+    if (command instanceof PutCommand) {
+      cursor = command.input.Item!.cursor;
+      return {};
+    }
+    if (command instanceof TransactWriteCommand) {
+      migrated = command.input.TransactItems?.[0].Put?.Item?.SK === 'MIGRATED';
+      return {};
+    }
+    assert.equal(command.input.Limit, 1);
+    return {Items: []};
+  }} as unknown as DynamoDBDocumentClient;
+  for (const expectedScans of [1, 2, 2]) {
+    assert.deepEqual(await new DynamoRepositories('table', client).webhookDrainTenants(undefined, 5), []);
+    assert.equal(scans, expectedScans);
+  }
+  assert.equal(migrated, true);
 });
 
 test('hosted schedule routes through the API Lambda to the bounded drain without gateway auth', () => {
@@ -634,6 +710,82 @@ test('Dynamo candidate queries filter types and terminal pairs server-side and p
   const endpoint: WebhookEndpoint = {id: 'hook', tenantId: 'A', version: 1, createdAt: date, updatedAt: date, url: 'http://localhost', eventTypes: ['vehicle.created'], enabled: true, secret: 'secret'};
   assert.equal((await repo.webhookDispatchCandidates([endpoint], now)).length, 1);
   assert.equal(queries.length, 2); assert.equal(gets, 1);
+});
+
+test('Dynamo scheduled drain bounds queries and delivery lookups and persists rotation through cold starts', async () => {
+  type Row = {PK: string; SK: string; data?: unknown; cursor?: string; [key: string]: unknown};
+  const rows = new Map<string, Row>();
+  const put = (row: Row) => rows.set(JSON.stringify([row.PK, row.SK]), row);
+  const get = (key: Record<string, unknown>) => rows.get(JSON.stringify([key.PK, key.SK]));
+  put({PK: 'OPERATOR#WEBHOOKS', SK: 'MIGRATED'});
+  for (const tenantId of ['A', 'B']) {
+    const PK = `TENANT#${tenantId}`;
+    const hook: WebhookEndpoint = {id: 'hook', tenantId, version: 1, createdAt: date, updatedAt: date, url: 'https://example.invalid', eventTypes: ['vehicle.created'], enabled: true, secret: 'secret'};
+    put({PK: 'OPERATOR#WEBHOOKS', SK: `${tenantId}#hook`, data: {tenantId, endpointId: hook.id}});
+    put({PK, SK: 'WEBHOOK#hook', data: hook});
+    for (let i = 0; i < 300; i++) {
+      const id = String(i).padStart(3, '0');
+      put({PK, SK: `EVENT#${id}`, data: event(tenantId, id, 'vehicle.created')});
+    }
+  }
+  const eventQueries: QueryCommand[] = [];
+  let deliveryGets = 0;
+  const client = {send: async (command: QueryCommand | GetCommand | PutCommand | TransactWriteCommand) => {
+    if (command instanceof QueryCommand) {
+      const {ExpressionAttributeValues: values, ExclusiveStartKey: start, Limit} = command.input;
+      const eventQuery = values?.[':prefix'] === 'EVENT#';
+      assert.equal(Limit, eventQuery ? WEBHOOK_DRAIN_PAGE_SIZE : 1);
+      if (eventQuery) eventQueries.push(command);
+      const matching = [...rows.values()].filter(row => row.PK === values?.[':pk'] &&
+        row.SK.startsWith(values?.[':prefix'] ?? '') && row.SK > (start?.SK ?? values?.[':lower'] ?? ''))
+        .sort((a, b) => a.SK < b.SK ? -1 : 1);
+      const page = matching.slice(0, Limit);
+      const last = page.at(-1);
+      return {Items: page.filter(row => !eventQuery || !row['DONE#hook']),
+        LastEvaluatedKey: last && page.length < matching.length ? {PK: last.PK, SK: last.SK} : undefined};
+    }
+    if (command instanceof GetCommand) {
+      if (command.input.Key!.SK.startsWith('DELIVERY#')) deliveryGets++;
+      return {Item: get(command.input.Key!)};
+    }
+    if (command instanceof PutCommand) {
+      const row = command.input.Item as Row;
+      assert.equal(get(row)?.cursor, command.input.ExpressionAttributeValues?.[':expected']);
+      put(row);
+      return {};
+    }
+    for (const write of command.input.TransactItems!) {
+      if (write.Put) put(write.Put.Item as Row);
+      if (write.Update) get(write.Update.Key!)!['DONE#hook'] = true;
+    }
+    return {};
+  }} as unknown as DynamoDBDocumentClient;
+  const sent: string[] = [];
+  const sender: WebhookSender = async (_url, init) => { sent.push(JSON.parse(init.body).tenantId); return {status: 204}; };
+  const run = (budget: number) => drainWebhooks(new DynamoRepositories('table', client), sender, now, budget);
+  assert.equal((await run(1)).created, 1);
+  assert.equal(eventQueries.length, 1);
+  assert.equal(deliveryGets, WEBHOOK_DRAIN_PAGE_SIZE);
+  assert.equal((await run(1)).created, 1);
+  assert.deepEqual(sent, ['A', 'B']);
+  assert.equal(eventQueries.length, 2);
+  assert.equal(deliveryGets, 2 * WEBHOOK_DRAIN_PAGE_SIZE);
+  assert.equal((await run(4)).created, 4);
+  assert.deepEqual(sent, ['A', 'B', 'A', 'B', 'A', 'B']);
+  assert.equal(eventQueries.length, 4, 'second round reuses the first round pages');
+  assert.equal(deliveryGets, 4 * WEBHOOK_DRAIN_PAGE_SIZE);
+  for (const query of eventQueries.slice(2)) assert.equal(query.input.ExclusiveStartKey?.SK, 'EVENT#000');
+
+  // A full raw page can be filtered down to zero candidates. Its continuation
+  // still has to survive the cold start so the next live A event is reached.
+  for (let i = 3; i < 3 + WEBHOOK_DRAIN_PAGE_SIZE; i++) {
+    get({PK: 'TENANT#A', SK: `EVENT#${String(i).padStart(3, '0')}`})!['DONE#hook'] = true;
+  }
+  assert.equal((await run(1)).created, 1);
+  assert.equal(sent.at(-1), 'B');
+  assert.equal((await run(1)).created, 1);
+  assert.equal(sent.at(-1), 'A');
+  assert.equal(eventQueries.at(-1)?.input.ExclusiveStartKey?.SK, 'EVENT#027');
 });
 
 test('registry stays enabled-only across multiple endpoints, disable, enable and secret rotation', async () => {
