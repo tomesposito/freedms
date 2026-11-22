@@ -57,6 +57,11 @@ test('marketing image references match immutable packaged assets and pilot links
       assert.equal(config.capture_pageleave, false);
       assert.equal(config.autocapture, false);
       assert.equal(config.person_profiles, 'never');
+      // Anonymous pageview counting (#175): memory-only persistence means the
+      // SDK distinct_id lives only for this page load and is never written to
+      // localStorage or a cookie, so visits cannot be linked across loads.
+      assert.equal(config.persistence, 'memory', `${url.pathname}: persistence must be memory-only`);
+      assert.ok(!/persistence:\s*'(localStorage|cookie)/.test(snippet), `${url.pathname}: snippet must not opt into durable persistence`);
       assert.equal(config.disable_session_recording, true);
       assert.equal(config.before_send({event: '$autocapture'}), null);
       const properties = {
