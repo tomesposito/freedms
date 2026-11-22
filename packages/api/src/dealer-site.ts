@@ -1,4 +1,4 @@
-import { projectedPhotoUrls, publiclyVisibleVehicles } from './vehicle-photos.js';
+import { isPubliclyVisibleVehicle, projectedPhotoUrls, publiclyVisibleVehicles } from './vehicle-photos.js';
 import { randomUUID } from 'node:crypto';
 import type { Principal, Tenant, Vehicle, WebsiteSettings } from '@freedms/shared';
 import { createLead } from './crm.js';
@@ -62,9 +62,19 @@ export function createDealerSiteHandler(photoBase = '') {
     const s = {...websiteDefaults(tenant), ...settings};
     // An empty identity override falls back to the tenant's identity.
     s.storeName ||= tenant.name; s.phone ||= tenant.phone ?? ''; s.address ||= tenant.address ?? '';
-    const all = publiclyVisibleVehicles(await repo.list({})).sort((a, b) => a.stockNumber.localeCompare(b.stockNumber) || a.id.localeCompare(b.id));
-    const vehicle = vehicleId ? all.find(v => v.id === vehicleId) : undefined;
-    if (vehicleId && !vehicle) throw missing();
+    // #170: never enumerate inventory for a page that does not render it.
+    // Vehicle pages resolve their one vehicle with a point read; the home
+    // page uses a bounded page query; only the inventory page reads the
+    // available list it actually renders, and only if it is reached.
+    let vehicle: Vehicle | undefined;
+    if (vehicleId) {
+      const found = await repo.get(vehicleId);
+      if (found && isPubliclyVisibleVehicle(found)) vehicle = found;
+      if (!vehicle) throw missing();
+    }
+    let all: Vehicle[] | undefined;
+    const loadAvailable = async () => all ??= publiclyVisibleVehicles(await repo.list({status: 'available'}))
+      .sort((a, b) => a.stockNumber.localeCompare(b.stockNumber) || a.id.localeCompare(b.id));
     const base = `/public/${tenantId}/site`, action = vehicle ? `${base}/vehicles/${vehicle.id}` : `${base}/contact`;
     let success = false, error = '', status = 200; let values: Record<string, string> = {};
     if (method === 'POST') {
@@ -81,7 +91,7 @@ export function createDealerSiteHandler(photoBase = '') {
     const info = `<div><b>${e(s.storeName)}</b><p class="info">${s.address ? `<a href="https://www.google.com/maps/search/?api=1&amp;query=${e(encodeURIComponent(s.address))}">${e(s.address)} · Directions</a>` : 'Contact us for directions.'}</p><p class="info">${e(s.hours || 'Call for current hours.')}</p></div><div><b>Call</b><p>${s.phone ? `<a href="tel:${e(s.phone.replace(/[^+\d]/g, ''))}">${e(s.phone)}</a>` : 'Contact us below.'}</p></div>`;
     const search = `<form class="search" action="${base}/inventory"><input name="q" aria-label="Search inventory" placeholder="Search make, model, or keyword" value="${e(query.q ?? '')}" maxlength="200"><button class="btn">Search</button></form>`;
     const cards = (vehicles: Vehicle[]) => vehicles.length ? `<div class="grid">${vehicles.map((v, i) => `<article class="card"><a href="${base}/vehicles/${e(v.id)}">${photo(projectedPhotoUrls(v, photoBase, 'thumb')[0], title(v), false, i)}<div class="cb"><h3>${e(title(v))}</h3><p class="meta">${v.mileage === null ? 'Mileage available on request' : `${e(v.mileage.toLocaleString('en-US'))} mi`}</p><div class="row"><span class="price">${e(price(v))}</span><span class="view">View details →</span></div></div></a></article>`).join('')}</div>` : '<p>No vehicles are currently available matching your search.</p>';
-    let schemaVehicles = vehicle ? [vehicle] : all;
+    let schemaVehicles: Vehicle[] = vehicle ? [vehicle] : [];
     let content: string;
     let pageTitle = s.storeName;
     if (vehicle) {
@@ -92,18 +102,26 @@ export function createDealerSiteHandler(photoBase = '') {
       const q = text(query.q ?? '', 'Search', 200, true).toLowerCase(), make = text(query.make ?? '', 'Make', 200, true);
       if (query.under && query.under !== '20000') throw invalid('Invalid price filter.');
       if (query.sort && query.sort !== 'price') throw invalid('Invalid sort.');
-      let vehicles = all.filter(v => (!q || title(v).toLowerCase().includes(q)) && (!make || v.make === make) && (!query.under || v.listPrice < 2000000));
+      const available = await loadAvailable();
+      let vehicles = available.filter(v => (!q || title(v).toLowerCase().includes(q)) && (!make || v.make === make) && (!query.under || v.listPrice < 2000000));
       if (query.sort === 'price') vehicles = vehicles.sort((a, b) => a.listPrice - b.listPrice || a.id.localeCompare(b.id));
       schemaVehicles = vehicles;
       const chip = (label: string, changes: Record<string, string | undefined>, on: boolean) => {const params = new URLSearchParams(Object.entries(query).filter((entry): entry is [string, string] => entry[1] !== undefined)); for (const [k, v] of Object.entries(changes)) {if (v === undefined) params.delete(k); else params.set(k, v);} return `<a class="chip${on ? ' on' : ''}" href="${base}/inventory?${e(params.toString())}">${e(label)}</a>`;};
-      content = `<section class="sec"><h1>Inventory — ${vehicles.length} vehicles</h1>${search}<div class="filters" style="margin-top:16px">${chip('All', {q: undefined, make: undefined, under: undefined, sort: undefined}, !Object.keys(query).length)}${chip('Under $20k', {under: query.under ? undefined : '20000'}, !!query.under)}${[...new Set(all.map(v => v.make))].sort().map(m => chip(m, {make: make === m ? undefined : m}, make === m)).join('')}${chip('Sort: Price low → high', {sort: query.sort ? undefined : 'price'}, !!query.sort)}</div>${cards(vehicles)}</section>`;
+      content = `<section class="sec"><h1>Inventory — ${vehicles.length} vehicles</h1>${search}<div class="filters" style="margin-top:16px">${chip('All', {q: undefined, make: undefined, under: undefined, sort: undefined}, !Object.keys(query).length)}${chip('Under $20k', {under: query.under ? undefined : '20000'}, !!query.under)}${[...new Set(available.map(v => v.make))].sort().map(m => chip(m, {make: make === m ? undefined : m}, make === m)).join('')}${chip('Sort: Price low → high', {sort: query.sort ? undefined : 'price'}, !!query.sort)}</div>${cards(vehicles)}</section>`;
     } else if (page === 'about') {
       pageTitle = `About — ${s.storeName}`;
       content = `<section class="sec"><h1>About ${e(s.storeName)}</h1><p class="info" style="margin:16px 0">${e(s.about || `Welcome to ${s.storeName}. Browse our current inventory and contact us to learn more or plan a visit.`)}</p>${s.storePhotoUrl ? photo(s.storePhotoUrl, s.storeName, true) : ''}<div class="ft">${info}</div></section>`;
     } else if (page === 'contact') {
       pageTitle = `Contact — ${s.storeName}`;
       content = `<section class="detail"><div><h1>Contact ${e(s.storeName)}</h1><div class="ft">${info}</div></div><div>${leadForm(action, s.storeName, success, error, values)}</div></section>`;
-    } else content = `<section class="hero"><h1>Used cars, priced plainly.</h1><p>Every car on this page is on our lot today, at the price shown. Browse live inventory at ${e(s.storeName)}.</p>${search}</section><section class="sec"><h2>Featured vehicles</h2>${cards(all.slice(0, 3))}</section><div class="strip"><div><b>Real prices</b>Prices update when we change them in the store.</div><div><b>Know your vehicle</b>Ask us about condition, inspection, and vehicle history.</div><div><b>Here to help</b>Send a question from any vehicle page, or visit the store.</div></div>`;
+    } else {
+      // Home: featured vehicles come from a bounded page query (the three
+      // newest available), never a full inventory read (#170).
+      const featured = publiclyVisibleVehicles((await repo.listPage({status: 'available', limit: 3, offset: 0})).vehicles)
+        .sort((a, b) => a.stockNumber.localeCompare(b.stockNumber) || a.id.localeCompare(b.id));
+      schemaVehicles = featured;
+      content = `<section class="hero"><h1>Used cars, priced plainly.</h1><p>Every car on this page is on our lot today, at the price shown. Browse live inventory at ${e(s.storeName)}.</p>${search}</section><section class="sec"><h2>Featured vehicles</h2>${cards(featured)}</section><div class="strip"><div><b>Real prices</b>Prices update when we change them in the store.</div><div><b>Know your vehicle</b>Ask us about condition, inspection, and vehicle history.</div><div><b>Here to help</b>Send a question from any vehicle page, or visit the store.</div></div>`;
+    }
     const schema = buildPublicInventory(s.storeName, schemaVehicles, photoBase);
     const result = response(status, null); result.headers['content-type'] = 'text/html; charset=utf-8';
     result.headers['content-security-policy'] = "default-src 'none'; img-src https: http:; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";

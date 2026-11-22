@@ -69,14 +69,20 @@ export function createPublicInventoryHandler(documents?: DocumentStore, photoBas
       result.body = facebookCsv(latest.facebookRows!);
       return result;
     }
-    const document = buildPublicInventory(tenant.name, await repo.list({}), photoBase);
+    // The agent index is a static pointer list: serve it without reading any
+    // vehicles (#170). Only the inventory document formats enumerate inventory,
+    // and they ask the repository for available vehicles directly.
+    if (format === 'llms.txt') {
+      const result = response(200, null);
+      result.headers['content-type'] = 'text/plain; charset=utf-8';
+      result.body = `# ${tenant.name}\n\nInventory:\n- /public/${tenantId}/inventory.json\n- /public/${tenantId}/inventory.html\n- /public/${tenantId}/site/\n`;
+      return result;
+    }
+    const document = buildPublicInventory(tenant.name, await repo.list({status: 'available'}), photoBase);
     const result = response(200, document);
     if (format === 'inventory.html') {
       result.headers['content-type'] = 'text/html; charset=utf-8';
       result.body = publicInventoryHtml(tenant.name, document);
-    } else if (format === 'llms.txt') {
-      result.headers['content-type'] = 'text/plain; charset=utf-8';
-      result.body = `# ${tenant.name}\n\nInventory:\n- /public/${tenantId}/inventory.json\n- /public/${tenantId}/inventory.html\n- /public/${tenantId}/site/\n`;
     }
     return result;
   };
