@@ -356,7 +356,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
       };
       const result = await execute();
       if (result.statusCode >= 200 && result.statusCode < 300 && ['POST', 'PUT', 'DELETE'].includes(method) && (!photoRoute || result.statusCode === 201) && !/^\/webhooks(\/|$)/.test(path) && !/^\/(account|admin)\/mfa(\/|$)/.test(path)) {
-        try { await postCommit(repository, request.agent === true || (method === 'POST' && path === '/assistant/chat')); } catch { /* Delivery failures must never fail a committed mutation. */ }
+        try { await postCommit(repository, request.agent === true || (method === 'POST' && ['/assistant/chat', '/assistant/skills/run', '/assistant/skills/apply'].includes(path))); } catch { /* Delivery failures must never fail a committed mutation. */ }
       }
       return compressResponse(result, request.acceptEncoding);
     } catch (error) { return errorResponse(error); }

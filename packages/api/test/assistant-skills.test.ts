@@ -10,6 +10,7 @@ import { AssistantBilling } from '../src/assistant-billing.js';
 import { MemoryRepositories } from '../src/memory.js';
 import { type AssistantMessage, type AssistantProvider, type PhotoPrepImageEditor, photoPrepImageEditorFromEnv } from '../src/assistant-provider.js';
 import { assistantSkillsEndpoint, customerProposals, type Proposal } from '../src/assistant-skills.js';
+import { ASSISTANT_SETTLEMENT_RESERVE_MS, ASSISTANT_TURN_BUDGET_MS } from '../src/assistant.js';
 import { BriaPhotoPrepEditor } from '../src/bria-photo-prep.js';
 import { PNG } from 'pngjs';
 const date = new Date('2026-11-04T12:00:00Z');
@@ -209,12 +210,137 @@ test('skills refresh the write fence and preserve completed outcomes on settleme
     const data = JSON.parse(result.body).data;
     assert.equal(data.creditsUsed, 1);
     assert.equal(executions, mode === 'disabled' ? 1 : 2);
+    assert.deepEqual(data.applied, mode === 'settlement' ? [proposal.proposalId] : []);
     assert.match(data.reply, mode === 'disabled' ? /disabled/ : /DID execute successfully/);
     assert.deepEqual(data.transcript, [{tool: 'get_customer', ok: true}, ...(mode === 'settlement' ? [{tool: 'update_customer', ok: true}] : [])]);
     assert.equal((await s.repo.assistantLedger('2026-11-04')).length, 1);
   }
 });
 
+const skillWorkBudget = ASSISTANT_TURN_BUDGET_MS - ASSISTANT_SETTLEMENT_RESERVE_MS;
+test('skill deadline stops new tools at the work budget and keeps the settled action', async () => {
+  const s = await setup(), v = await s.addVehicle();
+  await s.req('/assistant/pool');
+  const billing = new AssistantBilling(s.repo, () => date);
+  let now = 0, executions = 0;
+  const result = await assistantSkillsEndpoint({method: 'POST', path: '/assistant/skills/run', claims: auth(),
+    body: JSON.stringify({skill: 'vehicle_summary', surface: 'vehicle', id: v.id})},
+    {tenantId: 'A', userId: 'user-A', role: 'admin'}, billing, async () => {
+      executions++; now = skillWorkBudget;
+      return {statusCode: 200, headers: {}, body: JSON.stringify({data: v})};
+    }, date, undefined, undefined, () => now);
+  const data = JSON.parse(result.body).data;
+  assert.equal(executions, 1);
+  assert.match(data.reply, /ran out of time.*Work already done stands/);
+  assert.deepEqual(data.transcript, [{tool: 'get_vehicle', ok: true}]);
+  assert.equal(data.creditsUsed, 1);
+  assert.deepEqual((await s.repo.assistantLedger('2026-11-04')).map(r => r.action), ['skill:vehicle_summary:get_vehicle']);
+});
+test('a skill tool that completes after the work deadline is not charged or reported complete', async () => {
+  const s = await setup(), v = await s.addVehicle();
+  await s.req('/assistant/pool');
+  const billing = new AssistantBilling(s.repo, () => date);
+  let now = 0, executions = 0;
+  const result = await assistantSkillsEndpoint({method: 'POST', path: '/assistant/skills/run', claims: auth(),
+    body: JSON.stringify({skill: 'vehicle_summary', surface: 'vehicle', id: v.id})},
+    {tenantId: 'A', userId: 'user-A', role: 'admin'}, billing, async () => {
+      executions++; now = skillWorkBudget + 1;
+      return {statusCode: 200, headers: {}, body: JSON.stringify({data: v})};
+    }, date, undefined, undefined, () => now);
+  const data = JSON.parse(result.body).data;
+  assert.equal(executions, 1);
+  assert.match(data.reply, /ran out of time/);
+  assert.deepEqual(data.transcript, []);
+  assert.equal(data.creditsUsed, 0);
+  assert.equal((await s.repo.assistantLedger('2026-11-04')).length, 0);
+});
+test('a hanging skill tool is bounded by the work deadline', {timeout: 2000}, async () => {
+  const s = await setup(), v = await s.addVehicle();
+  await s.req('/assistant/pool');
+  const billing = new AssistantBilling(s.repo, () => date);
+  let now = 0, executions = 0;
+  const result = await assistantSkillsEndpoint({method: 'POST', path: '/assistant/skills/run', claims: auth(),
+    body: JSON.stringify({skill: 'vehicle_summary', surface: 'vehicle', id: v.id})},
+    {tenantId: 'A', userId: 'user-A', role: 'admin'}, billing, async () => {
+      executions++;
+      if (executions === 1) { now = skillWorkBudget - 10; return {statusCode: 200, headers: {}, body: JSON.stringify({data: v})}; }
+      return new Promise(() => {});
+    }, date, undefined, undefined, () => now);
+  const data = JSON.parse(result.body).data;
+  assert.equal(executions, 2);
+  assert.match(data.reply, /ran out of time/);
+  assert.deepEqual(data.transcript, [{tool: 'get_vehicle', ok: true}]);
+  assert.equal(data.creditsUsed, 1);
+});
+test('hosted skills run defers webhook backlog dispatch out of the response path', async () => {
+  const repositories = new MemoryRepositories();
+  const event = (tenantId: string, id: string, type: OutboxEvent['type'], version = 1): OutboxEvent => ({id: `${id}-${version}`, tenantId, actorId: `user-${tenantId}`, aggregateId: id, aggregateVersion: version, type, occurredAt: date.toISOString(), deliveryStatus: 'pending'});
+  for (const tenantId of ['A', 'B']) await repositories.forTenant(tenantId).provision({id: tenantId, name: tenantId, createdAt: date.toISOString()}, {id: `user-${tenantId}`, name: 'User'}, {tenantId, userId: `user-${tenantId}`, role: 'admin', active: true}, event(tenantId, tenantId, 'tenant.created'));
+  let blocked = false, release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const sender = async () => { if (blocked) await gate; return {status: 204}; };
+  const handle = createHandler(repositories, {decode: async () => { throw Error('offline'); }}, () => date, new MemoryDocumentStore(), undefined, undefined, sender,
+    {hosted: true, assistantProvider: new Provider(), assistantEntitlement: {check: async () => true}, pilotOperator: {tenantId: 'A', userId: 'user-A'}});
+  const req = async (path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST') => {
+    const result = await handle({path, method, claims: auth(), ...(body !== undefined ? {body: JSON.stringify(body)} : {})});
+    return {status: result.statusCode, ...JSON.parse(result.body)};
+  };
+  await req('/webhooks/endpoints', {url: 'https://example.invalid/hook', eventTypes: ['vehicle.created']});
+  const v = (await req('/vehicles', {...vehicle})).data;
+  // A backlog event no request path has dispatched: written straight to the repository.
+  const repo = repositories.forTenant('A');
+  const stored = (await repo.get(v.id))!;
+  const backlogId = 'backlog-vehicle';
+  await repo.create({...stored, id: backlogId, stockNumber: 'BACKLOG', vin: '1HGCM82633A004399', version: 1}, event('A', backlogId, 'vehicle.created'));
+  blocked = true;
+  let responded = false;
+  const running = req('/assistant/skills/run', {skill: 'vehicle_summary', surface: 'vehicle', id: v.id}).then(result => { responded = true; return result; });
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert.equal(responded, true, 'skills run responded without waiting on the blocked webhook sender');
+  const result = await running;
+  assert.equal(result.status, 200); assert.deepEqual(result.data.transcript, ['get_vehicle', 'list_deals', 'get_feed_config'].map(tool => ({tool, ok: true})));
+  assert.equal((await repo.webhookDeliveries()).filter(d => d.status === 'delivered').length, 1, 'only the pre-run delivery is done; the backlog waits on the drain');
+  release();
+  const deadline = Date.now() + 2000;
+  while ((await repo.webhookDeliveries()).filter(d => d.status === 'delivered').length < 2) {
+    assert.ok(Date.now() < deadline, 'scheduled drain did not deliver the backlog');
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.equal((await repo.webhookDeliveries()).filter(d => d.status === 'delivered').length, 2);
+});
+test('hosted skills apply defers its webhook dispatch out of the response path', async () => {
+  const repositories = new MemoryRepositories();
+  const event = (tenantId: string, id: string, type: OutboxEvent['type'], version = 1): OutboxEvent => ({id: `${id}-${version}`, tenantId, actorId: `user-${tenantId}`, aggregateId: id, aggregateVersion: version, type, occurredAt: date.toISOString(), deliveryStatus: 'pending'});
+  for (const tenantId of ['A', 'B']) await repositories.forTenant(tenantId).provision({id: tenantId, name: tenantId, createdAt: date.toISOString()}, {id: `user-${tenantId}`, name: 'User'}, {tenantId, userId: `user-${tenantId}`, role: 'admin', active: true}, event(tenantId, tenantId, 'tenant.created'));
+  let blocked = false, release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const sender = async () => { if (blocked) await gate; return {status: 204}; };
+  const handle = createHandler(repositories, {decode: async () => { throw Error('offline'); }}, () => date, new MemoryDocumentStore(), undefined, undefined, sender,
+    {hosted: true, assistantProvider: new Provider(), assistantEntitlement: {check: async () => true}, pilotOperator: {tenantId: 'A', userId: 'user-A'}});
+  const req = async (path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST') => {
+    const result = await handle({path, method, claims: auth(), ...(body !== undefined ? {body: JSON.stringify(body)} : {})});
+    return {status: result.statusCode, ...JSON.parse(result.body)};
+  };
+  await req('/webhooks/endpoints', {url: 'https://example.invalid/hook', eventTypes: ['customer.updated']});
+  const c = (await req('/customers', {...customer})).data.customer;
+  const run = await req('/assistant/skills/run', {skill: 'clean_record', surface: 'contact', id: c.id});
+  const phone = (run.data.proposals as Proposal[]).find(p => p.kind === 'fix' && p.field === 'phone')!;
+  blocked = true;
+  let responded = false;
+  const applying = req('/assistant/skills/apply', {skill: 'clean_record', surface: 'contact', id: c.id, accepted: [phone.proposalId]}).then(result => { responded = true; return result; });
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert.equal(responded, true, 'skills apply responded without waiting on the blocked webhook sender');
+  const applied = await applying;
+  assert.equal(applied.status, 200); assert.deepEqual(applied.data.applied, [phone.proposalId]);
+  const repo = repositories.forTenant('A');
+  assert.equal((await repo.webhookDeliveries()).filter(d => d.status === 'delivered').length, 0);
+  release();
+  const deadline = Date.now() + 2000;
+  while (!(await repo.webhookDeliveries()).some(d => d.status === 'delivered')) {
+    assert.ok(Date.now() < deadline, 'scheduled drain did not deliver the customer update');
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+});
 test('photo prep settles successful photos before continuing and leaves a review-only result', async () => {
   const s = await setup();
   const v = await s.addVehicle({photoUrls: ['https://example.test/one.jpg', 'https://example.test/two.jpg', 'https://example.test/three.jpg']});

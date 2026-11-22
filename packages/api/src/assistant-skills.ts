@@ -4,7 +4,7 @@ import { assistantUnavailable } from './assistant-provider.js';
 import { runPhotoPrep } from './assistant-photo-prep.js';
 import type { AuthClaims, Principal, Customer, LeadView, Vehicle, DealView, FeedConfig, FeedOptions, CustomerTimelineEntry } from '@freedms/shared';
 import { AssistantBilling, PHOTO_PRICE, priceForTool, type AssistantMeter } from './assistant-billing.js';
-import type { AssistantEntitlement } from './assistant.js';
+import { ASSISTANT_SETTLEMENT_RESERVE_MS, ASSISTANT_TURN_BUDGET_MS, expired, timeLimit, withinAssistantBudget, type AssistantEntitlement } from './assistant.js';
 import { ApiError, requireId } from './errors.js';
 import { invalid, object, onlyKeys } from './validation.js';
 import { parseBody, response, type ApiRequest, type ApiResponse } from './handler.js';
@@ -94,7 +94,7 @@ function cleanupProposals(customers: Customer[], leads: LeadView[], now: Date): 
 }
 class SkillStop extends Error {}
 const dealHistory = (deals: DealView[]) => `Deal history: ${deals.length} deal(s).${deals.map(d => `\n${d.type}: ${d.status}`).join('')}`;
-export async function assistantSkillsEndpoint(request: ApiRequest, principal: Principal, entitlement: AssistantEntitlement, execute: Execute, now: Date, provider?: AssistantProvider, imageEditor?: PhotoPrepImageEditor) {
+export async function assistantSkillsEndpoint(request: ApiRequest, principal: Principal, entitlement: AssistantEntitlement, execute: Execute, now: Date, provider?: AssistantProvider, imageEditor?: PhotoPrepImageEditor, clock: () => number = () => performance.now()) {
   if (entitlement instanceof AssistantBilling) await entitlement.requireEntitlement(principal);
   else if (!await entitlement.check(principal)) throw new ApiError(402, 'ASSISTANT_PLAN_REQUIRED', 'An AI assistant plan is required.');
   const listing = request.method.toUpperCase() === 'GET';
@@ -121,20 +121,49 @@ export async function assistantSkillsEndpoint(request: ApiRequest, principal: Pr
   }
   if (apply && (!Array.isArray(input.accepted) || input.accepted.some(id => typeof id !== 'string') || input.accepted.length > 1000)) throw invalid('Provide accepted proposal IDs.');
   const accepted = new Set((input.accepted ?? []) as string[]);
-  const meter: AssistantMeter | undefined = entitlement instanceof AssistantBilling ? await entitlement.meter(principal) : undefined;
+  // Skills share the chat turn budget (#174): tool work stops at the work
+  // deadline and settlement keeps the reserve, so a slow skill cannot commit
+  // work or settle credits and then lose its response to the Lambda timeout.
+  const deadline = clock() + ASSISTANT_TURN_BUDGET_MS;
+  const remainingWork = () => deadline - clock() - ASSISTANT_SETTLEMENT_RESERVE_MS;
+  const totalRemaining = () => deadline - clock();
+  const controller = new AbortController();
+  let meter: AssistantMeter | undefined, settledCredits = 0;
   const transcript: {tool: string; ok: boolean}[] = [], applied: string[] = [];
   let reply = '', proposals: Proposal[] | undefined, creditsUsed = 0;
-  const call = async <T>(name: string, args: object = {}): Promise<T> => {
+  const call = async <T>(name: string, args: object = {}, onExecuted?: () => void): Promise<T> => {
     if (!(skill.reads.includes(name) || (apply && skill.writes.includes(name)))) throw new Error('Tool outside skill definition');
-    const price = priceForTool(name)!; const stop = price.actionClass === 'write' ? await meter?.beforeWrite(price) : meter?.stop(price); if (stop) throw new SkillStop(stop);
-    const result = await executeTool(tools.find(t => t.name === name)!, args, request.claims!, execute);
+    if (remainingWork() <= 0) throw new SkillStop(timeLimit);
+    const price = priceForTool(name)!;
+    let stop: string | undefined;
+    if (price.actionClass === 'write') {
+      const fenced = meter ? await withinAssistantBudget(() => meter!.beforeWrite(price), totalRemaining()) : undefined;
+      if (fenced === expired) throw new SkillStop('The assistant could not verify access. No further actions ran.');
+      stop = fenced;
+    } else stop = meter?.stop(price);
+    if (stop) throw new SkillStop(stop);
+    if (remainingWork() <= 0) throw new SkillStop(timeLimit);
+    const result = await withinAssistantBudget(() => executeTool(tools.find(t => t.name === name)!, args, request.claims!, execute, {signal: controller.signal}), remainingWork(), () => controller.abort());
+    // Chat parity: a result that lands after the work deadline is not charged
+    // or reported as completed work; the time-limit reply covers it.
+    if (result === expired || remainingWork() < 0) { controller.abort(); throw new SkillStop(timeLimit); }
     transcript.push({tool: name, ok: !result.isError});
     if (result.isError) throw new SkillStop(`Could not complete ${name.replace(/_/g, ' ')}. No further actions ran.`);
-    const settlement = await meter?.charge(`skill:${skill.id}:${name}`, price);
-    if (settlement) throw new SkillStop(settlement);
+    onExecuted?.();
+    if (meter) {
+      const settlement = await withinAssistantBudget(() => meter!.charge(`skill:${skill.id}:${name}`, price), totalRemaining());
+      if (settlement === expired) throw new SkillStop(`The action ${name} DID execute successfully, but its credit settlement could not be confirmed. No further actions ran. Review the completed action before retrying.`);
+      if (settlement) throw new SkillStop(settlement);
+      settledCredits += price.credits;
+    }
     return (result.structuredContent as {data: T}).data;
   };
   try {
+    if (entitlement instanceof AssistantBilling) {
+      const created = await withinAssistantBudget(() => entitlement.meter(principal), totalRemaining());
+      if (created === expired) throw new SkillStop(timeLimit);
+      meter = created;
+    }
     if (skill.id === 'vehicle_summary') {
       const v = await call<Vehicle & {agingDays: number}>('get_vehicle', {id: context.id});
       const deals = (await call<DealView[]>('list_deals')).filter(d => d.vehicleId === v.id);
@@ -171,8 +200,11 @@ export async function assistantSkillsEndpoint(request: ApiRequest, principal: Pr
         for (const c of customers) {
           const fixes = proposals.filter((p): p is Extract<Proposal, {kind: 'fix'}> => p.kind === 'fix' && p.customerId === c.id && accepted.has(p.proposalId));
           if (!fixes.length) continue;
-          await call('update_customer', {id: c.id, version: c.version, name: c.name, phone: c.phone, email: c.email, address: c.address, consent: c.consent, notes: c.notes, ...Object.fromEntries(fixes.map(p => [p.field, p.proposed]))});
-          applied.push(...fixes.map(p => p.proposalId));
+          // Record the fixes as applied the moment the write lands, before
+          // settlement: if the charge then fails or times out, the response
+          // still names the changes that actually took effect.
+          await call('update_customer', {id: c.id, version: c.version, name: c.name, phone: c.phone, email: c.email, address: c.address, consent: c.consent, notes: c.notes, ...Object.fromEntries(fixes.map(p => [p.field, p.proposed]))},
+            () => applied.push(...fixes.map(p => p.proposalId)));
         }
         reply = `Applied ${applied.length} selected change(s).`;
       }
@@ -180,6 +212,15 @@ export async function assistantSkillsEndpoint(request: ApiRequest, principal: Pr
   } catch (error) {
     if (!(error instanceof SkillStop)) throw error;
     reply = error.message;
-  } finally { creditsUsed = await meter?.finish() ?? 0; }
+  } finally {
+    // Call finish once even when no budget remains; never wait beyond the
+    // total deadline, and fall back to the credits settled locally.
+    const pending = meter?.finish();
+    if (pending) {
+      void pending.catch(() => {});
+      const done = await withinAssistantBudget(() => pending, totalRemaining());
+      creditsUsed = done === expired ? settledCredits : done;
+    }
+  }
   return response(200, {data: apply ? {applied, reply, transcript, creditsUsed} : {skill: skill.id, reply, ...(proposals ? {proposals} : {}), transcript, creditsUsed}});
 }
