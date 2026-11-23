@@ -1,5 +1,11 @@
 import type { AuthClaims, DealView } from '@freedms/shared';
-import { missing, requireId } from '../errors.js';
+import { ApiError, missing, requireId } from '../errors.js';
+// Path ids keep requireId's INVALID_ID code but name the argument (#195):
+// "Invalid identifier." does not say which of a tool's ids was malformed.
+function namedId(value: unknown, name: string): string {
+  try { return requireId(value); }
+  catch { throw new ApiError(400, 'INVALID_ID', `Invalid "${name}": expected a record id (letters, digits, "-" or "_", at most 128 characters).`); }
+}
 import { errorResponse, type ApiRequest, type ApiResponse } from '../handler.js';
 import { invalid, object, onlyKeys } from '../validation.js';
 import { tools, vehicleFields } from './tools.js';
@@ -19,9 +25,9 @@ export async function executeTool(tool: typeof tools[number], arguments_: unknow
     const missingArgs = tool.inputSchema.required.filter(key => args[key] === undefined);
     if (missingArgs.length) throw invalid(`Required tool arguments are missing: ${missingArgs.join(', ')}.`);
     const {id: entityId, taskId, documentId, pencilId, ...fields} = args;
-    let path = tool.path.includes(':id') ? tool.path.replace(':id', requireId(entityId)) : tool.path;
-    if ('taskId' in tool.inputSchema.properties) path = path.replace(':taskId', requireId(taskId));
-    if ('documentId' in tool.inputSchema.properties) path = path.replace(':documentId', requireId(documentId));
+    let path = tool.path.includes(':id') ? tool.path.replace(':id', namedId(entityId, 'id')) : tool.path;
+    if ('taskId' in tool.inputSchema.properties) path = path.replace(':taskId', namedId(taskId, 'taskId'));
+    if ('documentId' in tool.inputSchema.properties) path = path.replace(':documentId', namedId(documentId, 'documentId'));
     const internal: ApiRequest = {method: tool.method, path, claims, agent: true};
     if (tool.method === 'GET') {
       internal.query = {};
@@ -35,7 +41,10 @@ export async function executeTool(tool: typeof tools[number], arguments_: unknow
             ? `Invalid query argument "${key}": expected a string, received ${received}. For a list of values, pass one comma-separated string.`
             : `Invalid query argument "${key}": expected an integer, received ${received}.`);
         }
-        if (Array.isArray(schema?.enum) && !schema.enum.includes(value)) throw invalid(`Invalid query argument "${key}": expected one of ${schema.enum.join(', ')}.`);
+        // An empty string means "no filter" on list endpoints (e.g.
+        // search_vehicles status) and was accepted before this check; leave
+        // it to REST semantics instead of rejecting it here.
+        if (value !== '' && Array.isArray(schema?.enum) && !schema.enum.includes(value)) throw invalid(`Invalid query argument "${key}": expected one of ${schema.enum.join(', ')}.`);
         internal.query[key] = String(value);
       }
     } else {
@@ -67,7 +76,7 @@ export async function executeTool(tool: typeof tools[number], arguments_: unknow
         internal.body = JSON.stringify({version: fields.version, stage: fields.stage ?? lead.stage,
           assigneeId: 'assigneeId' in fields ? fields.assigneeId : lead.assigneeId, vehicleId: lead.vehicleId});
       } else if (tool.name === 'set_working_pencil') {
-        internal.body = JSON.stringify({version: fields.version, workingPencilId: requireId(pencilId)});
+        internal.body = JSON.stringify({version: fields.version, workingPencilId: namedId(pencilId, 'pencilId')});
       } else if (tool.name === 'create_pencil' || tool.name === 'update_pencil') {
         const existing = await dispatch({method: 'GET', path, claims});
         if (existing.statusCode !== 200) return {isError: true, content: [{type: 'text', text: existing.body}]};
@@ -79,7 +88,7 @@ export async function executeTool(tool: typeof tools[number], arguments_: unknow
             acquisitionFee: lease.acquisitionFee, securityDeposit: lease.securityDeposit, milesPerYear: lease.milesPerYear} : null,
           fiSelections: fiSelections.map(({productId, status}) => ({productId, status})),
         }));
-        const key = requireId(pencilId), saved = pencils.find(p => p.id === key);
+        const key = namedId(pencilId, 'pencilId'), saved = pencils.find(p => p.id === key);
         const create = tool.name === 'create_pencil';
         if (create && saved) throw invalid('Pencil IDs must be unique.');
         if (!create && !saved) throw missing();

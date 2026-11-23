@@ -578,6 +578,19 @@ test('MCP errors name the field and the fix, and credit applications are discove
   assert.equal(badSaved.isError, true); assert.match(message(badSaved), /Unknown dataset: expected one of .*inventory/);
   const badColumns = await s.call('create_saved_report', {name: 'Bad', dataset: 'inventory', columns: ['bogus']});
   assert.equal(badColumns.isError, true); assert.match(message(badColumns), /Invalid columns: bogus\./); assert.match(message(badColumns), /stockNumber/);
+  // A non-string column element is a 400 that labels the element, never a 500.
+  const objectColumn = await s.call('create_saved_report', {name: 'Bad', dataset: 'inventory', columns: [{}]});
+  refused(objectColumn, 'VALIDATION'); assert.match(message(objectColumn), /Invalid columns: \(object\)\./);
+  const dupColumns = await s.call('create_saved_report', {name: 'Bad', dataset: 'inventory', columns: ['count', 'count']});
+  refused(dupColumns, 'VALIDATION'); assert.match(message(dupColumns), /duplicates are not allowed/);
+  const badGroupBy = await s.call('create_saved_report', {name: 'Bad', dataset: 'sales', columns: ['count'], groupBy: 'bogus'});
+  refused(badGroupBy, 'VALIDATION'); assert.match(message(badGroupBy), /Invalid groupBy: expected one of /);
+  // An empty-string enum filter still means "no filter", as before the
+  // executor pre-check: search_vehicles with status '' lists everything.
+  assert.equal((await s.call('search_vehicles', {status: ''})).isError, false);
+  // A malformed second id names which argument was wrong.
+  const badDocId = await s.call('get_document_content', {id: 'deal-1', documentId: 123});
+  refused(badDocId, 'INVALID_ID'); assert.match(message(badDocId), /Invalid "documentId"/);
   // Credit discovery starting from lists alone: list deals, create an
   // application, find it in the new list, and read it by the listed id.
   const dealId = data(await s.call('list_deals'))[0].id;

@@ -54,11 +54,15 @@ export function reportDefinition(b: Record<string, unknown>): ReportDefinition {
   if (typeof b.dataset !== 'string' || !Object.hasOwn(reportDatasets, b.dataset)) throw invalid(`Unknown dataset: expected one of ${Object.keys(reportDatasets).join(', ')}.`);
   const dataset = b.dataset as ReportDataset, spec = reportDatasets[dataset];
   const validColumns = [...spec.columns.map(c => c.key), 'count'];
-  if (!Array.isArray(b.columns) || !b.columns.length || b.columns.some(c => typeof c !== 'string' || !validColumns.includes(c)) || new Set(b.columns).size !== b.columns.length) {
-    const bad = Array.isArray(b.columns) ? b.columns.filter(c => typeof c !== 'string' || !validColumns.includes(c as string)) : [];
-    throw invalid(`Invalid columns${bad.length ? `: ${bad.map(c => String(c)).join(', ')}` : ''}. Valid columns for ${dataset}: ${validColumns.join(', ')}.`);
-  }
-  if (b.groupBy !== undefined && (typeof b.groupBy !== 'string' || !(spec.groupings as readonly string[]).includes(b.groupBy))) throw invalid(`Invalid grouping: expected one of ${spec.groupings.join(', ')}.`);
+  // Label bad elements without String(value): an arbitrary JSON value is not
+  // guaranteed to stringify, and a formatter throw would turn this 400 into
+  // a 500. Distinct messages for empty, duplicate, and unknown columns.
+  const label = (c: unknown) => typeof c === 'string' ? c : `(${Array.isArray(c) ? 'array' : typeof c})`;
+  if (!Array.isArray(b.columns) || !b.columns.length) throw invalid(`Invalid columns: at least one column is required. Valid columns for ${dataset}: ${validColumns.join(', ')}.`);
+  const bad = b.columns.filter(c => typeof c !== 'string' || !validColumns.includes(c));
+  if (bad.length) throw invalid(`Invalid columns: ${bad.map(label).join(', ')}. Valid columns for ${dataset}: ${validColumns.join(', ')}.`);
+  if (new Set(b.columns).size !== b.columns.length) throw invalid(`Invalid columns: duplicates are not allowed. Valid columns for ${dataset}: ${validColumns.join(', ')}.`);
+  if (b.groupBy !== undefined && (typeof b.groupBy !== 'string' || !(spec.groupings as readonly string[]).includes(b.groupBy))) throw invalid(`Invalid groupBy: expected one of ${spec.groupings.join(', ')}.`);
   if ([b.from, b.to].some(v => v !== undefined && typeof v !== 'string')) throw invalid('Invalid dates.');
   dateRange({from: b.from as string | undefined, to: b.to as string | undefined});
   return {dataset, columns: b.columns as string[], ...(b.from !== undefined ? {from: b.from as string} : {}), ...(b.to !== undefined ? {to: b.to as string} : {}), ...(b.groupBy !== undefined ? {groupBy: b.groupBy as string} : {})};
