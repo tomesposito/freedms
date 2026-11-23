@@ -331,10 +331,12 @@ test('legacy invite backfill drops only the plaintext token, preserves hashes, s
   const expired = {...newInvite(a.invites[0].tenantId, {name: 'Legacy Expired', email: 'legacy-expired@example.test', role: 'staff'}, now), expiresAt: '2026-10-20T12:00:00.000Z'};
   const fresh = newInvite(a.invites[0].tenantId, {name: 'Legacy Revoked', email: 'legacy-revoked@example.test', role: 'admin'}, now);
   const revoked = {...fresh, status: 'revoked' as const, closedTokenHash: fresh.tokenHash, tokenHash: ''};
-  for (const invite of [pending, expired, revoked]) await plant(invite);
+  const done = newInvite(a.invites[0].tenantId, {name: 'Legacy Accepted', email: 'legacy-accepted@example.test', role: 'staff'}, now);
+  const accepted = {...done, status: 'accepted' as const, acceptedAt: now.toISOString(), acceptedUserId: 'legacy-user', acceptedName: 'Legacy Accepted', closedTokenHash: done.tokenHash, tokenHash: ''};
+  for (const invite of [pending, expired, revoked, accepted]) await plant(invite);
   const before = await repo.crmList('invite'), eventsBefore = await repo.events();
-  assert.equal(before.filter(row => 'token' in row).length, 3);
-  assert.equal(await scrubLegacyInvites(repo), 3);
+  assert.equal(before.filter(row => 'token' in row).length, 4);
+  assert.equal(await scrubLegacyInvites(repo), 4);
   const after = await repo.crmList('invite');
   assert.deepEqual(after, before.map(row => { const {token: _token, ...rest} = row as Invite & {token?: string}; return rest; }));
   assert.ok(after.every(row => !('token' in row)));
@@ -356,4 +358,9 @@ test('admin invite list repairs legacy records in storage, not just in the respo
   const stored = (await repo.crmGet('invite', legacy.id))!;
   assert.equal('token' in stored, false);
   assert.equal(stored.version, legacy.version); assert.equal(stored.tokenHash, legacy.tokenHash); assert.equal(stored.status, 'pending');
+});
+test('legacy invite backfill skips a record whose scrub fails and continues with the rest (#179)', async () => {
+  const rows = [newInvite('A', {name: 'One', email: 'one@example.test', role: 'staff'}, now), newInvite('A', {name: 'Two', email: 'two@example.test', role: 'staff'}, now)];
+  const repo = {crmList: async () => rows, scrubInvite: async (record: Invite) => { if (record.id === rows[0].id) throw new Error('changed mid-scan'); return true; }};
+  assert.equal(await scrubLegacyInvites(repo as never), 1);
 });

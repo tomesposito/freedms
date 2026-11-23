@@ -50,7 +50,9 @@ export function hasPlaintextToken(invite: Invite): boolean {
 export async function scrubLegacyInvites(repo: TenantRepository): Promise<number> {
   let scrubbed = 0;
   for (const invite of await repo.crmList('invite')) {
-    if (hasPlaintextToken(invite) && await repo.scrubInvite(storedInvite(invite))) scrubbed++;
+    if (!hasPlaintextToken(invite)) continue;
+    // One record's failure (e.g. it changed mid-scan) never stops the rest.
+    try { if (await repo.scrubInvite(storedInvite(invite))) scrubbed++; } catch { /* skip this record */ }
   }
   return scrubbed;
 }

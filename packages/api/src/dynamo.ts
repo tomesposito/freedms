@@ -264,7 +264,7 @@ export class DynamoRepositories implements RepositoryFactory {
         return 'accepted';
       },
       scrubInvite: async record => {
-        if ('token' in record) return false;
+        if ('token' in record || record.tenantId !== tenantId) return false;
         try {
           await this.client.send(new PutCommand({TableName: this.table, Item: {...key(`INVITE#${requireId(record.id)}`), data: record},
             ConditionExpression: '#d.#v = :v AND attribute_exists(#d.#token)',
@@ -272,7 +272,9 @@ export class DynamoRepositories implements RepositoryFactory {
             ExpressionAttributeValues: {':v': record.version}}));
           return true;
         } catch (error) {
-          if (error instanceof Error && error.name === 'ConditionalCheckFailedException') return false;
+          // A version/token mismatch, or an overlap with an in-flight invite
+          // transaction, both mean "not scrubbed now" — never a fatal error.
+          if (error instanceof Error && ['ConditionalCheckFailedException', 'TransactionConflictException'].includes(error.name)) return false;
           throw error;
         }
       },

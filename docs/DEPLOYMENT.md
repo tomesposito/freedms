@@ -608,8 +608,9 @@ Invite records written before token hashing shipped may still carry a plaintext
 `TABLE_NAME=<table> node --import tsx packages/api/src/invite-token-backfill.ts <tenant-id>`.
 The backfill drops only the plaintext field — hashes, invite states and versions
 are preserved, live invite links keep working, and re-running it is a no-op.
-An admin opening the invite list also repairs that dealership's records, so the
-script is only needed for dealerships nobody signs in to.
+An admin opening the invite list also repairs that dealership's records on a
+best-effort basis; the script above is the guaranteed path, so run it for every
+dealership rather than relying on admin visits.
 
 Available reads are `search_vehicles`, `get_vehicle`, `list_leads`, `get_lead`,
 `list_customers`, `get_customer`, `list_deals`, `get_deal`, `get_service_board`,

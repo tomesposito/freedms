@@ -82,7 +82,7 @@ export class MemoryRepositories implements RepositoryFactory {
         return 'accepted';
       },
       scrubInvite: async record => {
-        if ('token' in record) return false;
+        if ('token' in record || record.tenantId !== tenantId) return false;
         const current = s.crm.get(`invite#${record.id}`) as Invite | undefined;
         if (!current || current.tenantId !== tenantId || current.version !== record.version || !('token' in current)) return false;
         storeCrm(record); return true;

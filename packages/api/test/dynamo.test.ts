@@ -402,11 +402,14 @@ test('Dynamo invite scrub is a same-version conditional put that requires a stor
   const input = commands[0].input;
   assert.equal(input.Item?.PK, 'TENANT#A'); assert.equal(input.Item?.SK, 'INVITE#inv');
   assert.deepEqual(input.Item?.data, invite); assert.equal('token' in (input.Item?.data as object), false);
-  assert.match(input.ConditionExpression!, /attribute_exists\(#d\.#token\)/);
+  assert.match(input.ConditionExpression!, /#d\.#v = :v AND attribute_exists\(#d\.#token\)/);
   assert.equal(input.ExpressionAttributeValues?.[':v'], 3);
   assert.equal(await repo.scrubInvite({...invite, token: 'secret'} as Invite), false);
   assert.equal(commands.length, 1);
   const failed = Object.assign(new Error('nope'), {name: 'ConditionalCheckFailedException'});
   const refusing = {send: async () => { throw failed; }} as unknown as DynamoDBDocumentClient;
   assert.equal(await new DynamoRepositories('table', refusing).forTenant('A').scrubInvite(invite), false);
+  const conflicted = Object.assign(new Error('busy'), {name: 'TransactionConflictException'});
+  const busy = {send: async () => { throw conflicted; }} as unknown as DynamoDBDocumentClient;
+  assert.equal(await new DynamoRepositories('table', busy).forTenant('A').scrubInvite(invite), false);
 });
