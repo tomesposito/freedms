@@ -36,6 +36,21 @@ function applicant(value: unknown, now: Date, old?: CreditApplicant): CreditAppl
     employerName: text(b.employerName, 'Employer', 120, true), jobTitle: text(b.jobTitle, 'Job title', 120, true), yearsEmployed: years(b.yearsEmployed),
     grossMonthlyIncome: money(b.grossMonthlyIncome, 'Income'), otherMonthlyIncome: money(b.otherMonthlyIncome, 'Other income'), otherIncomeSource: text(b.otherIncomeSource, 'Other income source', 500, true)};
 }
+/** Discovery list for credit applications (#195). An application's id is its
+ * deal id (one application per deal), which made get-by-id unreachable for
+ * MCP agents: no list existed and no readable record exposed the id. The
+ * projection is a summary on purpose — applicant name and the already-masked
+ * SSN last4 only; full applicant detail stays on the per-deal read. */
+export async function listCreditApplications(request: ApiRequest, principal: Principal, repo: TenantRepository) {
+  if (request.method.toUpperCase() !== 'GET') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+  onlyKeys(request.query ?? {}, []);
+  const applications = await repo.crmList('credit-application');
+  const data = applications.map(app => ({id: app.id, dealId: app.dealId, customerId: app.customerId, status: app.status,
+    applicantName: app.applicant.fullName, ssnLast4: app.applicant.ssnLast4, consentAt: app.consentAt,
+    version: app.version, createdAt: app.createdAt, updatedAt: app.updatedAt}));
+  data.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
+  return response(200, {data});
+}
 export async function credit(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date, agent = false) {
   const match = /^\/deals\/([^/]+)\/(credit-application|payoff-quotes)\/?$/.exec(request.path);
   if (!match) throw missing();

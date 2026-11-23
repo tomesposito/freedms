@@ -1,7 +1,8 @@
 import { communicationTypes, leadSources, leadStages, type CustomerInput } from '@freedms/shared';
 import { invalid, object, onlyKeys, text } from './validation.js';
 export function choice<T extends string>(value: unknown, values: readonly T[], label: string): T {
-  if (!values.includes(value as T)) throw invalid(`Invalid ${label}.`); return value as T;
+  // Name the valid values (#195) so a caller can fix the value from the error alone.
+  if (!values.includes(value as T)) throw invalid(`Invalid ${label}: expected one of ${values.join(', ')}.`); return value as T;
 }
 export function timestamp(value: unknown, label: string): string {
   const s = text(value, label, 40);

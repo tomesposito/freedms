@@ -45,16 +45,16 @@ test('MCP initialize, ping, scoped tool discovery, metadata and adapter dispatch
   const initialized = await s.request('initialize', {protocolVersion: '2025-11-25', capabilities: {}, clientInfo: {name: 'offline', version: '1'}});
   assert.equal(initialized.result.protocolVersion, '2025-11-25'); assert.ok(initialized.result.capabilities.tools);
   assert.deepEqual((await s.request('ping')).result, {});
-  assert.equal((await s.request('tools/list')).result.tools.length, 130);
+  assert.equal((await s.request('tools/list')).result.tools.length, 131);
   const reads = (await s.request('tools/list', {}, token({scope: 'freedms/mcp.read'}))).result.tools;
-  assert.equal(reads.length, 51); assert.ok(reads.every((t: {annotations: {readOnlyHint: boolean}}) => t.annotations.readOnlyHint));
+  assert.equal(reads.length, 52); assert.ok(reads.every((t: {annotations: {readOnlyHint: boolean}}) => t.annotations.readOnlyHint));
   assert.equal((await s.request('tools/call', {name: 'create_vehicle', arguments: {}}, token({scope: 'freedms/mcp.read'}))).error.message, 'Tool unavailable.');
   for (const sub of ['unknown', 'admin-C']) assert.deepEqual((await s.request('tools/list', {}, token({sub}))).result.tools, []);
   const metadata = await s.handle({method: 'GET', path: '/.well-known/oauth-protected-resource'});
   assert.deepEqual(JSON.parse(metadata.body).authorization_servers, [new URL(config.resource).origin]); assert.equal(JSON.parse(metadata.body).resource, config.resource);
   const gateway = gatewayHandler(s.handle, 'web-issuer', 'web-audience');
   const result = await gateway({rawPath: '/mcp', requestContext: {http: {method: 'POST'}}, headers: {Authorization: `Bearer ${token()}`}, body: JSON.stringify({jsonrpc: '2.0', id: 7, method: 'tools/list'})});
-  assert.equal(JSON.parse(result.body).result.tools.length, 130);
+  assert.equal(JSON.parse(result.body).result.tools.length, 131);
   assert.deepEqual(localAuth('/mcp', false, 'access-token', {verify: () => {throw Error('Must not verify as ID token');}}), {authorization: 'Bearer access-token'});
 });
 test('MCP rejects invalid access tokens with a resource challenge and caches offline JWKS', async () => {
@@ -554,6 +554,48 @@ test('desking MCP validation, tenant isolation, scope and role refusals', async 
   const product = data(await s.call('create_fi_product', fiInput));
   data(await s.call('update_fi_product', {id: product.id, version: 1, ...fiInput}));
   refused(await s.call('update_fi_product', {id: product.id, version: 1, ...fiInput}), 'CONFLICT');
+});
+
+test('MCP errors name the field and the fix, and credit applications are discoverable from lists (#195)', async () => {
+  const s = await setup();
+  const message = (result: any) => JSON.parse(result.content[0].text).error.message as string;
+  // An unexpected field is named, with the allowed set (issue example 1).
+  const extra = await s.call('get_commissions', {id: 'anything'});
+  assert.equal(extra.isError, true); assert.match(message(extra), /Unexpected field in request: id\./);
+  assert.match(message(extra), /Allowed fields: from, to\./);
+  // Missing required arguments are listed by name (2026-11-23 J16 evidence).
+  const missingCall = await s.call('create_vehicle', {});
+  assert.equal(missingCall.isError, true);
+  for (const name of ['reconCosts', 'dateStocked', 'location', 'notes']) assert.ok(message(missingCall).includes(name), name);
+  // An array where a comma-separated string belongs names the argument (issue example 2).
+  const arrayColumns = await s.call('export_custom_report_csv', {dataset: 'inventory', columns: ['stockNumber', 'listPrice']});
+  assert.equal(arrayColumns.isError, true); assert.match(message(arrayColumns), /"columns".*comma-separated string/);
+  // A bad enum value names the argument and the valid values (issue example 2).
+  const badDataset = await s.call('export_custom_report_csv', {dataset: 'vehicles', columns: 'stockNumber'});
+  assert.equal(badDataset.isError, true); assert.match(message(badDataset), /"dataset".*inventory/);
+  // The REST report-definition errors behind saved reports name values too.
+  const badSaved = await s.call('create_saved_report', {name: 'Bad', dataset: 'vehicles', columns: ['stockNumber']});
+  assert.equal(badSaved.isError, true); assert.match(message(badSaved), /Unknown dataset: expected one of .*inventory/);
+  const badColumns = await s.call('create_saved_report', {name: 'Bad', dataset: 'inventory', columns: ['bogus']});
+  assert.equal(badColumns.isError, true); assert.match(message(badColumns), /Invalid columns: bogus\./); assert.match(message(badColumns), /stockNumber/);
+  // Credit discovery starting from lists alone: list deals, create an
+  // application, find it in the new list, and read it by the listed id.
+  const dealId = data(await s.call('list_deals'))[0].id;
+  assert.ok(!data(await s.call('list_credit_applications')).some((a: any) => a.dealId === dealId));
+  data(await s.call('create_credit_application', {id: dealId, ...creditInput}));
+  const listed = data(await s.call('list_credit_applications'));
+  const entry = listed.find((a: any) => a.dealId === dealId);
+  assert.ok(entry); assert.equal(entry.id, dealId); assert.equal(entry.applicantName, person.fullName); assert.equal(entry.ssnLast4, '6789');
+  assert.ok(!JSON.stringify(listed).includes(person.ssn)); assert.ok(!JSON.stringify(listed).includes('dateOfBirth'));
+  const fetched = data(await s.call('get_credit_application', {id: entry.id}));
+  assert.equal(fetched.applicant.fullName, person.fullName);
+  // The list is tenant-scoped: tenant B sees none of tenant A's applications.
+  assert.ok(!data(await s.call('list_credit_applications', {}, token({sub: 'admin-B'}))).some((a: any) => a.dealId === dealId));
+  // get_document_content says where each id comes from.
+  const content = tools.find(t => t.name === 'get_document_content')!;
+  const props = content.inputSchema.properties as Record<string, {description?: string}>;
+  assert.match(props.id.description!, /dealId.*search_documents/); assert.match(props.documentId.description!, /search_documents/);
+  assert.match(content.description, /search_documents/);
 });
 
 const servicePartsWrites = ['create_appointment', 'update_appointment', 'create_repair_order', 'update_repair_order', 'set_repair_order_status',

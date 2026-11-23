@@ -6,7 +6,10 @@ export function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 export function onlyKeys(value: Record<string, unknown>, keys: string[]): void {
-  if (Object.keys(value).some(key => !keys.includes(key))) throw invalid('Unexpected field in request.');
+  const unexpected = Object.keys(value).filter(key => !keys.includes(key));
+  // Name the offending fields and the allowed set (#195): a bare "unexpected
+  // field" leaves API and MCP callers guessing which key to drop.
+  if (unexpected.length) throw invalid(`Unexpected field${unexpected.length > 1 ? 's' : ''} in request: ${unexpected.join(', ')}. Allowed fields: ${keys.length ? keys.join(', ') : '(none)'}.`);
 }
 export function text(value: unknown, name: string, max = 120, optional = false): string {
   if (typeof value !== 'string' || value.trim().length > max || (!optional && !value.trim())) throw invalid(`${name} is required and must be at most ${max} characters.`);
@@ -29,7 +32,7 @@ export function vehicleInput(value: unknown, now: Date): VehicleInput {
   const b = object(value);
   onlyKeys(b, ['photoUrls', 'listingDescription', 'stockNumber', 'vin', 'year', 'mileage', 'make', 'model', 'trim', 'status', 'listPrice', 'cost', 'reconCosts', 'dateStocked', 'location', 'notes']);
   if (typeof b.year !== 'number' || !Number.isInteger(b.year) || b.year < 1886 || b.year > now.getUTCFullYear() + 2) throw invalid('Invalid model year.');
-  if (!vehicleStatuses.includes(b.status as VehicleInput['status'])) throw invalid('Invalid vehicle status.');
+  if (!vehicleStatuses.includes(b.status as VehicleInput['status'])) throw invalid(`Invalid vehicle status: expected one of ${vehicleStatuses.join(', ')}.`);
   const mileage = b.mileage ?? null;
   if (mileage !== null && (typeof mileage !== 'number' || !Number.isSafeInteger(mileage) || mileage < 0 || mileage > 10_000_000)) throw invalid('Mileage must be an integer from 0 to 10,000,000.');
   const dateStocked = text(b.dateStocked, 'Date stocked', 10);

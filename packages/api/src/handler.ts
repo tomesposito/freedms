@@ -26,7 +26,7 @@ import { compliance } from './compliance.js';
 import { reportsP2 } from './reports-p2.js';
 import { dealerShare, publicShare } from './retail.js';
 import { manageUsers } from './users.js';
-import { credit } from './credit.js';
+import { credit, listCreditApplications } from './credit.js';
 import { accounting } from './accounting.js';
 import { fiProducts } from './fi.js';
 import { documentControls } from './documents.js';
@@ -221,6 +221,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (/^\/analytics(\/|$)/.test(path)) return await analytics(request, principal, repository, record);
         if (/^\/quick-entry(\/|$)/.test(path)) return await quickEntry(request, principal, repository, now(), provider);
         if (/^\/fi-products(\/|$)/.test(path)) return await fiProducts(request, principal, repository, now(), request.agent);
+        if (path === '/credit-applications') return await listCreditApplications(request, principal, repo);
         if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repo, now(), photoBase);
         if (/^\/reports\/(technicians|departments|forecasts)([/.]|$)/.test(path)) return await reportsP3(request, repository, now());
         if (/^\/reports\/(turn|fi|custom|saved)([/.]|$)/.test(path)) return await reportsP2(request, principal, repo, now());

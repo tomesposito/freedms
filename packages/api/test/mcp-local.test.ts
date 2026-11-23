@@ -37,7 +37,7 @@ test('local session token initializes MCP, lists tools and reads its own tenant 
   assert.equal(initialized.response.statusCode, 200);
   assert.equal(initialized.result.protocolVersion, '2025-11-25');
   // Admin membership carries write scope, so the full surface is listed.
-  assert.equal((await s.request('tools/list')).result.tools.length, 130);
+  assert.equal((await s.request('tools/list')).result.tools.length, 131);
   const found = await s.call('search_vehicles', {});
   assert.equal(found.isError, false);
   const vehicles = found.structuredContent.data as {id: string; tenantId?: string}[];

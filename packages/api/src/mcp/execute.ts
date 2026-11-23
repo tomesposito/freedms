@@ -14,7 +14,10 @@ export async function executeTool(tool: typeof tools[number], arguments_: unknow
   try {
     if (options.signal?.aborted) throw invalid('Tool execution was aborted.');
     const args = object(arguments_ ?? {}); onlyKeys(args, Object.keys(tool.inputSchema.properties));
-    if (tool.inputSchema.required.some(key => args[key] === undefined)) throw invalid('Required tool arguments are missing.');
+    // Name the missing arguments (#195): an agent can only self-correct when
+    // the error says which arguments to supply.
+    const missingArgs = tool.inputSchema.required.filter(key => args[key] === undefined);
+    if (missingArgs.length) throw invalid(`Required tool arguments are missing: ${missingArgs.join(', ')}.`);
     const {id: entityId, taskId, documentId, pencilId, ...fields} = args;
     let path = tool.path.includes(':id') ? tool.path.replace(':id', requireId(entityId)) : tool.path;
     if ('taskId' in tool.inputSchema.properties) path = path.replace(':taskId', requireId(taskId));
@@ -23,7 +26,16 @@ export async function executeTool(tool: typeof tools[number], arguments_: unknow
     if (tool.method === 'GET') {
       internal.query = {};
       for (const [key, value] of Object.entries(fields)) {
-        if (typeof value !== 'string' && !(typeof value === 'number' && Number.isSafeInteger(value))) throw invalid('Invalid query argument.');
+        // Name the argument and the fix (#195): query arguments travel as
+        // strings, so an array/object/boolean can never be sent as-is.
+        const schema = tool.inputSchema.properties[key] as {type?: unknown; enum?: unknown} | undefined;
+        if (typeof value !== 'string' && !(typeof value === 'number' && Number.isSafeInteger(value))) {
+          const received = Array.isArray(value) ? 'an array' : `a ${typeof value}`;
+          throw invalid(schema?.type === 'string' || schema?.type === undefined
+            ? `Invalid query argument "${key}": expected a string, received ${received}. For a list of values, pass one comma-separated string.`
+            : `Invalid query argument "${key}": expected an integer, received ${received}.`);
+        }
+        if (Array.isArray(schema?.enum) && !schema.enum.includes(value)) throw invalid(`Invalid query argument "${key}": expected one of ${schema.enum.join(', ')}.`);
         internal.query[key] = String(value);
       }
     } else {
