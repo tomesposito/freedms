@@ -5,6 +5,9 @@ export interface McpConfig {
   issuer: string; clientId: string; resource: string;
   customOAuth?: boolean;
   verifyOpaqueToken?: (token: string) => Promise<AccessClaims>;
+  /** Dev-only: verify a local session credential. Set only by the local entry
+   * (mcp/local.ts); hosted entry points never set it. */
+  verifyLocalToken?: (token: string) => Promise<AccessClaims>;
   oauthDomain?: string;
   jwks?: () => Promise<{keys: (JsonWebKey & {kid?: string; alg?: string; use?: string})[]}>;
   now?: () => number;
@@ -24,6 +27,9 @@ export function accessVerifier(config: McpConfig) {
     if (authorization.slice(7).startsWith('fdm_')) {
       if (!config.verifyOpaqueToken) throw Error('Unauthorized');
       return config.verifyOpaqueToken(authorization.slice(7));
+    }
+    if (config.verifyLocalToken) {
+      try { return await config.verifyLocalToken(authorization.slice(7)); } catch { /* Not a local credential; fall through to RS256. */ }
     }
     const [header, payload, signature, extra] = authorization.slice(7).split('.');
     if (!header || !payload || !signature || extra) throw Error('Unauthorized');

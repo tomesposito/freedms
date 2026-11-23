@@ -71,6 +71,7 @@ import '../packages/web/test/load-error.test.js';
 import '../packages/web/test/account.test.js';
 
 import '../packages/api/test/mcp.test.js';
+import '../packages/api/test/mcp-local.test.js';
 import '../packages/api/test/mcp-discovery.test.js';
 
 import '../packages/api/test/access-requests.test.js';
