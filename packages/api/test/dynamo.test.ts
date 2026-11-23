@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
-import type { OutboxEvent, Vehicle } from '@freedms/shared';
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import type { Invite, OutboxEvent, Vehicle } from '@freedms/shared';
 import { DynamoRepositories } from '../src/dynamo.js';
 const vehicle: Vehicle = {id: 'v', tenantId: 'A', version: 1, mileage: null, stockNumber: 'test', vin: '1HGCM82633A004352', year: 2003, make: 'Test', model: 'Test', trim: '', status: 'available', listPrice: 0, cost: 0, reconCosts: [], dateStocked: '2026-10-19', location: '', notes: '', createdAt: '2026-10-19T00:00:00Z', updatedAt: '2026-10-19T00:00:00Z'};
 const event: OutboxEvent = {id: 'e', tenantId: 'A', actorId: 'user', aggregateId: 'v', aggregateVersion: 1, type: 'vehicle.created', occurredAt: vehicle.createdAt, deliveryStatus: 'pending'};
@@ -391,4 +391,22 @@ test('Dynamo lead cache validates epochs across instances and invalidates transa
   for (let offset = 1; offset <= 4; offset++) assert.equal((await repo.leadListPage({...query, offset})).leads.length, 0);
   const evicted = counts(); await repo.leadListPage(query);
   assert.deepEqual(counts(), evicted.map(n => n + 1));
+});
+test('Dynamo invite scrub is a same-version conditional put that requires a stored plaintext token (#179)', async () => {
+  const invite: Invite = {id: 'inv', kind: 'invite', tenantId: 'A', version: 3, createdAt: '2026-10-19T00:00:00Z', updatedAt: '2026-10-19T00:00:00Z', name: 'Staff', email: 'staff@example.test', role: 'staff', tokenHash: 'a'.repeat(64), expiresAt: '2026-10-26T00:00:00Z', status: 'pending'};
+  const commands: PutCommand[] = [];
+  const client = {send: async (command: PutCommand) => { commands.push(command); return {}; }} as unknown as DynamoDBDocumentClient;
+  const repo = new DynamoRepositories('table', client).forTenant('A');
+  assert.equal(await repo.scrubInvite(invite), true);
+  assert.equal(commands.length, 1);
+  const input = commands[0].input;
+  assert.equal(input.Item?.PK, 'TENANT#A'); assert.equal(input.Item?.SK, 'INVITE#inv');
+  assert.deepEqual(input.Item?.data, invite); assert.equal('token' in (input.Item?.data as object), false);
+  assert.match(input.ConditionExpression!, /attribute_exists\(#d\.#token\)/);
+  assert.equal(input.ExpressionAttributeValues?.[':v'], 3);
+  assert.equal(await repo.scrubInvite({...invite, token: 'secret'} as Invite), false);
+  assert.equal(commands.length, 1);
+  const failed = Object.assign(new Error('nope'), {name: 'ConditionalCheckFailedException'});
+  const refusing = {send: async () => { throw failed; }} as unknown as DynamoDBDocumentClient;
+  assert.equal(await new DynamoRepositories('table', refusing).forTenant('A').scrubInvite(invite), false);
 });

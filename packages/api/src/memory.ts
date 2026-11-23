@@ -11,7 +11,7 @@ import type { MfaRecord } from '@freedms/shared';
 import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
-import type { Customer, CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
+import type { Customer, CrmEntity, Invite, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
 import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantWaitlist, assertAssistantWaitlistRemoved, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, commandSearchSelection, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId, requireCycleStart } from './errors.js';
 const forecastKinds = new Set<CrmEntity['kind']>(['deal', 'service-appointment', 'part', 'parts-sale', 'repair-order']);
@@ -80,6 +80,12 @@ export class MemoryRepositories implements RepositoryFactory {
         storeCrm(record); s.users.set(user.id, structuredClone(user)); s.memberships.set(user.id, structuredClone(member));
         storeEvent(event); storeEvent(memberEvent);
         return 'accepted';
+      },
+      scrubInvite: async record => {
+        if ('token' in record) return false;
+        const current = s.crm.get(`invite#${record.id}`) as Invite | undefined;
+        if (!current || current.tenantId !== tenantId || current.version !== record.version || !('token' in current)) return false;
+        storeCrm(record); return true;
       },
       workspaceUsers: async () => structuredClone([...s.memberships.values()].map(membership => ({membership, user: s.users.get(membership.userId)!}))),
       saveMember: async (user, member, expected, event) => {

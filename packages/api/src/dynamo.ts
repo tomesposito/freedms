@@ -263,6 +263,19 @@ export class DynamoRepositories implements RepositoryFactory {
         ]);
         return 'accepted';
       },
+      scrubInvite: async record => {
+        if ('token' in record) return false;
+        try {
+          await this.client.send(new PutCommand({TableName: this.table, Item: {...key(`INVITE#${requireId(record.id)}`), data: record},
+            ConditionExpression: '#d.#v = :v AND attribute_exists(#d.#token)',
+            ExpressionAttributeNames: {'#d': 'data', '#v': 'version', '#token': 'token'},
+            ExpressionAttributeValues: {':v': record.version}}));
+          return true;
+        } catch (error) {
+          if (error instanceof Error && error.name === 'ConditionalCheckFailedException') return false;
+          throw error;
+        }
+      },
       workspaceUsers,
       saveMember: async (user, member, expected, event) => {
         assertScope(tenantId, member, event);
