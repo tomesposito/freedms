@@ -1,4 +1,4 @@
-import { vehicleStatuses, type VehicleInput, type VehicleView, type Vehicle } from '@freedms/shared';
+import { effectiveVehiclePhotos, vehiclePhotoUrl, vehicleStatuses, type VehicleInput, type VehicleView, type Vehicle } from '@freedms/shared';
 import { ApiError } from './errors.js';
 export const invalid = (message: string) => new ApiError(400, 'VALIDATION', message);
 export function object(value: unknown): Record<string, unknown> {
@@ -43,8 +43,14 @@ export function vehicleInput(value: unknown, now: Date): VehicleInput {
     listPrice: money(b.listPrice, 'List price'), cost: money(b.cost, 'Cost'), reconCosts, dateStocked,
     location: text(b.location, 'Location', 200, true), notes: text(b.notes, 'Notes', 10000, true)};
 }
-export function view(vehicle: Vehicle, now: Date): VehicleView {
-  return {...vehicle, mileage: vehicle.mileage ?? null, reconTotal: vehicle.reconCosts.reduce((sum, item) => sum + item.amount, 0),
+export function view(vehicle: Vehicle, now: Date, photoBase = ''): VehicleView {
+  // The photo surface is always explicit (#194): project on read so a vehicle
+  // with no photos returns photoUrls: [] and photoCount: 0 instead of omitting
+  // both fields, which left MCP agents unable to tell "no photos" from
+  // "photos stripped". Same projection as the write paths (display size,
+  // effective photos); the public serving gate (#169) is unchanged.
+  const photoUrls = effectiveVehiclePhotos(vehicle).map(photo => vehiclePhotoUrl(photo, vehicle.tenantId, photoBase));
+  return {...vehicle, photoUrls, photoCount: photoUrls.length, mileage: vehicle.mileage ?? null, reconTotal: vehicle.reconCosts.reduce((sum, item) => sum + item.amount, 0),
     agingDays: Math.max(0, Math.floor((Date.parse(now.toISOString().slice(0, 10)) - Date.parse(vehicle.dateStocked)) / 86400000))};
 }
 

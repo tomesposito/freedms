@@ -64,7 +64,7 @@ export interface VehicleInput {
 export interface Vehicle extends VehicleInput {
   id: string; tenantId: string; version: number; createdAt: string; updatedAt: string;
 }
-export interface VehicleView extends Vehicle { agingDays: number; reconTotal: number }
+export interface VehicleView extends Vehicle { agingDays: number; reconTotal: number; photoCount: number; photoUrls: string[] }
 export interface OutboxEvent {
   actorType?: 'agent';
   id: string; tenantId: string; actorId: string; aggregateId: string; aggregateVersion: number;

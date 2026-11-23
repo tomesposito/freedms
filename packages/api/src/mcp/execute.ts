@@ -36,7 +36,11 @@ export async function executeTool(tool: typeof tools[number], arguments_: unknow
         const existing = await dispatch({method: 'GET', path, claims});
         if (existing.statusCode !== 200) return {isError: true, content: [{type: 'text', text: existing.body}]};
         const vehicle = JSON.parse(existing.body).data;
-        internal.body = JSON.stringify({...Object.fromEntries(Object.keys(vehicleFields).map(k => [k, vehicle[k]])), ...fields});
+        // photoUrls on a read are projected output (uploaded photos project to
+        // local /public paths, not valid photoUrls input) and listingDescription
+        // is preserved by REST when absent — leave both out of the rebuilt form.
+        const formKeys = Object.keys(vehicleFields).filter(k => k !== 'photoUrls' && k !== 'listingDescription');
+        internal.body = JSON.stringify({...Object.fromEntries(formKeys.map(k => [k, vehicle[k]])), ...fields});
       } else if (tool.name === 'update_technician' || tool.name === 'update_labor_rate') {
         // Catalog PUTs require full forms, unlike appointment/RO/part PUTs.
         const existing = await dispatch({method: 'GET', path, claims});

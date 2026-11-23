@@ -196,6 +196,57 @@ test('inventory MCP writes reuse validation, versions, user roles and agent outb
   const denied = await handle({method: 'POST', path: '/mcp', authorization: `Bearer ${token()}`, body: JSON.stringify({jsonrpc: '2.0', id: 1, method: 'tools/call', params: {name: 'create_vehicle', arguments: fields}})});
   assert.equal(JSON.parse(denied.body).error.message, 'Tool unavailable.');
 });
+test('vehicle photos are explicit over MCP: projected URLs, count, empty state, and the #169 serving rule (J16, #194)', async () => {
+  const s = await setup(undefined, () => now, new MemoryDocumentStore());
+  const claims = {sub: 'admin-A', 'custom:tenant_id': 'A', iss: '', aud: '', exp: 1, token_use: 'id'} as const;
+  const rest = async (method: string, path: string, body: unknown = {}) =>
+    s.handle({method, path, claims, body: JSON.stringify(body)});
+  const seedVehicle = (await s.repositories.forTenant('A').list({}))[0];
+  const fields = Object.fromEntries(Object.keys(vehicleFields).filter(k => k !== 'photoUrls' && k !== 'listingDescription')
+    .map(k => [k, seedVehicle[k as keyof typeof seedVehicle]]));
+  // A vehicle with external photos: MCP create accepts photoUrls (REST parity),
+  // and reads return the projected URLs plus the count.
+  const photos = ['https://example.test/front.jpg', 'https://example.test/rear.jpg'];
+  const created = await s.call('create_vehicle', {...fields, stockNumber: 'PHOTO-1', vin: '1HGCM82633A004354', photoUrls: photos, listingDescription: 'Clean one-owner.'});
+  assert.equal(created.isError, false, JSON.stringify(created.content));
+  const id = created.structuredContent.data.id;
+  assert.deepEqual(created.structuredContent.data.photoUrls, photos);
+  assert.equal(created.structuredContent.data.photoCount, 2);
+  assert.equal(created.structuredContent.data.listingDescription, 'Clean one-owner.');
+  const got = await s.call('get_vehicle', {id});
+  assert.deepEqual(got.structuredContent.data.photoUrls, photos);
+  assert.equal(got.structuredContent.data.photoCount, 2);
+  const searched = await s.call('search_vehicles', {search: 'PHOTO-1'});
+  assert.deepEqual(searched.structuredContent.data.map((v: {photoUrls: string[]}) => v.photoUrls), [photos]);
+  // A vehicle without photos: the fields are present and empty, never omitted.
+  const bare = (await s.call('search_vehicles', {})).structuredContent.data.find((v: {id: string}) => v.id !== id);
+  assert.deepEqual(bare.photoUrls, []); assert.equal(bare.photoCount, 0);
+  const bareGot = await s.call('get_vehicle', {id: bare.id});
+  assert.deepEqual(bareGot.structuredContent.data.photoUrls, []); assert.equal(bareGot.structuredContent.data.photoCount, 0);
+  // Uploaded photo: REST upload projects a /public URL; MCP reads surface it,
+  // the public route serves it while available, 404s once sold (#169), and
+  // serves again when the vehicle returns to available.
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2GQAAAAASUVORK5CYII=';
+  const uploadId = randomUUID();
+  const v1 = created.structuredContent.data.version;
+  assert.equal((await rest('POST', `/vehicles/${id}/photos`, {uploadId, version: v1, part: 0, bytes: png})).statusCode, 202);
+  const uploaded = JSON.parse((await rest('POST', `/vehicles/${id}/photos`, {uploadId, version: v1, parts: 1, type: 'image/png', name: 'front.png', thumb: png, display: png})).body);
+  assert.equal(uploaded.data.photoCount, 3);
+  const uploadUrl = uploaded.data.photoUrls.find((url: string) => url.startsWith('/public/'));
+  assert.ok(uploadUrl);
+  const viaMcp = await s.call('get_vehicle', {id});
+  assert.deepEqual(viaMcp.structuredContent.data.photoUrls, uploaded.data.photoUrls);
+  assert.equal(viaMcp.structuredContent.data.photoCount, 3);
+  assert.equal((await s.handle({method: 'GET', path: uploadUrl})).statusCode, 200);
+  const sold = await s.call('set_vehicle_status', {id, version: uploaded.data.version, status: 'sold'});
+  assert.equal(sold.isError, false, JSON.stringify(sold.content));
+  assert.equal(sold.structuredContent.data.photoCount, 3);
+  assert.equal((await s.handle({method: 'GET', path: uploadUrl})).statusCode, 404);
+  // The external URLs are not gated; only uploaded bytes follow #169.
+  const back = await s.call('set_vehicle_status', {id, version: sold.structuredContent.data.version, status: 'available'});
+  assert.equal(back.isError, false, JSON.stringify(back.content));
+  assert.equal((await s.handle({method: 'GET', path: uploadUrl})).statusCode, 200);
+});
 test('MCP malformed frames and notifications are sanitized and stateless', async () => {
   const s = await setup();
   for (const [body, code] of [['{', -32700], ['[]', -32600], ['null', -32600], ['{"jsonrpc":"1.0","id":1,"method":"ping"}', -32600]] as const) {

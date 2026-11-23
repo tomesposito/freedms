@@ -282,18 +282,18 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
             throw error;
           }
           await clearVehiclePhotoParts(store, keys);
-          return response(201, {data: view(vehicle, date)});
+          return response(201, {data: view(vehicle, date, photoBase)});
         }
         if (path !== '/vehicles' && !/^\/vehicles\/[^/]+$/.test(path)) throw new ApiError(404, 'NOT_FOUND', 'Endpoint not found.');
         const id = path === '/vehicles' ? undefined : requireId(path.split('/')[2]);
         if (method === 'GET') {
-          if (id) { const vehicle = await repository.get(id); if (!vehicle) throw missing(); return response(200, {data: view(vehicle, now())}); }
+          if (id) { const vehicle = await repository.get(id); if (!vehicle) throw missing(); return response(200, {data: view(vehicle, now(), photoBase)}); }
           const query = request.query ?? {};
           onlyKeys(query, ['status', 'search', 'limit', 'offset']);
           if (query.status && !vehicleStatuses.includes(query.status as typeof vehicleStatuses[number])) throw invalid('Invalid status filter.');
           const limit = pageNumber(query.limit, 100, 1, 500), offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
           const {vehicles, total} = await repository.listPage({limit, offset, status: query.status as typeof vehicleStatuses[number] | undefined, search: query.search ? text(query.search, 'Search', 200) : undefined});
-          return response(200, {data: vehicles.map(v => view(v, now())), total, limit, offset});
+          return response(200, {data: vehicles.map(v => view(v, now(), photoBase)), total, limit, offset});
         }
         if (!((method === 'POST' && !id) || (['PUT', 'DELETE'].includes(method) && id))) throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
         requireWrite(principal, method);
@@ -304,7 +304,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
           const vehicle: Vehicle = {...input, id: randomUUID(), tenantId: principal.tenantId, version: 1, createdAt: date.toISOString(), updatedAt: date.toISOString()};
           if (photos !== undefined) { vehicle.photos = selectVehiclePhotos(photos); vehicle.photoUrls = projectedPhotoUrls(vehicle, photoBase); }
           await repository.create(vehicle, event('vehicle.created', vehicle.id, 1));
-          return response(201, {data: view(vehicle, date)});
+          return response(201, {data: view(vehicle, date, photoBase)});
         }
         const existing = await repository.get(id!); if (!existing) throw missing();
         const expected = version(body.version); if (existing.version !== expected) throw conflict();
@@ -352,7 +352,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
           throw error;
         }
         await removeVehiclePhotos(documents?.forTenant(principal.tenantId), existing, vehicle);
-        return response(200, {data: view(vehicle, date)});
+        return response(200, {data: view(vehicle, date, photoBase)});
       };
       const result = await execute();
       if (result.statusCode >= 200 && result.statusCode < 300 && ['POST', 'PUT', 'DELETE'].includes(method) && (!photoRoute || result.statusCode === 201) && !/^\/webhooks(\/|$)/.test(path) && !/^\/(account|admin)\/mfa(\/|$)/.test(path)) {

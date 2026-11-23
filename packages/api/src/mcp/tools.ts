@@ -10,8 +10,10 @@ export const vehicleFields = {
   mileage: {type: ['integer', 'null']}, status: {type: 'string', enum: ['available', 'reserved', 'sold', 'in recon']},
   listPrice: money, cost: money, reconCosts: {type: 'array', items: {type: 'object', properties: {description: string, amount: money}, required: ['description', 'amount'], additionalProperties: false}},
   dateStocked: string, location: string, notes: string,
+  photoUrls: {type: 'array', maxItems: 20, items: string, description: 'External photo URLs for this vehicle, at most 20 HTTP(S) URLs. Uploaded photos are managed in the app, not here.'},
+  listingDescription: {type: 'string', description: 'Public listing description shown on the dealer site and feeds.'},
 };
-const requiredVehicleFields = Object.keys(vehicleFields).filter(key => key !== 'mileage');
+const requiredVehicleFields = Object.keys(vehicleFields).filter(key => !['mileage', 'photoUrls', 'listingDescription'].includes(key));
 const nullableString = {type: ['string', 'null']};
 const customerFields = {
   name: string, phone: string, email: string, address: string,
@@ -159,8 +161,10 @@ export const tools = [
   tool('remove_reconciliation_line', '/accounting/reconciliations/:id/remove', {...periodVersion, lineId: string}, ['id', 'version', 'lineId'], 'POST'),
   tool('match_reconciliation_line', '/accounting/reconciliations/:id/match', {...periodVersion, lineId: string, registerId: nullableString}, ['id', 'version', 'lineId', 'registerId'], 'POST', 'Match a statement line to a cash register entry; pass null to unmatch.'),
   tool('close_reconciliation', '/accounting/reconciliations/:id/close', periodVersion, ['id', 'version'], 'POST'),
-  tool('search_vehicles', '/vehicles', {...page, status: vehicleFields.status, search: string}),
-  tool('get_vehicle', '/vehicles/:id', {id: string}, ['id']),
+  tool('search_vehicles', '/vehicles', {...page, status: vehicleFields.status, search: string}, [], 'GET',
+    'Search vehicles. Every result includes photoUrls (always present; an empty array means the vehicle has no photos) and photoCount. Uploaded-photo URLs serve publicly only while the vehicle is available.'),
+  tool('get_vehicle', '/vehicles/:id', {id: string}, ['id'], 'GET',
+    'Get one vehicle, including photoUrls (always present; an empty array means the vehicle has no photos) and photoCount. Uploaded-photo URLs serve publicly only while the vehicle is available.'),
   tool('list_leads', '/leads', {...page, search: string, stage: string, assignee: string}),
   tool('get_lead', '/leads/:id', {id: string}, ['id']),
   tool('list_customers', '/customers', {search: string}), tool('get_customer', '/customers/:id', {id: string}, ['id']),

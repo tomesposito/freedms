@@ -84,7 +84,7 @@ export function mountVehiclePhotos(card: HTMLElement, initial: VehicleView | und
     setBusy(true);
     try {
       if (vehicle) {
-        const {id, tenantId, version, createdAt, updatedAt, agingDays, reconTotal, photos: _photos, photoUrls, ...fields} = vehicle;
+        const {id, tenantId, version, createdAt, updatedAt, agingDays, reconTotal, photoCount: _photoCount, photos: _photos, photoUrls, ...fields} = vehicle;
         accept(await api<VehicleView>(`/vehicles/${id}`, 'PUT', {...fields, version, photos: next}));
         photos = effectiveVehiclePhotos(vehicle);
       } else {
@@ -236,7 +236,7 @@ export function mountVehiclePhotos(card: HTMLElement, initial: VehicleView | und
           }
         }
         if (requested.some(photo => photo.source === 'url') && requested.some(photo => photo.source === 'queued')) {
-          const {id, tenantId, version, createdAt, updatedAt, agingDays, reconTotal, photos: _photos, photoUrls, ...fields} = vehicle!;
+          const {id, tenantId, version, createdAt, updatedAt, agingDays, reconTotal, photoCount: _photoCount, photos: _photos, photoUrls, ...fields} = vehicle!;
           accept(await api<VehicleView>(`/vehicles/${id}`, 'PUT', {...fields, version, photos: ordered}));
         }
         return !failed;
