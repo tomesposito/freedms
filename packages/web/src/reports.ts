@@ -6,6 +6,40 @@ import type { FixedOpsReport, InventoryReport, LeadReport, SalesReport, TurnRepo
 import { currency, escapeHtml as e } from './format';
 import type { UI } from './desking';
 const table = (headers: string[], rows: (string | number)[][]) => `<div class="table-wrap"><table><thead><tr>${headers.map(h => `<th>${e(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${e(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+/**
+ * Bounded request scheduling for the Reports page (#184). The hosted API
+ * Lambda runs with reserved concurrency 2, so firing all ten section
+ * requests at once bursts past it and sections fail with throttling even
+ * though each request would succeed on its own. Two in flight matches the
+ * pilot's reserved concurrency; the existing 429/503 retry in the API
+ * client absorbs anything that still slips through. This is the one place
+ * the bound lives.
+ */
+export const REPORT_REQUEST_CONCURRENCY = 2;
+/**
+ * Promise.allSettled with a concurrency bound: runs thunks with at most
+ * `limit` in flight, preserves input order in the results, and isolates
+ * rejections per item. Before each queued thunk starts, `shouldContinue`
+ * is consulted; once it returns false (the route was superseded by a
+ * navigation or a date-range change) no further requests are fired and
+ * the remaining items settle as rejected — the caller discards them via
+ * its own current() check, so nothing stale renders.
+ */
+export async function allSettledBounded<T extends readonly unknown[]>(tasks: { [K in keyof T]: () => Promise<T[K]> }, limit: number, shouldContinue: () => boolean = () => true): Promise<{ [K in keyof T]: PromiseSettledResult<T[K]> }> {
+  const thunks = tasks as readonly (() => Promise<unknown>)[];
+  const results: PromiseSettledResult<unknown>[] = new Array(thunks.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < thunks.length) {
+      const index = next++;
+      if (!shouldContinue()) { results[index] = {status: 'rejected', reason: new Error('Report request skipped: the page changed before it ran.')}; continue; }
+      try { results[index] = {status: 'fulfilled', value: await thunks[index]()}; }
+      catch (reason) { results[index] = {status: 'rejected', reason}; }
+    }
+  };
+  await Promise.all(Array.from({length: Math.max(1, Math.min(limit, thunks.length))}, () => worker()));
+  return results as { [K in keyof T]: PromiseSettledResult<T[K]> };
+}
 const exportButton = (name: string, label = 'Export CSV') => `<button type="button" data-export="${e(name)}">${e(label)}</button>`;
 let from = '', to = '';
 export async function reportsRoute(ui: UI & {download: (path: string, filename: string) => Promise<void>}): Promise<void> {
@@ -19,7 +53,7 @@ export async function reportsRoute(ui: UI & {download: (path: string, filename: 
     document.querySelector('#clear-range')!.addEventListener('click', () => { from = ''; to = ''; ui.refresh(); });
   };
   try {
-    const [inventory, sales, leads, turn, fi, saved, fixed, tech, departments, forecasts] = await Promise.allSettled([ui.api<InventoryReport>('/reports/inventory'), ui.api<SalesReport>(`/reports/sales${query}`), ui.api<LeadReport>('/reports/leads'), ui.api<TurnReport>(`/reports/turn${query}`), ui.api<FiReport>(`/reports/fi${query}`), ui.api<SavedReport[]>('/reports/saved'), ui.api<FixedOpsReport>(`/reports/fixed-ops${query}`), ui.api<TechnicianMetrics>(`/reports/technicians${query}`), ui.api<DepartmentReport>(`/reports/departments${query}`), ui.api<Forecasts>(`/reports/forecasts${query}`)]);
+    const [inventory, sales, leads, turn, fi, saved, fixed, tech, departments, forecasts] = await allSettledBounded([() => ui.api<InventoryReport>('/reports/inventory'), () => ui.api<SalesReport>(`/reports/sales${query}`), () => ui.api<LeadReport>('/reports/leads'), () => ui.api<TurnReport>(`/reports/turn${query}`), () => ui.api<FiReport>(`/reports/fi${query}`), () => ui.api<SavedReport[]>('/reports/saved'), () => ui.api<FixedOpsReport>(`/reports/fixed-ops${query}`), () => ui.api<TechnicianMetrics>(`/reports/technicians${query}`), () => ui.api<DepartmentReport>(`/reports/departments${query}`), () => ui.api<Forecasts>(`/reports/forecasts${query}`)], REPORT_REQUEST_CONCURRENCY, () => ui.current());
     if (!ui.current()) return;
     if ([inventory, sales, leads, turn, fi, saved, fixed, tech, departments, forecasts].every(result => result.status === 'rejected')) throw new Error('No reports could be loaded. Please retry.');
     ui.shell(`${controls}${reportSection(sales, 'Report range', sales => `<p class="muted">Selected report range (inclusive, UTC): ${e(sales.from ?? 'Beginning')} to ${e(sales.to ?? 'present')} ${!sales.from && !sales.to ? '· All time' : ''}</p>`)}
