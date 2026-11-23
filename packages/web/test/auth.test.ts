@@ -49,7 +49,7 @@ test('real Cognito SDK offline SRP, challenges, reset, refresh and revoke', asyn
     await client.forgotPassword('pilot@example.test'); await assert.rejects(client.confirmForgotPassword('pilot@example.test','000000','NewPassword123!'),/code is incorrect/);
     await client.confirmForgotPassword('pilot@example.test','123456','NewPassword123!');
     const renewed=await client.refresh(signed.tokens.refresh); assert.notEqual(renewed.id,signed.tokens.id); await client.revoke(renewed.refresh); assert.ok(mock.calls.includes('RevokeToken'));
-    clearSession(); assert.equal(values.size,0);
+    clearSession(); assert.equal(getToken(),null); assert.equal(values.get('freedms-refresh-token'),undefined); assert.equal(values.get('freedms-access-token'),undefined);
   } finally { await new Promise<void>(resolve=>mock.server.close(()=>resolve())); }
 });
 
@@ -75,7 +75,7 @@ test('session lifecycle, proactive renewal, sign-out, PKCE rollback and local re
     const auth=await load(config); auth.storeTokens({id:token(1),refresh:'refresh',access:'access'});
     assert.equal(await auth.freshToken(),token(9999999999)); assert.equal(refreshes,1);
     await Promise.all([auth.refreshSession(),auth.refreshSession()]); assert.equal(refreshes,2);
-    await auth.signOut(); assert.equal(revokes,1);assert.equal(values.size,0);assert.equal(destination,'http://localhost/');
+    await auth.signOut(); assert.equal(revokes,1);assert.equal(auth.getToken(),null);assert.equal(values.get('freedms-refresh-token'),undefined);assert.equal(destination,'http://localhost/');
     const rollback=await load({...config,VITE_AUTH_FLOW:'redirect'});await rollback.signIn();assert.match(destination,/oauth2\/authorize/);assert.match(destination,/code_challenge_method=S256/); assert.ok(values.has('freedms-pkce'));
     const state=values.get('freedms-state'); (globalThis.location as any).search=`?code=fixture&state=${state}`;
     install('fetch',async()=>new Response(JSON.stringify({id_token:'callback-id'})));
@@ -83,5 +83,60 @@ test('session lifecycle, proactive renewal, sign-out, PKCE rollback and local re
     await rollback.signOut(); assert.match(destination,/\/logout\?/);
     const fallback=await load({...config,VITE_COGNITO_USER_POOL_ID:undefined});await fallback.signIn();assert.match(destination,/oauth2\/authorize/);
     const local=await load({DEV:true});assert.equal(local.localMode,true);local.setToken('local-token');assert.equal(await local.freshToken(),'local-token');assert.equal(await local.refreshSession(),false);await local.signOut();assert.equal(local.getToken(),null);assert.equal(destination,'http://localhost/');
+  } finally { globals.forEach((key,i)=>{const descriptor=descriptors[i];if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete (globalThis as any)[key];}); }
+});
+
+test('shared session across tabs: shared store, PKCE isolation, cross-tab refresh lock, sign-out epoch (#190)', async () => {
+  const {transform}=await import('esbuild'); const {readFile}=await import('node:fs/promises');
+  const source=await readFile(new URL('../src/auth.ts',import.meta.url),'utf8');
+  const shared=new Map<string,string>(); const tab=new Map<string,string>();
+  let destination=''; let refreshes=0; let hold: Promise<void> | null=null; let releaseHold: () => void = () => {};
+  const globals=['localStorage','sessionStorage','location','history','fetch','__authFixture','navigator','BroadcastChannel'] as const;
+  const descriptors=globals.map(key=>Object.getOwnPropertyDescriptor(globalThis,key));
+  const install=(key:string,value:unknown)=>Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});
+  const store=(map:Map<string,string>)=>({getItem:(k:string)=>map.get(k)??null,setItem:(k:string,v:string)=>{map.set(k,v);},removeItem:(k:string)=>{map.delete(k);}});
+  const token=(sub:string,exp:number)=>`e30.${Buffer.from(JSON.stringify({exp,sub})).toString('base64url')}.fixture`;
+  install('localStorage',store(shared)); install('sessionStorage',store(tab));
+  install('location',{origin:'http://localhost',pathname:'/',hash:'',search:'',assign:(url:string)=>{destination=url;}});
+  install('history',{replaceState:()=>{}});
+  install('BroadcastChannel',class { addEventListener(): void {} postMessage(): void {} close(): void {} });
+  let lockChain: Promise<unknown>=Promise.resolve();
+  install('navigator',{locks:{request:(_name:string,cb:()=>Promise<boolean>)=>{const run=lockChain.then(cb,cb); lockChain=run.catch(()=>{}); return run;}}});
+  install('__authFixture',{refresh:async()=>{refreshes++; if(hold) await hold; return {id:token('user-1',9999999999),refresh:'r1',access:'a2'};},revoke:async()=>{}});
+  const load=async(env:Record<string,unknown>)=>{
+    const replaced=source.replace(/import \{ createCognito, type Tokens \} from '.\/cognito';/, 'const createCognito = () => globalThis.__authFixture;');
+    const {code}=await transform(replaced,{loader:'ts',format:'esm',define:{'import.meta.env':JSON.stringify(env)}});
+    return import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#${Math.random()}`);
+  };
+  try {
+    const config={VITE_COGNITO_DOMAIN:'https://hosted.example.test',VITE_COGNITO_CLIENT_ID:'client',VITE_COGNITO_USER_POOL_ID:'us-east-1_test'};
+    const tabA=await load(config); const tabB=await load(config);
+    // One sign-in, shared by every tab of the profile; nothing tab-scoped is written.
+    tabA.storeTokens({id:token('user-1',9999999999),refresh:'r1',access:'a1'});
+    assert.equal(shared.get('freedms-token'),token('user-1',9999999999)); assert.equal(shared.get('freedms-refresh-token'),'r1');
+    assert.equal(tab.size,0);
+    assert.equal(tabB.getToken(),token('user-1',9999999999)); assert.equal(tabB.getAccessToken(),'a1');
+    assert.equal(tabA.tokenSubject(tabA.getToken()),'user-1');
+    // Cross-tab change classification: account change vs sign-out vs refresh.
+    const seen: string[]=[]; const off=tabB.onSharedSessionChange(kind=>{seen.push(kind);});
+    tabB.handleSessionStorageEvent({key:'freedms-token',oldValue:token('user-1',9999999999),newValue:token('user-2',9999999999)});
+    tabB.handleSessionStorageEvent({key:'freedms-token',oldValue:token('user-1',9999999999),newValue:token('user-1',9999999999)});
+    tabB.handleSessionStorageEvent({key:'freedms-token',oldValue:token('user-1',9999999999),newValue:null});
+    assert.deepEqual(seen,['account-changed','refreshed','signed-out']); off();
+    // Simultaneous refresh in two tabs: the Web Locks serialization plus the
+    // re-read inside the lock means Cognito is called exactly once.
+    tabA.storeTokens({id:token('user-1',1),refresh:'r1',access:'a1'}); refreshes=0;
+    const [ra,rb]=await Promise.all([tabA.refreshSession(),tabB.refreshSession()]);
+    assert.equal(ra,true); assert.equal(rb,true); assert.equal(refreshes,1); assert.equal(tabB.getToken(),token('user-1',9999999999));
+    // A refresh that completes after another tab signed out is discarded.
+    tabA.storeTokens({id:token('user-1',1),refresh:'r1',access:'a1'});
+    hold=new Promise<void>(resolve=>{releaseHold=resolve;});
+    const pending=tabA.refreshSession();
+    tabB.clearSession(); assert.equal(tabA.getToken(),null);
+    releaseHold(); hold=null;
+    assert.equal(await pending,false); assert.equal(tabA.getToken(),null); assert.equal(shared.get('freedms-refresh-token'),undefined);
+    // Sign-out in one tab removes the shared session for every tab.
+    tabA.storeTokens({id:token('user-1',9999999999),refresh:'r1',access:'a1'});
+    await tabA.signOut(); assert.equal(tabB.getToken(),null); assert.equal(destination,'http://localhost/');
   } finally { globals.forEach((key,i)=>{const descriptor=descriptors[i];if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete (globalThis as any)[key];}); }
 });

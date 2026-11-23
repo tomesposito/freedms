@@ -1,4 +1,5 @@
 import { authShellHtml, mountLogin } from './login';
+import { freshToken } from './auth';
 import { escapeHtml as e } from './format';
 import type { Cognito } from './cognito';
 interface Connection {id: string; csrf: string; appName: string; redirectUri: string; scopes: string[]}
@@ -26,20 +27,25 @@ export async function mountMcpOAuth(root: HTMLElement, cognito?: Cognito): Promi
     const params = new URLSearchParams(location.search); params.delete('mcp_oauth');
     if ([...params.keys()].some(k => params.getAll(k).length !== 1)) throw new Error('The connection request is invalid.');
     const connection = await call<Connection>('interaction', Object.fromEntries(params));
-    // Credentials stay in this closure; connecting an app does not replace the ordinary web session.
-    mountLogin(root, cognito, async tokens => {
-      const identity = await call<{user: string; dealership: string}>('authorize', {id: connection.id, csrf: connection.csrf, action: 'details'}, tokens.id);
+    // A valid shared web session (#190) can authorize the connection, but the
+    // explicit consent below is always shown and the web session is left as-is.
+    const proceed = async (idToken: string) => {
+      const identity = await call<{user: string; dealership: string}>('authorize', {id: connection.id, csrf: connection.csrf, action: 'details'}, idToken);
       paint(consentHtml(connection, identity));
       for (const action of ['allow', 'deny']) root.querySelector(`#oauth-${action}`)!.addEventListener('click', async () => {
         const buttons = root.querySelectorAll<HTMLButtonElement>('button'); buttons.forEach(b => { b.disabled = true; });
         try {
-          const result = await call<{redirect: string}>('authorize', {id: connection.id, csrf: connection.csrf, action}, action === 'allow' ? tokens.id : undefined);
+          const result = await call<{redirect: string}>('authorize', {id: connection.id, csrf: connection.csrf, action}, action === 'allow' ? idToken : undefined);
           location.assign(result.redirect);
         } catch (error) {
           const alert = root.querySelector<HTMLElement>('#oauth-error')!; alert.textContent = (error as Error).message; alert.hidden = false; alert.focus();
           buttons.forEach(b => { b.disabled = false; });
         }
       });
-    }, {brandHref: '/'});
+    };
+    const existing = await freshToken().catch(() => null);
+    if (existing) { try { await proceed(existing); return; } catch { /* fall through to a fresh sign-in */ } }
+    // Credentials stay in this closure; connecting an app does not replace the ordinary web session.
+    mountLogin(root, cognito, async tokens => { await proceed(tokens.id); }, {brandHref: '/'});
   } catch (error) { fail((error as Error).message); }
 }

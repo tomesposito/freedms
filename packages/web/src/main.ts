@@ -37,7 +37,7 @@ import { crmRoute } from './crm';
 import { vehicleStatuses, type ApiEnvelope, type DecodedVin, type Session, type VehicleInput, type VehicleView } from '@freedms/shared';
 import { cents, currency, escapeHtml as e } from './format';
 import { mountLogin } from './login';
-import { authFlow, cognito, storeTokens, freshToken, refreshSession, clearSession, finishSignIn, getToken, localMode, setToken, signIn, signOut } from './auth';
+import { authFlow, cognito, storeTokens, freshToken, refreshSession, clearSession, finishSignIn, getToken, localMode, setToken, signIn, signOut, onSharedSessionChange } from './auth';
 import './style.css';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const base = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
@@ -52,7 +52,7 @@ async function apiEnvelope<T>(path: string, method = 'GET', body?: unknown, retr
   const result = await response.json() as ApiEnvelope<T>;
   if (response.status === 401 && !('error' in result && result.error.code === 'MFA_INVALID')) {
     if (!retried && await refreshSession()) return apiEnvelope<T>(path, method, body, true);
-    if (localMode) sessionStorage.removeItem('freedms-token'); else clearSession();
+    clearSession();
   }
   if ('error' in result) {
     throw Object.assign(new Error(result.error.message), {status: response.status, code: result.error.code});
@@ -326,6 +326,13 @@ async function start(): Promise<void> {
   catch (error) { await login(); flash(error); }
 }
 const mcpOAuth = new URLSearchParams(location.search).has('mcp_oauth');
+// Cross-tab session sync (#190): sign-out or an account change in another
+// tab must not leave this tab showing a stale session or another user's data.
+onSharedSessionChange(kind => {
+  if (mcpOAuth || !session) return;
+  if (kind === 'signed-out') { session = undefined as unknown as Session; resetAssistant(); void login(); }
+  else if (kind === 'account-changed') { session = undefined as unknown as Session; resetAssistant(); void start(); }
+});
 window.addEventListener('hashchange', () => { if (!mcpOAuth) void route(); });
 if (mcpOAuth) void import('./mcp-oauth').then(({mountMcpOAuth}) => mountMcpOAuth(app, cognito));
 else void start();

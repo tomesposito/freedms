@@ -740,6 +740,45 @@ and asking those clients to reconnect through the classic flow. Verification
 covers adversarial protocol cases, revocation and replay, the shared login/MFA UI
 on desktop/mobile, and a real connector connection completed by the owner.
 
+**Shared browser session — November 23, 2026 (#190):** dealers work in
+several tabs at once, so sign-in is shared across the tabs of one browser
+profile. The design was settled before picking a store, as the issue
+required. The ID, access and refresh tokens move from tab-scoped
+`sessionStorage` to origin-shared `localStorage` under the same keys
+(`freedms-token`, `freedms-refresh-token`, `freedms-access-token`); legacy
+tab-scoped copies are migrated on first read and removed. Stated plainly,
+the tradeoff: any script running on the origin can read a shared store for
+as long as the session lasts, where tab-scoped storage limited exposure to
+one tab's lifetime. That wider exposure is inherent to the requested
+feature; the mitigations are the ones already in force (no injected HTML,
+escaped rendering, short-lived ID tokens with refresh) plus the lifecycle
+below. Persistence past a browser restart comes with `localStorage` and is
+accepted, though it was not required. Transient OAuth state
+(`freedms-pkce`, `freedms-state`, `freedms-return`) stays in
+`sessionStorage`, isolated to the tab and flow that started it. A shared
+epoch (`freedms-session-epoch`) is bumped on every sign-out: a tab whose
+refresh completes after the epoch moved discards the result instead of
+reviving the session. Refresh is serialized across tabs with the Web Locks
+API (`freedms-session-refresh`) when available; the tab that wins the lock
+refreshes, and a waiting tab re-reads the shared store inside the lock and
+adopts a session another tab already refreshed instead of calling Cognito
+again. Without Web Locks, the per-tab in-flight dedupe remains and the
+Cognito refresh used here does not rotate the refresh token, so a rare
+double refresh writes equivalent tokens. Tabs learn about each other
+through `storage` events (plus a `BroadcastChannel` sign-out signal):
+token removal returns every open tab to login, and a token whose subject
+differs from the one a tab rendered drops that tab's session and
+re-bootstraps, so no tab keeps showing another user's or dealership's
+data. Expiry is handled by the same proactive refresh in every tab, so
+tabs reauthenticate together. The branded login and MFA screens are
+unchanged. The custom MCP OAuth flow reuses a valid shared web session
+for its authorization call when one exists, still shows the explicit
+consent page, and never replaces the web session; without a valid session
+it signs in as before. Verification: unit coverage for the shared store,
+PKCE isolation, the cross-tab refresh lock and the sign-out epoch, plus a
+real two-page browser tour (new tab opens signed in, sign-out propagates,
+a fresh tab does not restore the signed-out session).
+
 ### D-11 — Billing rail for paid AI
 
 **Status: DECIDED — owner, 2026-11-03: Stripe Billing.**

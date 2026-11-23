@@ -24,7 +24,7 @@ export function accountError(error: unknown, operation: string): Error {
   return new Error(name === 'InvalidPasswordException' && body.message ? body.message : name === 'NotAuthorizedException' && operation === 'ChangePassword' ? 'Current password is incorrect.' : name === 'CodeMismatchException' ? 'The code is incorrect. Please try again.' : 'Account changes could not be completed. Please try again or contact your pilot operator.');
 }
 export function createCognito(config: CognitoConfig) {
-  // The SDK must never persist passwords or its own token cache. auth.ts owns session storage.
+  // The SDK must never persist passwords or its own token cache. auth.ts owns the shared session store.
   const memory = new Map<string, string>();
   const storage = {setItem: (k: string, v: string) => { memory.set(k, v); }, getItem: (k: string) => memory.get(k) ?? null, removeItem: (k: string) => { memory.delete(k); }, clear: () => memory.clear()};
   const endpoint = config.endpoint || `https://cognito-idp.${config.region || config.poolId.split('_')[0]}.amazonaws.com/`;
