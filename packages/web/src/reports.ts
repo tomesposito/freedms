@@ -12,8 +12,8 @@ const table = (headers: string[], rows: (string | number)[][]) => `<div class="t
  * requests at once bursts past it and sections fail with throttling even
  * though each request would succeed on its own. Two in flight matches the
  * pilot's reserved concurrency; the existing 429/503 retry in the API
- * client absorbs anything that still slips through. This is the one place
- * the bound lives.
+ * client absorbs anything that still slips through. The API client also
+ * shares its two slots with assistant refreshes and other shell traffic.
  */
 export const REPORT_REQUEST_CONCURRENCY = 2;
 /**
