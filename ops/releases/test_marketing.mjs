@@ -4,7 +4,7 @@ import {mkdtempSync, readFileSync, readdirSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {runInNewContext} from 'node:vm';
 import {createHash} from 'node:crypto';
-import {buildMarketing} from './marketing.mjs';
+import {buildMarketing, rootIcons} from './marketing.mjs';
 
 test('marketing image references match immutable packaged assets and pilot links', () => {
   const destination = mkdtempSync(`${tmpdir()}/freedms-marketing-test-`);
@@ -36,7 +36,7 @@ test('marketing image references match immutable packaged assets and pilot links
         assert.deepEqual(readFileSync(`${destination}/${path}`), readFileSync('site/assets/og-image.jpg'));
       }
     }
-    for (const name of ['robots.txt', 'sitemap.xml', 'llms.txt']) {
+    for (const name of ['robots.txt', 'sitemap.xml', 'llms.txt', ...rootIcons]) {
       assert.deepEqual(readFileSync(`${destination}/${name}`), readFileSync(`site/${name}`));
     }
     for (const match of readFileSync(`${destination}/sitemap.xml`, 'utf8').matchAll(/<loc>([^<]+)<\/loc>/g)) {
@@ -104,6 +104,19 @@ test('apex routes to marketing objects without sharing the app asset cache keys'
   assert.equal(route('app.freedms.co', '/assets/hero-abc.png').uri, '/assets/hero-abc.png');
   assert.equal(route('app.freedms.co', '/api/session').uri, '/session');
   assert.equal(route('app.freedms.co', '/').uri, '/');
+});
+
+test('root icons route independently on app and marketing hosts without allowing arbitrary files', () => {
+  for (const name of rootIcons) {
+    assert.equal(route('freedms.co', `/${name}`).uri, `/marketing/${name}`);
+    assert.equal(route('app.freedms.co', `/${name}`).uri, `/${name}`);
+    assert.equal(route('other.example', `/${name}`).statusCode, 404);
+  }
+  for (const path of ['/favicon.gif', '/logo.svg', '/favicon.svg/extra', '/marketing/favicon.ico']) {
+    assert.equal(route('freedms.co', path).statusCode, 404);
+  }
+  // Mutable root icons use the default caching-disabled behavior, not /assets/*.
+  assert.match(template.split('        DefaultCacheBehavior:')[1].split('        CacheBehaviors:')[0], /CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad/);
 });
 
 test('pilot redirects work and unsupported apex paths do not reach the API', () => {

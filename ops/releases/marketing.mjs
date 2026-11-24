@@ -4,6 +4,7 @@ import {lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync} from 'no
 export const marketingPages = ['index.html', 'dms-cost.html', 'free-dealer-management-software.html',
   'bhph.html', 'compare.html', 'paperwork.html', 'recon.html', 'states.html', 'switching.html'];
 export const marketingDocuments = ['robots.txt', 'sitemap.xml', 'llms.txt', ...marketingPages.filter(page => page !== 'index.html')];
+export const rootIcons = ['favicon.ico', 'favicon.svg', 'apple-touch-icon.png'];
 
 // Content-addressed assets let CloudFront cache screenshots without serving an old
 // screenshot under a new page. Previous assets remain usable during rollback.
@@ -34,7 +35,7 @@ export function buildMarketing(source, destination, env = process.env) {
     if (html[page].includes('href="/signup"') || html[page].includes('href="/login"')) throw Error('Marketing links must support the invite-only pilot');
     writeFileSync(`${destination}/${page}`, html[page]);
   }
-  for (const name of ['robots.txt', 'sitemap.xml', 'llms.txt']) {
+  for (const name of ['robots.txt', 'sitemap.xml', 'llms.txt', ...rootIcons]) {
     writeFileSync(`${destination}/${name}`, readFileSync(`${source}/${name}`));
   }
 }

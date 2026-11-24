@@ -707,6 +707,7 @@ Resources:
         function handler(event) {
           var request = event.request;
           var marketingFile = /^\/(robots\.txt|sitemap\.xml|llms\.txt|dms-cost\.html|free-dealer-management-software\.html|bhph\.html|compare\.html|paperwork\.html|recon\.html|states\.html|switching\.html)$/.test(request.uri);
+          var rootIcon = /^\/(favicon\.ico|favicon\.svg|apple-touch-icon\.png)$/.test(request.uri);
           if (request.headers.host.value === '${RootDomain}') {
             if (request.uri === '/api/access-requests' && request.method === 'POST') {
               request.uri = '/access-requests';
@@ -719,7 +720,7 @@ Resources:
               return {statusCode: 302, headers: {location: {value: 'https://${RootDomain}/#signup'}, 'cache-control': {value: 'no-store'}}};
             }
             if (request.uri === '/' || request.uri === '/index.html') request.uri = '/marketing/index.html';
-            else if (marketingFile) request.uri = '/marketing' + request.uri;
+            else if (marketingFile || rootIcon) request.uri = '/marketing' + request.uri;
             else if (/^\/assets\/[A-Za-z0-9_-]+\.(png|svg|jpg|css|js|woff2)$/.test(request.uri)) request.uri = '/marketing' + request.uri;
             else return {statusCode: 404, headers: {'cache-control': {value: 'no-store'}}};
             return request;

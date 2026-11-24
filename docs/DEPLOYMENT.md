@@ -375,9 +375,29 @@ redirects to the app. Only `POST /api/access-requests` reaches the API on the ap
 Application branding lives in `packages/web/src/assets/` and is referenced through
 `src/brand.ts` or the HTML favicon link. Vite emits versioned SVG files under
 `assets/`; marketing branding uses the same immutable naming convention under
-`marketing/assets/`. Keep static assets out of the web public directory: root-level
-files are rejected by the packager and controller and are outside the deployment
-role's S3 permissions. Changed logos get new URLs so old releases remain recoverable.
+`marketing/assets/`. Changed logos get new URLs so old releases remain recoverable.
+The only public-directory exceptions are `favicon.ico`, `favicon.svg`, and
+`apple-touch-icon.png`. These exact keys exist on both hosts and are mutable,
+served with `no-store` through the caching-disabled default behavior. Arbitrary
+root images remain rejected by the packager, controller, and deployment policy.
+
+### Root icon operator migration
+
+Before the first icon-enabled release, hold the durable infrastructure migration
+lock and snapshot the current release/configuration and both stack templates.
+Verify the target's attested manifest and stage only its six exact icon objects
+(app root and `marketing/`) with the declared image content types. Update only
+the pilot viewer function and the release role's six object permissions, preserving
+the Lambda artifact, stack parameters, Free plan, and all unrelated resources.
+Pin the tested private controller in both the workflow and OIDC trust. Verify
+each host's icon bytes, content type and `no-store`, then record the source
+infrastructure digest and six icon hashes under the existing
+`marketingDocumentsSha256` baseline key (the historical key also covers app icons).
+Clear the migration lock only after readback and live checks succeed.
+
+Subsequent releases snapshot, conditionally replace, verify, and roll back these
+icons alongside the marketing documents and app indexes. Adding or removing a
+mutable path requires another explicit operator baseline migration.
 
 The one-time marketing cutover updates only the CloudFront viewer function in the
 pilot stack, using its existing packaged template to preserve the Lambda artifact.
