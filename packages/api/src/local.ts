@@ -14,6 +14,7 @@ import { randomBytes } from 'node:crypto';
 import { LocalTokens } from './auth.js';
 import { MemoryRepositories } from './memory.js';
 import { createHandler, errorResponse } from './handler.js';
+import { localMcpConfig } from './mcp/local.js';
 import { ApiError } from './errors.js';
 import { NhtsaVinDecoder } from './vin.js';
 if (process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NODE_ENV === 'production') throw new Error('Local auth must never run in production');
@@ -23,7 +24,7 @@ const pilotOperator = {userId: process.env.PILOT_OPERATOR_SUBJECT ?? '', tenantI
 const resolveOperator = localOperatorResolver(repositories, tokens, pilotOperator,
   process.env.LOCAL_PILOT_OPERATOR === '1' && process.env.PILOT_OPERATOR_SUBJECT === undefined && process.env.PILOT_OPERATOR_TENANT_ID === undefined);
 const assistantStub = process.env.FREEDMS_ASSISTANT_STUB === '1' ? new LocalAssistantProvider() : undefined;
-const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv(), undefined, {stripe: stripeBillingFromEnv(), appBaseUrl: process.env.FREEDMS_APP_BASE_URL, assistantProvider: assistantStub ?? assistantProviderFromEnv(), photoPrepImageEditor: assistantStub?.photoPrepImageEditor ?? photoPrepImageEditorFromEnv(), assistantSeedLocalPlan: process.env.FREEDMS_ASSISTANT_STUB === '1', pilotOperator, turnstile: turnstileVerifierFromEnv()});
+const handle = createHandler(repositories, new NhtsaVinDecoder(), () => new Date(), new MemoryDocumentStore(), providerFromEnv(), analyticsFromEnv(), undefined, {stripe: stripeBillingFromEnv(), appBaseUrl: process.env.FREEDMS_APP_BASE_URL, assistantProvider: assistantStub ?? assistantProviderFromEnv(), photoPrepImageEditor: assistantStub?.photoPrepImageEditor ?? photoPrepImageEditorFromEnv(), assistantSeedLocalPlan: process.env.FREEDMS_ASSISTANT_STUB === '1', pilotOperator, turnstile: turnstileVerifierFromEnv(), mcp: localMcpConfig(tokens, repositories)});
 const server = createServer(async (req, res) => {
   let result;
   try {

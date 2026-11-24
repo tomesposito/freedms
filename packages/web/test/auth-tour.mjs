@@ -37,12 +37,33 @@ try {
     return route.fulfill({status:recoveryAttempts===1?401:200,contentType:'application/json',body:JSON.stringify(recoveryAttempts===1?{error:{code:'UNAUTHORIZED',message:'Expired fixture token'}}:{data:{principal:{tenantId:'offline',userId:'offline-user',role:'admin'},tenant:{name:'Offline tour'},user:{id:'offline-user',name:'Offline user',email:'pilot@example.test'},mfaEnabled:true}})});
   });
   await page.goto('http://127.0.0.1:5199/#/welcome');await login('pilot@example.test');await page.locator('#signout').waitFor();assert.equal(recoveryAttempts,2);
-  assert.ok(await page.evaluate(()=>sessionStorage.getItem('freedms-refresh-token')));
+  assert.ok(await page.evaluate(()=>localStorage.getItem('freedms-refresh-token')));
   await page.locator('#signout').click();await page.getByRole('heading',{name:'Sign in',exact:true}).waitFor();assert.ok(mock.calls.includes('RevokeToken'));
-  assert.equal(await page.evaluate(()=>sessionStorage.getItem('freedms-token')),null);
+  assert.equal(await page.evaluate(()=>localStorage.getItem('freedms-token')),null);
   await page.unroute('**/api/**');
   let mfaAttempts=0;
   await page.route('**/api/**',route=>{mfaAttempts++;return route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({error:{code:'MFA_INVALID',message:'Invalid MFA fixture'}})});});
-  await login('pilot@example.test');await page.getByRole('alert').filter({hasText:'Invalid MFA fixture'}).waitFor();assert.equal(mfaAttempts,1);assert.ok(await page.evaluate(()=>sessionStorage.getItem('freedms-token')));
+  await login('pilot@example.test');await page.getByRole('alert').filter({hasText:'Invalid MFA fixture'}).waitFor();assert.equal(mfaAttempts,1);assert.ok(await page.evaluate(()=>localStorage.getItem('freedms-token')));
   assert.deepEqual(errors,[]);console.log(`PASS: all login states, challenge completion, reset, and exactly one 401 refresh/retry. Screenshots: ${out}`);
+  // Multi-tab (#190): two pages in one browser context share a profile, so
+  // tab 2 must open signed in, PKCE state must stay tab-scoped, and signing
+  // out in tab 1 must return tab 2 to login.
+  const context=await browser.newContext({viewport:{width:1440,height:960}});
+  const tabErrors=[];context.on('page',p=>p.on('pageerror',e=>tabErrors.push(e.message)));
+  await context.route('**/api/**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({data:{principal:{tenantId:'offline',userId:'offline-user',role:'admin'},tenant:{name:'Offline tour'},user:{id:'offline-user',name:'Offline user',email:'pilot@example.test'},mfaEnabled:true}})}));
+  const tab1=await context.newPage(); const tab2=await context.newPage();
+  await tab1.goto('http://127.0.0.1:5199/#/welcome');
+  await tab1.getByLabel('Email',{exact:true}).fill('pilot@example.test');await tab1.getByLabel('Password',{exact:true}).fill('FixturePassword123!');await tab1.getByRole('button',{name:'Sign in',exact:true}).click();
+  await tab1.locator('#signout').waitFor();
+  assert.ok(await tab1.evaluate(()=>localStorage.getItem('freedms-token')));assert.equal(await tab1.evaluate(()=>sessionStorage.getItem('freedms-token')),null);
+  await tab2.goto('http://127.0.0.1:5199/#/welcome');await tab2.locator('#signout').waitFor();
+  assert.equal(await tab2.getByRole('heading',{name:'Sign in',exact:true}).count(),0);
+  await tab2.screenshot({path:`${out}/66-login-multitab.png`,fullPage:true});
+  await tab1.evaluate(()=>sessionStorage.setItem('freedms-pkce','tab1-only'));
+  assert.equal(await tab2.evaluate(()=>sessionStorage.getItem('freedms-pkce')),null);
+  await tab1.locator('#signout').click();await tab1.getByRole('heading',{name:'Sign in',exact:true}).waitFor();
+  await tab2.getByRole('heading',{name:'Sign in',exact:true}).waitFor();
+  assert.equal(await tab2.evaluate(()=>localStorage.getItem('freedms-token')),null);
+  assert.deepEqual(tabErrors,[]);await context.close();
+  console.log('PASS: multi-tab shared session, PKCE isolation, and sign-out propagation.');
 } finally {await browser?.close();vite.kill();await new Promise(r=>mock.server.close(r));}

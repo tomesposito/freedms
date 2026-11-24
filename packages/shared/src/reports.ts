@@ -8,6 +8,8 @@ export interface InventoryReport {
 }
 export interface SalesReport {
   trend: {date: string; count: number}[];
+  /** 'day' buckets carry a calendar date; 'month' buckets carry the first of the month. */
+  trendGranularity: 'day' | 'month';
   from: string | null; to: string | null;
   rows: {soldDate: string; dealId: string; buyer: string; vehicle: string; price: number; frontGross: number; fiGross: number; fiRetail: number; cost: number; recon: number; tax: number; fees: number}[];
   totals: {dealsSold: number; totalFrontGross: number; totalFiGross: number; averageGross: number};

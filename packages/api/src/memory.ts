@@ -1,4 +1,4 @@
-import { webhookCandidates } from './repository.js';
+import { WEBHOOK_DRAIN_PAGE_SIZE, webhookCandidates, type WebhookDrainScope } from './repository.js';
 import { assertAssistantBalance } from './assistant-settlement.js';
 import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry, AssistantWaitlistEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
@@ -11,13 +11,26 @@ import type { MfaRecord } from '@freedms/shared';
 import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
-import type { Customer, CrmEntity, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
+import type { Customer, CrmEntity, Invite, Membership, OutboxEvent, Tenant, User, Vehicle } from '@freedms/shared';
 import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantWaitlist, assertAssistantWaitlistRemoved, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, commandSearchSelection, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId, requireCycleStart } from './errors.js';
 const forecastKinds = new Set<CrmEntity['kind']>(['deal', 'service-appointment', 'part', 'parts-sale', 'repair-order']);
-interface State { billingLink?: AssistantBillingLink; stripeReceipts: Set<string>; assistantPlan?: AssistantPlan; assistantWaitlist?: AssistantWaitlistEntry; assistantCycles: Map<string, AssistantCycle>; assistantLedger: Map<string, AssistantLedgerEntry>; mcpGrants: Map<string, McpGrant>; mcpRegistrations: Map<string, McpRegistration>; mcpAttempts: Map<string, {bucket: number; count: number}>; ideas: Map<string, Idea>; accessRequests: Map<string, AccessRequest>; leadPageEpoch: number; leadPageCache: Map<string, LeadPage>; accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent> }
+interface State { billingLink?: AssistantBillingLink; stripeReceipts: Set<string>; assistantPlan?: AssistantPlan; assistantWaitlist?: AssistantWaitlistEntry; assistantCycles: Map<string, AssistantCycle>; assistantLedger: Map<string, AssistantLedgerEntry>; mcpGrants: Map<string, McpGrant>; mcpRegistrations: Map<string, McpRegistration>; mcpAttempts: Map<string, {bucket: number; count: number}>; ideas: Map<string, Idea>; accessRequests: Map<string, AccessRequest>; leadPageEpoch: number; leadPageCache: Map<string, LeadPage>; accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedPointer?: {runId: string; createdAt: string; fingerprint: string}; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent>; eventIds: string[]; eventOffsets: Map<string, number> }
 export class MemoryRepositories implements RepositoryFactory {
   private states = new Map<string, State>();
+  private webhookDrainCursors = new Map<string, string>();
+  async webhookDrainCursor(scope: WebhookDrainScope) {
+    return this.webhookDrainCursors.get(scope.map(requireId).join('#'));
+  }
+  async saveWebhookDrainCursor(scope: WebhookDrainScope, expected: string | undefined, cursor: string) {
+    const key = scope.map(requireId).join('#');
+    if (this.webhookDrainCursors.get(key) === expected) this.webhookDrainCursors.set(key, cursor);
+  }
+  async webhookDrainTenants(after: string | undefined, limit: number) {
+    const tenants = await this.webhookTenantIds();
+    const start = tenants.findIndex(id => !after || id > after);
+    return (start < 0 ? tenants : [...tenants.slice(start), ...tenants.slice(0, start)]).slice(0, limit);
+  }
   async webhookTenantIds(): Promise<string[]> {
     return [...this.states].filter(([, state]) => [...state.webhookEndpoints.values()].some(endpoint => endpoint.enabled)).map(([id]) => id).sort();
   }
@@ -37,8 +50,15 @@ export class MemoryRepositories implements RepositoryFactory {
   forTenant(tenantId: string): TenantRepository {
     requireId(tenantId);
     let state = this.states.get(tenantId);
-    if (!state) { state = {stripeReceipts: new Set(), assistantCycles: new Map(), assistantLedger: new Map(), mcpGrants: new Map(), mcpRegistrations: new Map(), mcpAttempts: new Map(), ideas: new Map(), accessRequests: new Map(), leadPageEpoch: 0, leadPageCache: new Map(), accountingEpoch: 0, accountingCache: new Map(), forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), crmByKind: new Map(), partNumbers: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map()}; this.states.set(tenantId, state); }
+    if (!state) { state = {stripeReceipts: new Set(), assistantCycles: new Map(), assistantLedger: new Map(), mcpGrants: new Map(), mcpRegistrations: new Map(), mcpAttempts: new Map(), ideas: new Map(), accessRequests: new Map(), leadPageEpoch: 0, leadPageCache: new Map(), accountingEpoch: 0, accountingCache: new Map(), forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), crmByKind: new Map(), partNumbers: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map(), eventIds: [], eventOffsets: new Map()}; this.states.set(tenantId, state); }
     const s = state;
+    const storeEvent = (event: OutboxEvent) => {
+      if (!s.events.has(event.id)) {
+        s.eventOffsets.set(event.id, s.eventIds.length);
+        s.eventIds.push(event.id);
+      }
+      s.events.set(event.id, structuredClone(event));
+    };
     const storeCrm = (record: CrmEntity) => {
       const stored = structuredClone(record);
       let bucket = s.crmByKind.get(record.kind);
@@ -58,25 +78,31 @@ export class MemoryRepositories implements RepositoryFactory {
         check(event); check(memberEvent);
         s.tenant = structuredClone(tenant);
         storeCrm(record); s.users.set(user.id, structuredClone(user)); s.memberships.set(user.id, structuredClone(member));
-        s.events.set(event.id, structuredClone(event)); s.events.set(memberEvent.id, structuredClone(memberEvent));
+        storeEvent(event); storeEvent(memberEvent);
         return 'accepted';
+      },
+      scrubInvite: async record => {
+        if ('token' in record || record.tenantId !== tenantId) return false;
+        const current = s.crm.get(`invite#${record.id}`) as Invite | undefined;
+        if (!current || current.tenantId !== tenantId || current.version !== record.version || !('token' in current)) return false;
+        storeCrm(record); return true;
       },
       workspaceUsers: async () => structuredClone([...s.memberships.values()].map(membership => ({membership, user: s.users.get(membership.userId)!}))),
       saveMember: async (user, member, expected, event) => {
         assertScope(tenantId, member, event); check(event);
         validateMemberWrite(user, member, expected, event, [...s.memberships.values()].map(membership => ({membership, user: s.users.get(membership.userId)!})));
-        s.users.set(user.id, structuredClone(user)); s.memberships.set(user.id, structuredClone(member)); s.events.set(event.id, structuredClone(event));
+        s.users.set(user.id, structuredClone(user)); s.memberships.set(user.id, structuredClone(member)); storeEvent(event);
       },
       assistantBillingLink: async () => structuredClone(s.billingLink),
       saveAssistantBillingLink: async (record, event) => {
         assertBillingLink(tenantId, record, event); check(event);
         if (s.billingLink || [...this.states.values()].some(row => row.billingLink?.customerId === record.customerId)) throw conflict();
-        s.billingLink = structuredClone(record); s.events.set(event.id, structuredClone(event));
+        s.billingLink = structuredClone(record); storeEvent(event);
       },
       updateAssistantBillingLink: async (record, expected, event) => {
         assertBillingLink(tenantId, record, event); check(event);
         if (record.version !== expected + 1 || s.billingLink?.version !== expected || s.billingLink.customerId !== record.customerId) throw conflict();
-        s.billingLink = structuredClone(record); s.events.set(event.id, structuredClone(event));
+        s.billingLink = structuredClone(record); storeEvent(event);
       },
       stripeEventProcessed: async id => s.stripeReceipts.has(requireId(id)),
       commitStripeEvent: async ({eventId, paymentId, plan, cycle, previousCycle, event}) => {
@@ -88,24 +114,24 @@ export class MemoryRepositories implements RepositoryFactory {
             (cycle && (s.assistantCycles.get(cycle.id)?.version ?? 0) !== cycle.version - 1)) throw conflict();
         s.stripeReceipts.add(eventId); if (paymentId) s.stripeReceipts.add(paymentId);
         s.assistantPlan = structuredClone(plan); if (cycle) s.assistantCycles.set(cycle.id, structuredClone(cycle));
-        s.events.set(event.id, structuredClone(event));
+        storeEvent(event);
       },
       assistantPlan: async () => structuredClone(s.assistantPlan),
       saveAssistantPlan: async (record, expected, event) => {
         assertAssistantPlan(tenantId, record, expected, event); check(event);
         if ((s.assistantPlan?.version ?? 0) !== expected) throw conflict();
-        s.assistantPlan = structuredClone(record); s.events.set(event.id, structuredClone(event));
+        s.assistantPlan = structuredClone(record); storeEvent(event);
       },
       assistantWaitlist: async () => structuredClone(s.assistantWaitlist),
       saveAssistantWaitlist: async (record, expectedVersion, event) => {
         assertAssistantWaitlist(tenantId, record, expectedVersion, event); check(event);
         if ((s.assistantWaitlist?.version ?? 0) !== expectedVersion) throw conflict();
-        s.assistantWaitlist = structuredClone(record); s.events.set(event.id, structuredClone(event));
+        s.assistantWaitlist = structuredClone(record); storeEvent(event);
       },
       deleteAssistantWaitlist: async (expectedVersion, event) => {
         assertAssistantWaitlistRemoved(tenantId, expectedVersion, event); check(event);
         if ((s.assistantWaitlist?.version ?? 0) !== expectedVersion) throw conflict();
-        s.assistantWaitlist = undefined; s.events.set(event.id, structuredClone(event));
+        s.assistantWaitlist = undefined; storeEvent(event);
       },
       assistantCycle: async start => structuredClone(s.assistantCycles.get(requireCycleStart(start))),
       saveAssistantCycle: async (record, expected) => {
@@ -140,14 +166,14 @@ export class MemoryRepositories implements RepositoryFactory {
           (old && (old.userId !== record.userId || old.clientId !== record.clientId)) ||
           (!expectedVersion && [...s.mcpGrants.values()].some(g => g.userId === record.userId && g.clientId === record.clientId))) throw conflict();
         s.mcpGrants.set(record.id, structuredClone(record));
-        if (event) s.events.set(event.id, structuredClone(event));
+        if (event) storeEvent(event);
       },
       ideas: async () => structuredClone([...s.ideas.values()]),
       idea: async id => structuredClone(s.ideas.get(requireId(id))),
       saveIdea: async (record, expectedVersion, event) => {
         assertIdea(tenantId, record, expectedVersion, event); requireId(record.id); check(event);
         if ((s.ideas.get(record.id)?.version ?? 0) !== expectedVersion) throw conflict();
-        s.ideas.set(record.id, structuredClone(record)); s.events.set(event.id, structuredClone(event));
+        s.ideas.set(record.id, structuredClone(record)); storeEvent(event);
       },
       mcpRegistration: async id => structuredClone(s.mcpRegistrations.get(requireId(id))),
       mcpRegistrations: async () => structuredClone([...s.mcpRegistrations.values()]),
@@ -176,18 +202,31 @@ export class MemoryRepositories implements RepositoryFactory {
       saveMfa: async (record, expectedVersion, event) => {
         assertMfa(tenantId, record, expectedVersion, event); requireId(record.id); check(event);
         if ((s.mfa.get(record.id)?.version ?? 0) !== expectedVersion) throw conflict();
-        s.mfa.set(record.id, structuredClone(record)); s.events.set(event.id, structuredClone(event));
+        s.mfa.set(record.id, structuredClone(record)); storeEvent(event);
       },
       webhookEndpoints: async () => structuredClone([...s.webhookEndpoints.values()]),
       webhookEndpoint: async id => structuredClone(s.webhookEndpoints.get(requireId(id))),
       saveWebhookEndpoint: async (record, expectedVersion, event) => {
         assertWebhookEndpoint(tenantId, record, expectedVersion, event); requireId(record.id); check(event);
         if ((s.webhookEndpoints.get(record.id)?.version ?? 0) !== expectedVersion) throw conflict();
-        s.webhookEndpoints.set(record.id, structuredClone(record)); s.events.set(event.id, structuredClone(event));
+        s.webhookEndpoints.set(record.id, structuredClone(record)); storeEvent(event);
       },
       webhookDispatchCandidates: (endpoints, now) => {
         for (const endpoint of endpoints) assertScope(tenantId, endpoint);
         return webhookCandidates(s.events.values(), endpoints, now, async id => s.webhookDeliveries.get(id)).then(pairs => structuredClone(pairs));
+      },
+      webhookDrainEndpoint: async after => {
+        const endpoints = [...s.webhookEndpoints.values()].filter(endpoint => endpoint.enabled).map(endpoint => endpoint.id).sort();
+        const id = endpoints.find(id => !after || id > after) ?? endpoints[0];
+        return id ? structuredClone(s.webhookEndpoints.get(id)) : undefined;
+      },
+      webhookDrainPage: async (endpoint, now, after) => {
+        assertScope(tenantId, endpoint);
+        const start = after ? (s.eventOffsets.get(after) ?? -1) + 1 : 0;
+        const ids = s.eventIds.slice(start, start + WEBHOOK_DRAIN_PAGE_SIZE);
+        const events = ids.map(id => s.events.get(id)!);
+        const candidates = await webhookCandidates(events, [endpoint], now, async id => s.webhookDeliveries.get(id), false);
+        return structuredClone({candidates, next: start + ids.length < s.eventIds.length ? ids.at(-1) : undefined});
       },
       webhookDeliveries: async () => structuredClone([...s.webhookDeliveries.values()]),
       claimWebhookDelivery: async (record, staleUpdatedAt) => {
@@ -200,11 +239,12 @@ export class MemoryRepositories implements RepositoryFactory {
       },
       saveWebhookDelivery: async record => { assertScope(tenantId, record); requireId(record.id); s.webhookDeliveries.set(record.id, structuredClone(record)); },
       feedConfig: async () => structuredClone(s.feedConfig),
-      saveFeedConfig: async (record, expectedVersion, event) => { assertFeedConfig(tenantId, record, expectedVersion, event); check(event); if ((s.feedConfig?.version ?? 0) !== expectedVersion) throw conflict(); s.feedConfig = structuredClone(record); s.events.set(event.id, structuredClone(event)); },
-      appendFeedRun: async (record, event) => { assertScope(tenantId, record); requireId(record.id); check(event); assertEvent(record.id, 1, event, 'feed.generated'); if (s.feedRuns.has(record.id)) throw conflict(); s.feedRuns.set(record.id, structuredClone(record)); s.events.set(event.id, structuredClone(event)); },
+      saveFeedConfig: async (record, expectedVersion, event) => { assertFeedConfig(tenantId, record, expectedVersion, event); check(event); if ((s.feedConfig?.version ?? 0) !== expectedVersion) throw conflict(); s.feedConfig = structuredClone(record); storeEvent(event); },
+      appendFeedRun: async (record, event) => { assertScope(tenantId, record); requireId(record.id); check(event); assertEvent(record.id, 1, event, 'feed.generated'); if (s.feedRuns.has(record.id)) throw conflict(); s.feedRuns.set(record.id, structuredClone(record)); storeEvent(event); if (record.facebookRows !== undefined && record.facebookFingerprint && (!s.feedPointer || record.createdAt >= s.feedPointer.createdAt)) s.feedPointer = {runId: record.id, createdAt: record.createdAt, fingerprint: record.facebookFingerprint}; },
+      facebookFeedPointer: async () => s.feedPointer ? {tenantId, ...structuredClone(s.feedPointer)} : undefined,
       feedRuns: async () => structuredClone([...s.feedRuns.values()]),
       feedRun: async id => structuredClone(s.feedRuns.get(requireId(id))),
-      appendImport: async (record, event) => { assertScope(tenantId, record); requireId(record.id); check(event); assertEvent(record.id, 1, event, 'vehicle.imported'); if (s.imports.has(record.id)) throw conflict(); s.imports.set(record.id, structuredClone(record)); s.events.set(event.id, structuredClone(event)); },
+      appendImport: async (record, event) => { assertScope(tenantId, record); requireId(record.id); check(event); assertEvent(record.id, 1, event, 'vehicle.imported'); if (s.imports.has(record.id)) throw conflict(); s.imports.set(record.id, structuredClone(record)); storeEvent(event); },
       imports: async () => structuredClone([...s.imports.values()]),
       events: async () => structuredClone([...s.events.values()]),
       appendAnalytics: async record => { assertScope(tenantId, record); requireId(record.id); if (s.analytics.has(record.id)) throw conflict(); s.analytics.set(record.id, structuredClone(record)); },
@@ -324,9 +364,9 @@ export class MemoryRepositories implements RepositoryFactory {
           if (id === undefined) s.partNumbers.delete(number);
           else s.partNumbers.set(number, id);
         }
-        for (const {record, event} of vehicles) { s.vehicles.set(record.id, structuredClone(record)); s.events.set(event.id, structuredClone(event)); }
+        for (const {record, event} of vehicles) { s.vehicles.set(record.id, structuredClone(record)); storeEvent(event); }
         for (const {record, event} of writes) {
-          storeCrm(record); s.events.set(event.id, structuredClone(event));
+          storeCrm(record); storeEvent(event);
         }
         if (writes.some(({record}) => record.kind === 'lead' || record.kind === 'customer')) s.leadPageEpoch++;
         if (writes.some(({record}) => record.kind === 'journal-entry' || record.kind === 'gl-account')) s.accountingEpoch++;
@@ -344,19 +384,19 @@ export class MemoryRepositories implements RepositoryFactory {
       create: async (v, event) => {
         assertScope(tenantId, v); check(event); assertEvent(v.id, v.version, event, 'vehicle.created');
         if (s.vehicles.has(v.id)) throw conflict();
-        s.vehicles.set(v.id, structuredClone(v)); s.events.set(event.id, structuredClone(event));
+        s.vehicles.set(v.id, structuredClone(v)); storeEvent(event);
         s.forecastEpoch++;
       },
       update: async (v, version, event) => {
         assertScope(tenantId, v); check(event); assertEvent(v.id, version + 1, event, 'vehicle.updated');
         if (s.vehicles.get(v.id)?.version !== version || v.version !== version + 1) throw conflict();
-        s.vehicles.set(v.id, structuredClone(v)); s.events.set(event.id, structuredClone(event));
+        s.vehicles.set(v.id, structuredClone(v)); storeEvent(event);
         s.forecastEpoch++;
       },
       delete: async (id, version, event) => {
         check(event); assertEvent(id, version + 1, event, 'vehicle.deleted');
         if (s.vehicles.get(id)?.version !== version) throw conflict();
-        s.vehicles.delete(id); s.events.set(event.id, structuredClone(event));
+        s.vehicles.delete(id); storeEvent(event);
         s.forecastEpoch++;
       },
       provision: async (tenant, user, membership, event, acceptance) => {
@@ -364,9 +404,9 @@ export class MemoryRepositories implements RepositoryFactory {
         assertScope(tenantId, membership); check(event); assertEvent(tenantId, 1, event, 'tenant.created');
         if (tenant.id !== tenantId || membership.userId !== user.id) throw new Error('Invalid provisioning scope');
         if (s.tenant) throw conflict();
-        if (acceptance) { check(acceptance.event); storeCrm(acceptance.record); s.events.set(acceptance.event.id, structuredClone(acceptance.event)); }
+        if (acceptance) { check(acceptance.event); storeCrm(acceptance.record); storeEvent(acceptance.event); }
         s.tenant = structuredClone(tenant); s.users.set(user.id, structuredClone(user));
-        s.memberships.set(user.id, structuredClone(membership)); s.events.set(event.id, structuredClone(event));
+        s.memberships.set(user.id, structuredClone(membership)); storeEvent(event);
       }
     };
   }

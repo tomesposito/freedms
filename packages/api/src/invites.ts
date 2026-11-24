@@ -36,6 +36,26 @@ export function storedInvite(invite: Invite): Invite {
 export function newInvite(tenantId: string, row: Pick<Invite, 'name' | 'email' | 'role'>, now: Date): Invite & {token: string} {
   return {...row, ...credentials(tenantId), id: randomUUID(), kind: 'invite', tenantId, version: 1, createdAt: now.toISOString(), updatedAt: now.toISOString(), expiresAt: new Date(now.getTime() + 7 * 86400000).toISOString(), status: 'pending'};
 }
+/** True when a stored record still carries the legacy plaintext token field (#179). */
+export function hasPlaintextToken(invite: Invite): boolean {
+  return 'token' in invite;
+}
+/**
+ * Backfill (#179): rewrite every stored invite that still carries a plaintext
+ * `token`, dropping only that field. Hashes, status, expiry and version are
+ * preserved exactly and no outbox event is emitted — acceptance validates
+ * against `tokenHash`, so live links keep working. Idempotent; a record that
+ * changed concurrently is skipped, not clobbered. Returns the count rewritten.
+ */
+export async function scrubLegacyInvites(repo: TenantRepository): Promise<number> {
+  let scrubbed = 0;
+  for (const invite of await repo.crmList('invite')) {
+    if (!hasPlaintextToken(invite)) continue;
+    // One record's failure (e.g. it changed mid-scan) never stops the rest.
+    try { if (await repo.scrubInvite(storedInvite(invite))) scrubbed++; } catch { /* skip this record */ }
+  }
+  return scrubbed;
+}
 export function inviteWrite(record: Invite, actorId: string, expectedVersion = 0): CrmWrite {
   return {record: storedInvite(record), expectedVersion, event: {id: randomUUID(), tenantId: record.tenantId, actorId, aggregateId: record.id, aggregateVersion: record.version, type: expectedVersion ? 'invite.updated' : 'invite.created', occurredAt: record.updatedAt, deliveryStatus: 'pending'}};
 }
@@ -43,7 +63,13 @@ export async function manageInvites(request: ApiRequest, principal: Principal, r
   if (principal.role !== 'admin') throw new ApiError(403, 'FORBIDDEN', 'Only administrators can manage invites.');
   const path = request.path.replace(/\/$/, ''), method = request.method.toUpperCase();
   onlyKeys(request.query ?? {}, []);
-  if (path === '/admin/invites' && method === 'GET') return response(200, {data: (await repo.crmList('invite')).map(storedInvite)});
+  if (path === '/admin/invites' && method === 'GET') {
+    // Listing is the one routine read of every invite: repair legacy records in
+    // storage (#179), not just in this response. Best-effort — a scrub failure
+    // must never fail the list, whose response is redacted either way.
+    await scrubLegacyInvites(repo).catch(() => 0);
+    return response(200, {data: (await repo.crmList('invite')).map(storedInvite)});
+  }
   if (path === '/admin/invites' && method === 'POST') {
     const body = parseBody(request.body); onlyKeys(body, ['name', 'email', 'role']);
     const name = text(body.name, 'Name'), email = emailAddress(body.email);

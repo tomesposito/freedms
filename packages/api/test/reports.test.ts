@@ -486,7 +486,7 @@ test('report routes enforce the inclusive 366-day limit before JSON or CSV gener
   assert.deepEqual(dateRange({to: '9999-12-31'}), {from: null, to: '9999-12-31'});
 });
 
-test('sales trend rejects excessive literal and observed ranges before zero-filling', async () => {
+test('sales trend rejects excessive literal ranges but aggregates open ranges by month past a year', async () => {
   const s = await setup(), repo = s.repositories.forTenant('A');
   const error = {status: 400, code: 'VALIDATION', message: 'Date range must be 366 days or fewer.'};
   for (const range of [{from: '0001-01-01', to: '9999-12-31'}, {from: '2024-01-01', to: '2025-01-01'}]) {
@@ -494,7 +494,32 @@ test('sales trend rejects excessive literal and observed ranges before zero-fill
   }
   await s.sell('2024-01-01', 1);
   await s.sell('2025-01-01', 2);
+  // Open ranges never reject on the observed span: rows stay complete and the
+  // trend switches to monthly buckets that still sum to the deals sold.
   for (const range of [{from: null, to: null}, {from: '2024-01-01', to: null}, {from: null, to: '2025-01-01'}]) {
-    await assert.rejects(salesReport(repo, range), error);
+    const data = await salesReport(repo, range);
+    assert.equal(data.rows.length, 2);
+    assert.equal(data.totals.dealsSold, 2);
+    assert.equal(data.trendGranularity, 'month');
+    assert.equal(data.trend.length, 13);
+    assert.deepEqual(data.trend[0], {date: '2024-01-01', count: 1});
+    assert.deepEqual(data.trend.at(-1), {date: '2025-01-01', count: 1});
+    assert.ok(data.trend.slice(1, -1).every(bucket => bucket.count === 0));
+    assert.equal(data.trend.reduce((sum, b) => sum + b.count, 0), data.totals.dealsSold);
   }
+  // The routes and both CSV exports serve the all-time history too.
+  const data = await s.json<SalesReport>('/reports/sales', 'GET');
+  assert.equal(data.trendGranularity, 'month');
+  for (const path of ['sales.csv', 'accounting.csv']) {
+    const csv = await s.request(`/reports/${path}`);
+    assert.equal(csv.statusCode, 200, path);
+    assert.equal(parseCsv(csv.body).length, 3, path);
+  }
+  // A short observed span keeps the daily zero-filled trend.
+  const t = await setup();
+  await t.sell('2026-10-19', 1);
+  await t.sell('2026-10-20', 2);
+  const daily = await salesReport(t.repositories.forTenant('A'), {from: null, to: null});
+  assert.equal(daily.trendGranularity, 'day');
+  assert.deepEqual(daily.trend, [{date: '2026-10-19', count: 1}, {date: '2026-10-20', count: 1}]);
 });

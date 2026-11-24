@@ -1,4 +1,4 @@
-import { webhookCandidates } from './repository.js';
+import { WEBHOOK_DRAIN_PAGE_SIZE, webhookCandidates, type WebhookDrainScope } from './repository.js';
 import { assertAssistantBalance } from './assistant-settlement.js';
 import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry, AssistantWaitlistEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
@@ -11,7 +11,7 @@ import type { WebhookEndpoint, WebhookDelivery } from '@freedms/shared';
 import type { FeedConfig, FeedRun } from '@freedms/shared';
 import type { InventoryImport, AnalyticsRecord, QuickEntryUsage } from '@freedms/shared';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, QueryCommand, ScanCommand, TransactWriteCommand, type TransactWriteCommandInput, type ScanCommandOutput } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand, TransactWriteCommand, type TransactWriteCommandInput, type ScanCommandOutput } from '@aws-sdk/lib-dynamodb';
 import type { Customer, Lead, CrmEntity, User, Membership, OutboxEvent, Tenant, Vehicle } from '@freedms/shared';
 import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantWaitlist, assertAssistantWaitlistRemoved, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, commandSearchSelection, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type VehicleQuery, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId, requireCycleStart } from './errors.js';
@@ -74,30 +74,94 @@ export class DynamoRepositories implements RepositoryFactory {
       cursor = result.LastEvaluatedKey;
     } while (cursor);
     if (migrated) return [...tenants].sort();
-    // One-time compatibility migration. Conditional checks prevent a concurrent
-    // disable from being resurrected by a stale scan result. Retry next invocation
-    // if a concurrent endpoint write interrupts migration.
     do {
-      const result: ScanCommandOutput = await this.client.send(new ScanCommand({TableName: this.table,
-        FilterExpression: 'begins_with(SK, :prefix) AND #d.#enabled = :enabled',
-        ProjectionExpression: 'PK, SK, #d.#tenant, #d.#id, #d.#version',
-        ExpressionAttributeNames: {'#d': 'data', '#enabled': 'enabled', '#tenant': 'tenantId', '#id': 'id', '#version': 'version'},
-        ExpressionAttributeValues: {':prefix': 'WEBHOOK#', ':enabled': true},
-        ConsistentRead: true, ExclusiveStartKey: cursor}));
-      for (const item of result.Items ?? []) {
-        const {tenantId, id, version} = item.data;
-        requireId(tenantId); requireId(id);
-        await this.client.send(new TransactWriteCommand({TransactItems: [
-          {ConditionCheck: {TableName: this.table, Key: {PK: `TENANT#${tenantId}`, SK: `WEBHOOK#${id}`},
-            ConditionExpression: '#d.#v = :v AND #d.#e = :e', ExpressionAttributeNames: {'#d': 'data', '#v': 'version', '#e': 'enabled'}, ExpressionAttributeValues: {':v': version, ':e': true}}},
-          {Put: {TableName: this.table, Item: {...registry, SK: `${tenantId}#${id}`, data: {tenantId, endpointId: id}}}}
-        ]}));
-        tenants.add(tenantId);
-      }
-      cursor = result.LastEvaluatedKey;
+      const page = await this.migrateWebhookRegistryPage(cursor);
+      for (const tenantId of page.tenants) tenants.add(tenantId);
+      cursor = page.next;
     } while (cursor);
-    await this.client.send(new TransactWriteCommand({TransactItems: [{Put: {TableName: this.table, Item: {...registry, SK: 'MIGRATED'}}}]}));
     return [...tenants].sort();
+  }
+  private async migrateWebhookRegistryPage(cursor?: Record<string, unknown>, limit?: number) {
+    const registry = {PK: 'OPERATOR#WEBHOOKS'};
+    const tenants = new Set<string>();
+    // Conditional checks prevent resurrecting an endpoint disabled after the scan.
+    const result: ScanCommandOutput = await this.client.send(new ScanCommand({TableName: this.table,
+      FilterExpression: 'begins_with(SK, :prefix) AND #d.#enabled = :enabled',
+      ProjectionExpression: 'PK, SK, #d.#tenant, #d.#id, #d.#version',
+      ExpressionAttributeNames: {'#d': 'data', '#enabled': 'enabled', '#tenant': 'tenantId', '#id': 'id', '#version': 'version'},
+      ExpressionAttributeValues: {':prefix': 'WEBHOOK#', ':enabled': true},
+      ConsistentRead: true, ExclusiveStartKey: cursor, Limit: limit}));
+    for (const item of result.Items ?? []) {
+      const {tenantId, id, version} = item.data;
+      requireId(tenantId); requireId(id);
+      await this.client.send(new TransactWriteCommand({TransactItems: [
+        {ConditionCheck: {TableName: this.table, Key: {PK: `TENANT#${tenantId}`, SK: `WEBHOOK#${id}`},
+          ConditionExpression: '#d.#v = :v AND #d.#e = :e', ExpressionAttributeNames: {'#d': 'data', '#v': 'version', '#e': 'enabled'}, ExpressionAttributeValues: {':v': version, ':e': true}}},
+        {Put: {TableName: this.table, Item: {...registry, SK: `${tenantId}#${id}`, data: {tenantId, endpointId: id}}}}
+      ]}));
+      tenants.add(tenantId);
+    }
+    if (!result.LastEvaluatedKey) {
+      await this.client.send(new TransactWriteCommand({TransactItems: [{Put: {TableName: this.table, Item: {...registry, SK: 'MIGRATED'}}}]}));
+    }
+    return {tenants, next: result.LastEvaluatedKey};
+  }
+  async webhookDrainTenants(after: string | undefined, limit: number) {
+    const PK = 'OPERATOR#WEBHOOKS';
+    const migrated = await this.client.send(new GetCommand({TableName: this.table, Key: {PK, SK: 'MIGRATED'}, ConsistentRead: true}));
+    if (!migrated.Item) {
+      const key = {PK: 'OPERATOR#WEBHOOKDRAIN', SK: 'MIGRATION'};
+      const progress = await this.client.send(new GetCommand({TableName: this.table, Key: key, ConsistentRead: true}));
+      const cursor = progress.Item?.cursor as string | undefined;
+      const page = await this.migrateWebhookRegistryPage(cursor ? JSON.parse(cursor) : undefined, WEBHOOK_DRAIN_PAGE_SIZE);
+      if (page.next) await this.writeWebhookDrainCursor(key, cursor, JSON.stringify(page.next));
+    }
+    const tenants: string[] = [];
+    let lowerBound = after ? requireId(after) + '#~' : '#';
+    let wrapped = !after;
+    while (tenants.length < limit) {
+      // IDs contain only ASCII letters, digits, hyphens and underscores, so
+      // the upper sentinel skips all endpoint rows of the previous tenant.
+      const result = await this.client.send(new QueryCommand({TableName: this.table,
+        KeyConditionExpression: 'PK = :pk AND SK > :lower',
+        ExpressionAttributeValues: {':pk': PK, ':lower': lowerBound},
+        ConsistentRead: true, Limit: 1}));
+      const item = result.Items?.[0];
+      if (!item) {
+        if (wrapped) break;
+        wrapped = true;
+        lowerBound = '#';
+        continue;
+      }
+      lowerBound = item.SK;
+      if (item.SK === 'MIGRATED') continue;
+      const tenantId = requireId(item.data.tenantId);
+      if (tenants.includes(tenantId)) break;
+      tenants.push(tenantId);
+      lowerBound = tenantId + '#~';
+    }
+    return tenants;
+  }
+  private webhookDrainKey(scope: WebhookDrainScope) {
+    return {PK: 'OPERATOR#WEBHOOKDRAIN', SK: ['CURSOR', ...scope.map(requireId)].join('#')};
+  }
+  async webhookDrainCursor(scope: WebhookDrainScope): Promise<string | undefined> {
+    const result = await this.client.send(new GetCommand({TableName: this.table, Key: this.webhookDrainKey(scope), ConsistentRead: true}));
+    return result.Item?.cursor;
+  }
+  async saveWebhookDrainCursor(scope: WebhookDrainScope, expected: string | undefined, cursor: string) {
+    await this.writeWebhookDrainCursor(this.webhookDrainKey(scope), expected, cursor);
+  }
+  private async writeWebhookDrainCursor(key: {PK: string; SK: string}, expected: string | undefined, cursor: string) {
+    try {
+      await this.client.send(new PutCommand({TableName: this.table, Item: {...key, cursor},
+        ...(expected === undefined ? {ConditionExpression: 'attribute_not_exists(PK)'} : {
+          ConditionExpression: '#cursor = :expected', ExpressionAttributeNames: {'#cursor': 'cursor'},
+          ExpressionAttributeValues: {':expected': expected}
+        })}));
+    } catch (error) {
+      if (!(error instanceof Error) || error.name !== 'ConditionalCheckFailedException') throw error;
+    }
   }
   async tenantForSubject(subject: string): Promise<string | undefined> {
     const result = await this.client.send(new GetCommand({TableName: this.table,
@@ -157,6 +221,28 @@ export class DynamoRepositories implements RepositoryFactory {
       } while (cursor);
       return rows;
     };
+    const queryWebhookEvents = (endpoints: WebhookEndpoint[], limit: number, cursor?: Record<string, unknown>) => {
+      const names: Record<string, string> = {'#d': 'data', '#type': 'type'};
+      const values: Record<string, unknown> = {':pk': PK, ':prefix': 'EVENT#'};
+      const clauses = endpoints.map((endpoint, i) => {
+        names[`#done${i}`] = `DONE#${endpoint.id}`;
+        const types = endpoint.eventTypes.map((type, j) => { values[`:t${i}_${j}`] = type; return `:t${i}_${j}`; });
+        return `(attribute_not_exists(#done${i}) AND #d.#type IN (${types.join(', ')}))`;
+      });
+      return this.client.send(new QueryCommand({TableName: this.table,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        FilterExpression: clauses.join(' OR '), ExpressionAttributeNames: names,
+        ExpressionAttributeValues: values, Limit: limit, ConsistentRead: true, ExclusiveStartKey: cursor}));
+    };
+    const lookupWebhookDelivery = async (id: string) => {
+      const previous = await get<WebhookDelivery>(`DELIVERY#${id}`);
+      // Legacy terminal deliveries have no completion attribute yet. Point
+      // reads preserve exact accounting and lazily suppress future transfers.
+      if (previous && previous.status !== 'pending') await transact([{Update: {TableName: this.table,
+        Key: key(`EVENT#${requireId(previous.eventId)}`), UpdateExpression: 'SET #done = :done',
+        ExpressionAttributeNames: {'#done': `DONE#${requireId(previous.endpointId)}`}, ExpressionAttributeValues: {':done': true}}}]);
+      return previous;
+    };
     const workspaceUsers = async () => {
       const [users, members] = await Promise.all([listRows<User>('USER#'), listRows<Membership>('MEMBER#')]);
       return members.map(membership => ({membership, user: users.find(u => u.id === membership.userId)!}));
@@ -176,6 +262,21 @@ export class DynamoRepositories implements RepositoryFactory {
           ...(this.subjectBindings ? [subjectPut(user.id)] : []), put(`USER#${requireId(user.id)}`, user), put(`MEMBER#${user.id}`, member), eventPut(event), eventPut(memberEvent), put('PROFILE', tenant, 'attribute_exists(PK)')
         ]);
         return 'accepted';
+      },
+      scrubInvite: async record => {
+        if ('token' in record || record.tenantId !== tenantId) return false;
+        try {
+          await this.client.send(new PutCommand({TableName: this.table, Item: {...key(`INVITE#${requireId(record.id)}`), data: record},
+            ConditionExpression: '#d.#v = :v AND attribute_exists(#d.#token)',
+            ExpressionAttributeNames: {'#d': 'data', '#v': 'version', '#token': 'token'},
+            ExpressionAttributeValues: {':v': record.version}}));
+          return true;
+        } catch (error) {
+          // A version/token mismatch, or an overlap with an in-flight invite
+          // transaction, both mean "not scrubbed now" — never a fatal error.
+          if (error instanceof Error && ['ConditionalCheckFailedException', 'TransactionConflictException'].includes(error.name)) return false;
+          throw error;
+        }
       },
       workspaceUsers,
       saveMember: async (user, member, expected, event) => {
@@ -344,36 +445,37 @@ export class DynamoRepositories implements RepositoryFactory {
         for (const endpoint of endpoints) assertScope(tenantId, endpoint);
         endpoints = endpoints.filter(endpoint => endpoint.enabled);
         if (!endpoints.length) return [];
-        const names: Record<string, string> = {'#d': 'data', '#type': 'type'};
-        const values: Record<string, unknown> = {':pk': PK, ':prefix': 'EVENT#'};
-        const clauses = endpoints.map((endpoint, i) => {
-          names[`#done${i}`] = `DONE#${endpoint.id}`;
-          const types = endpoint.eventTypes.map((type, j) => { values[`:t${i}_${j}`] = type; return `:t${i}_${j}`; });
-          return `(attribute_not_exists(#done${i}) AND #d.#type IN (${types.join(', ')}))`;
-        });
-        const client = this.client, table = this.table;
         async function* candidates() {
           let cursor: Record<string, unknown> | undefined;
-          // Exact remaining counts require all candidate pages. Dynamo discards
-          // non-webhook/terminal history server-side; only candidates cross the wire.
+          // Exact remaining counts require all candidate pages.
           do {
-            const result = await client.send(new QueryCommand({TableName: table,
-              KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-              FilterExpression: clauses.join(' OR '), ExpressionAttributeNames: names,
-              ExpressionAttributeValues: values, Limit: 100, ConsistentRead: true, ExclusiveStartKey: cursor}));
+            const result = await queryWebhookEvents(endpoints, 100, cursor);
             for (const item of result.Items ?? []) yield item.data as OutboxEvent;
             cursor = result.LastEvaluatedKey;
           } while (cursor);
         }
-        return webhookCandidates(candidates(), endpoints, now, async id => {
-          const previous = await get<WebhookDelivery>(`DELIVERY#${id}`);
-          // Legacy terminal deliveries have no completion attribute yet. Point
-          // reads preserve exact accounting and lazily suppress future transfers.
-          if (previous && previous.status !== 'pending') await transact([{Update: {TableName: this.table,
-            Key: key(`EVENT#${requireId(previous.eventId)}`), UpdateExpression: 'SET #done = :done',
-            ExpressionAttributeNames: {'#done': `DONE#${requireId(previous.endpointId)}`}, ExpressionAttributeValues: {':done': true}}}]);
-          return previous;
-        });
+        return webhookCandidates(candidates(), endpoints, now, lookupWebhookDelivery);
+      },
+      webhookDrainEndpoint: async after => {
+        const PK = 'OPERATOR#WEBHOOKS', prefix = `${tenantId}#`;
+        const firstEndpoint = async (start?: string) => {
+          const result = await this.client.send(new QueryCommand({TableName: this.table,
+            KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+            ExpressionAttributeValues: {':pk': PK, ':prefix': prefix},
+            ConsistentRead: true, Limit: 1, ExclusiveStartKey: start ? {PK, SK: prefix + requireId(start)} : undefined}));
+          return result.Items?.[0]?.data?.endpointId;
+        };
+        const id = await firstEndpoint(after) ?? (after ? await firstEndpoint() : undefined);
+        if (!id) return undefined;
+        const endpoint = await get<WebhookEndpoint>(`WEBHOOK#${requireId(id)}`);
+        return endpoint?.enabled ? endpoint : undefined;
+      },
+      webhookDrainPage: async (endpoint, now, after) => {
+        assertScope(tenantId, endpoint);
+        if (!endpoint.enabled) return {candidates: []};
+        const page = await queryWebhookEvents([endpoint], WEBHOOK_DRAIN_PAGE_SIZE, after ? key(`EVENT#${requireId(after)}`) : undefined);
+        const candidates = await webhookCandidates((page.Items ?? []).map(item => item.data as OutboxEvent), [endpoint], now, lookupWebhookDelivery, false);
+        return {candidates, next: (page.LastEvaluatedKey?.SK as string | undefined)?.slice('EVENT#'.length)};
       },
       webhookDeliveries: () => listRows<WebhookDelivery>('DELIVERY#'),
       claimWebhookDelivery: async (record, staleUpdatedAt) => {
@@ -416,7 +518,8 @@ export class DynamoRepositories implements RepositoryFactory {
       },
       feedConfig: () => get<FeedConfig>('FEEDCONFIG#feed-config'),
       saveFeedConfig: async (record, expectedVersion, event) => { assertFeedConfig(tenantId, record, expectedVersion, event); await transact([put('FEEDCONFIG#feed-config', record, expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined), eventPut(event)]); },
-      appendFeedRun: async (record, event) => { assertScope(tenantId, record); assertEvent(record.id, 1, event, 'feed.generated'); await transact([put(`FEEDRUN#${requireId(record.id)}`, record), eventPut(event)]); },
+      appendFeedRun: async (record, event) => { assertScope(tenantId, record); assertEvent(record.id, 1, event, 'feed.generated'); const items: TransactWriteCommandInput['TransactItems'] = [put(`FEEDRUN#${requireId(record.id)}`, record), eventPut(event)]; if (record.facebookRows !== undefined && record.facebookFingerprint) items.push({Put: {TableName: this.table, Item: {...key('FEEDPUBLISH#current'), data: {tenantId, runId: record.id, createdAt: record.createdAt, fingerprint: record.facebookFingerprint}}, ConditionExpression: 'attribute_not_exists(PK) OR #d.#ca <= :ca', ExpressionAttributeNames: {'#d': 'data', '#ca': 'createdAt'}, ExpressionAttributeValues: {':ca': record.createdAt}}}); await transact(items); },
+      facebookFeedPointer: () => get<{tenantId: string; runId: string; createdAt: string; fingerprint: string}>('FEEDPUBLISH#current'),
       feedRuns: () => listRows<FeedRun>('FEEDRUN#'),
       feedRun: id => get<FeedRun>(`FEEDRUN#${requireId(id)}`),
       appendImport: async (record, event) => { assertScope(tenantId, record); assertEvent(record.id, 1, event, 'vehicle.imported'); await transact([put(`IMPORT#${requireId(record.id)}`, record), eventPut(event)]); },

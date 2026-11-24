@@ -4,7 +4,7 @@ import {overviewHtml, overviewDefinition, overviewRoute} from '../src/overview.j
 import type {OverviewReport} from '@freedms/shared';
 const empty: OverviewReport = {
   inventory: {status: 'fulfilled', value: {totals: {count: 0, totalCost: 0, totalListPrice: 0}, buckets: ['0-30','31-60','61-90','91+'].map(bucket => ({bucket: bucket as '0-30', count: 0, totalCost: 0}))}},
-  sales: {status: 'fulfilled', value: {from: '2026-10-13', to: '2026-11-11', totals: {dealsSold: 0, totalFrontGross: 0, totalFiGross: 0, averageGross: 0}, trend: []}},
+  sales: {status: 'fulfilled', value: {from: '2026-10-13', to: '2026-11-11', totals: {dealsSold: 0, totalFrontGross: 0, totalFiGross: 0, averageGross: 0}, trend: [], trendGranularity: 'day'}},
   leads: {status: 'fulfilled', value: {total: 0, byStage: []}},
 };
 test('overview empty and loading layouts keep six basis-labelled tiles and three chart panels', () => {

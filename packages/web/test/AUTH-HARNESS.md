@@ -41,6 +41,13 @@ missing-pool, and local-mode regression tests. Live verification is post-deploy.
 The browser tour also verifies a successful refresh/retry into a stubbed welcome
 shell, revocation on sign-out, and the `MFA_INVALID` no-refresh exception.
 
+Since #190 the tour also covers the shared session: tokens live in
+`localStorage` (shared across the tabs of a profile), PKCE state stays in
+tab-scoped `sessionStorage`, a second page in the same browser context
+opens signed in with no login prompt, and signing out in one tab returns
+the other to login. Unit tests cover the cross-tab refresh lock and the
+sign-out epoch that stops a late refresh from reviving a session.
+
 Implementation notes: the mandated Apache-2.0 `amazon-cognito-identity-js` package
 brings transitive `tslib` (0BSD), `ieee754` (BSD-3-Clause), and
 `webidl-conversions` (BSD-2-Clause). This is a conflict with a literal

@@ -603,6 +603,15 @@ no tools. Existing hosted records need the scoped operator migration before use:
 Run once for each known dealership; it verifies membership and refuses to move
 an already-bound subject. Run the migration only for verified existing dealership memberships before enabling an MCP consumer.
 
+Invite records written before token hashing shipped may still carry a plaintext
+`token` field at rest (#179). Remove it per dealership with:
+`TABLE_NAME=<table> node --import tsx packages/api/src/invite-token-backfill.ts <tenant-id>`.
+The backfill drops only the plaintext field — hashes, invite states and versions
+are preserved, live invite links keep working, and re-running it is a no-op.
+An admin opening the invite list also repairs that dealership's records on a
+best-effort basis; the script above is the guaranteed path, so run it for every
+dealership rather than relying on admin visits.
+
 Available reads are `search_vehicles`, `get_vehicle`, `list_leads`, `get_lead`,
 `list_customers`, `get_customer`, `list_deals`, `get_deal`, `get_service_board`,
 `list_parts`, `get_sales_report`, `get_inventory_aging`, `get_trial_balance`, and

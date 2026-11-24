@@ -61,7 +61,7 @@ test('branded OAuth code + S256, resource binding, one-time consent, opaque stor
   const config = {resource, clientId: 'dedicated', issuer: 'issuer', customOAuth: true};
   const handler = createHandler(s.repositories, {decode: async () => {throw Error();}}, undefined, undefined, undefined, undefined, undefined, {oauth: s.service, mcp: config});
   const result = await handler({method: 'POST', path: '/mcp', authorization: `Bearer ${t.access_token}`, body: JSON.stringify({jsonrpc: '2.0', id: 1, method: 'tools/list'})});
-  assert.equal(result.statusCode, 200); assert.equal(JSON.parse(result.body).result.tools.length, 130);
+  assert.equal(result.statusCode, 200); assert.equal(JSON.parse(result.body).result.tools.length, 131);
   const metadata = JSON.parse((await handler({method: 'GET', path: '/.well-known/oauth-authorization-server'})).body);
   assert.equal(metadata.authorization_endpoint, origin+'/?mcp_oauth=1'); assert.equal(metadata.token_endpoint, resource+'/oauth/token');
 });

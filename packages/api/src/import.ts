@@ -8,6 +8,10 @@ import type { VinDecoder } from './vin.js';
 import { dollarCents, invalid, onlyKeys, text, vehicleInput, vin } from './validation.js';
 export const IMPORT_BODY_LIMIT = 1024 * 1024;
 export const MAX_VIN_DECODES_PER_IMPORT = 25;
+// Aggregate wall-clock budget for every decode in one import. A single decode may
+// still take its own 8s cap, so the worst case is budget + 8s — well inside the
+// hosted Lambda's 60s, leaving time for validation, writes, and the response.
+export const VIN_ENRICHMENT_BUDGET_MS = 20_000;
 
 async function preview(csv: string, enrich: boolean, repo: TenantRepository, now: Date, decoder: VinDecoder): Promise<ImportPreview> {
   let parsed: string[][];
@@ -22,26 +26,52 @@ async function preview(csv: string, enrich: boolean, repo: TenantRepository, now
   const assignedOrProvidedStocks = new Set(stocks);
   const seenVins = new Map<string, number>(), seenStocks = new Map<string, number>();
   const rows: ImportRowResult[] = [];
-  const decodes = new Map<string, Awaited<ReturnType<VinDecoder['decode']>> | null>();
-  for (const [index, cells] of data.entries()) {
+  const rawRows = data.map(cells => {
     const raw: Record<string, string> = {year: '', make: '', model: '', vin: '', stockNumber: '', cost: '', listPrice: ''};
     columns.forEach((key, i) => { if (key) raw[key] = cells[i].trim(); });
+    return raw;
+  });
+  const validVins = rawRows.map(raw => { try { return vin(raw.vin); } catch { return undefined; } });
+  const decodes = new Map<string, Awaited<ReturnType<VinDecoder['decode']>> | null>();
+  const skipped = new Map<string, 'limit' | 'deadline'>();
+  if (enrich) {
+    // Decode candidates first, so attempts can be ordered and bounded before any row
+    // is validated: rows missing a required field (year/make/model) decode ahead of
+    // rows missing only the optional trim, each group in file order.
+    const candidates = new Map<string, {priority: number, order: number}>();
+    rawRows.forEach((raw, i) => {
+      const validVin = validVins[i];
+      if (!validVin) return;
+      const missing = ['year', 'make', 'model', 'trim'].filter(k => !raw[k]);
+      if (!missing.length) return;
+      const priority = missing.some(k => k !== 'trim') ? 0 : 1;
+      const current = candidates.get(validVin);
+      // Order within a priority group is the first row where the VIN attains that
+      // priority — a later required-field row must not inherit an earlier trim-only slot.
+      if (!current || priority < current.priority) candidates.set(validVin, {priority, order: i});
+    });
+    const started = Date.now();
+    for (const [validVin] of [...candidates.entries()].sort((a, b) => a[1].priority - b[1].priority || a[1].order - b[1].order)) {
+      if (decodes.size >= MAX_VIN_DECODES_PER_IMPORT) { skipped.set(validVin, 'limit'); continue; }
+      if (Date.now() - started >= VIN_ENRICHMENT_BUDGET_MS) { skipped.set(validVin, 'deadline'); continue; }
+      // Reserve the attempt even on failure so repeated VINs are never retried.
+      decodes.set(validVin, null);
+      try { decodes.set(validVin, await decoder.decode(validVin)); }
+      catch { /* Decoder failure leaves normal row validation in charge. */ }
+    }
+  }
+  for (const [index, raw] of rawRows.entries()) {
     const result: ImportRowResult = {rowNumber: index + 1, status: 'valid', errors: []};
     const check = <T>(field: string, validate: () => T): T | undefined => {
       try { return validate(); } catch (error) { result.errors.push({field, message: error instanceof Error ? error.message : 'Invalid value.'}); }
     };
     const validVin = check('vin', () => vin(raw.vin));
-    if (enrich && validVin && ['year', 'make', 'model', 'trim'].some(k => !raw[k])) {
-      if (!decodes.has(validVin)) {
-        if (decodes.size < MAX_VIN_DECODES_PER_IMPORT) {
-          // Reserve the attempt even on failure so repeated VINs are never retried.
-          decodes.set(validVin, null);
-          try { decodes.set(validVin, await decoder.decode(validVin)); }
-          catch { /* Decoder failure leaves normal row validation in charge. */ }
-        } else result.warnings = ['VIN decode skipped because the per-import decode limit was reached. Fill missing fields manually or split the file.'];
-      }
+    if (enrich && validVin) {
       const decoded = decodes.get(validVin);
-      if (decoded) for (const key of ['year', 'make', 'model', 'trim'] as const) if (!raw[key]) raw[key] = String(decoded[key] ?? '');
+      if (decoded) { for (const key of ['year', 'make', 'model', 'trim'] as const) if (!raw[key]) raw[key] = String(decoded[key] ?? ''); }
+      else if (skipped.has(validVin) && ['year', 'make', 'model', 'trim'].some(k => !raw[k])) result.warnings = [skipped.get(validVin) === 'deadline'
+        ? 'VIN decode skipped because the per-import enrichment time budget was reached. Fill missing fields manually or split the file.'
+        : 'VIN decode skipped because the per-import decode limit was reached. Fill missing fields manually or split the file.'];
     }
     // Missing/blank stock numbers use IMP- plus the uppercased VIN's last 8 characters.
     // Reserve earlier rows too; append -2, -3, ... until unique within this tenant/file.

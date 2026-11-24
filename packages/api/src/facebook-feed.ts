@@ -1,5 +1,5 @@
 import { projectedPhotoUrls } from './vehicle-photos.js';
-import type { FacebookFeedRow, FeedOptions, FeedRun, Vehicle } from '@freedms/shared';
+import type { FacebookFeedRow, FeedOptions, Vehicle } from '@freedms/shared';
 import { feedExclusion, sortedFeedVehicles } from './feed-selection.js';
 import { toCsv } from './reports.js';
 export const facebookColumns = ['vehicle_id', 'vin', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'additional_image_link', 'make', 'model', 'year', 'trim', 'mileage_value', 'mileage_unit', 'dealer_name', 'location'] as const;
@@ -14,4 +14,5 @@ export function buildFacebookRows(vehicles: Vehicle[], config: FeedOptions, tena
   return sortedFeedVehicles(vehicles).filter(v => v.status !== 'sold' && !feedExclusion(v, config)).map(v => facebookRow(v, tenantId, dealer, projectedPhotoUrls(v, photoBase, 'feed')));
 }
 export const facebookCsv = (rows: FacebookFeedRow[]) => toCsv([[...facebookColumns], ...rows.map(row => facebookColumns.map(key => String(row[key])))]);
-export const newestFacebookRun = (runs: FeedRun[]) => runs.filter(run => run.facebookRows !== undefined).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))[0];
+/** Stable fingerprint of the publication settings a Facebook feed was generated under (#171). Any change to these settings invalidates the published pointer until the dealer regenerates. */
+export const feedOptionsFingerprint = (options: FeedOptions) => JSON.stringify({formats: [...options.formats].sort(), includedStatuses: [...options.includedStatuses].sort(), requirePrice: options.requirePrice, schedule: options.schedule, facebookEnabled: options.facebookEnabled});

@@ -1,7 +1,8 @@
 import { TERMS_VERSION, PRIVACY_VERSION } from '@freedms/shared';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { newInvite, scrubLegacyInvites } from '../src/invites.js';
 import type { Invite } from '@freedms/shared';
 import { MemoryRepositories } from '../src/memory.js';
 import { LocalTokens } from '../src/auth.js';
@@ -319,4 +320,47 @@ test('legacy plaintext is hidden by lists and removed by reissue, revoke and acc
     assert.equal('token' in (await repo.crmGet('invite', invite.id))!, false);
     assert.equal((await s.call(`/invite/${invite.token}`)).data.valid, false);
   }
+});
+test('legacy invite backfill drops only the plaintext token, preserves hashes, states and versions, and live links still work (#179)', async () => {
+  const s = await setup(), a = await s.create();
+  const repo = s.repositories.forTenant(a.invites[0].tenantId);
+  const plant = async (invite: Invite & {token: string}) => {
+    await repo.crmWrite([{record: invite, expectedVersion: 0, event: {id: randomUUID(), tenantId: invite.tenantId, actorId: 'legacy-seed', aggregateId: invite.id, aggregateVersion: 1, type: 'invite.created', occurredAt: invite.createdAt, deliveryStatus: 'pending'}}]);
+  };
+  const pending = newInvite(a.invites[0].tenantId, {name: 'Legacy Pending', email: 'legacy-pending@example.test', role: 'staff'}, now);
+  const expired = {...newInvite(a.invites[0].tenantId, {name: 'Legacy Expired', email: 'legacy-expired@example.test', role: 'staff'}, now), expiresAt: '2026-10-20T12:00:00.000Z'};
+  const fresh = newInvite(a.invites[0].tenantId, {name: 'Legacy Revoked', email: 'legacy-revoked@example.test', role: 'admin'}, now);
+  const revoked = {...fresh, status: 'revoked' as const, closedTokenHash: fresh.tokenHash, tokenHash: ''};
+  const done = newInvite(a.invites[0].tenantId, {name: 'Legacy Accepted', email: 'legacy-accepted@example.test', role: 'staff'}, now);
+  const accepted = {...done, status: 'accepted' as const, acceptedAt: now.toISOString(), acceptedUserId: 'legacy-user', acceptedName: 'Legacy Accepted', closedTokenHash: done.tokenHash, tokenHash: ''};
+  for (const invite of [pending, expired, revoked, accepted]) await plant(invite);
+  const before = await repo.crmList('invite'), eventsBefore = await repo.events();
+  assert.equal(before.filter(row => 'token' in row).length, 4);
+  assert.equal(await scrubLegacyInvites(repo), 4);
+  const after = await repo.crmList('invite');
+  assert.deepEqual(after, before.map(row => { const {token: _token, ...rest} = row as Invite & {token?: string}; return rest; }));
+  assert.ok(after.every(row => !('token' in row)));
+  assert.deepEqual(await repo.events(), eventsBefore);
+  assert.equal(await scrubLegacyInvites(repo), 0);
+  assert.deepEqual(await repo.crmList('invite'), after);
+  assert.equal((await s.call(`/invite/${pending.token}`)).data.valid, true);
+  assert.equal((await s.call(`/invite/${pending.token}/accept`, '', 'POST', {name: pending.name, email: pending.email})).data.outcome, 'accepted');
+  assert.deepEqual((await s.call(`/invite/${expired.token}`)).data, {valid: false, reason: 'expired'});
+});
+test('admin invite list repairs legacy records in storage, not just in the response (#179)', async () => {
+  const s = await setup(), a = await s.create();
+  const repo = s.repositories.forTenant(a.invites[0].tenantId);
+  const legacy = newInvite(a.invites[0].tenantId, {name: 'Legacy Listed', email: 'legacy-listed@example.test', role: 'staff'}, now);
+  await repo.crmWrite([{record: legacy, expectedVersion: 0, event: {id: randomUUID(), tenantId: legacy.tenantId, actorId: 'legacy-seed', aggregateId: legacy.id, aggregateVersion: 1, type: 'invite.created', occurredAt: legacy.createdAt, deliveryStatus: 'pending'}}]);
+  assert.equal('token' in (await repo.crmGet('invite', legacy.id))!, true);
+  const listed = (await s.call('/admin/invites', a.token)).data as Invite[];
+  assert.ok(listed.every(row => !('token' in row)));
+  const stored = (await repo.crmGet('invite', legacy.id))!;
+  assert.equal('token' in stored, false);
+  assert.equal(stored.version, legacy.version); assert.equal(stored.tokenHash, legacy.tokenHash); assert.equal(stored.status, 'pending');
+});
+test('legacy invite backfill skips a record whose scrub fails and continues with the rest (#179)', async () => {
+  const rows = [newInvite('A', {name: 'One', email: 'one@example.test', role: 'staff'}, now), newInvite('A', {name: 'Two', email: 'two@example.test', role: 'staff'}, now)];
+  const repo = {crmList: async () => rows, scrubInvite: async (record: Invite) => { if (record.id === rows[0].id) throw new Error('changed mid-scan'); return true; }};
+  assert.equal(await scrubLegacyInvites(repo as never), 1);
 });

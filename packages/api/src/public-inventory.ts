@@ -1,6 +1,6 @@
 import type { DocumentStore } from './document-store.js';
-import { projectedPhotoUrls, serveVehiclePhoto } from './vehicle-photos.js';
-import { facebookCsv, newestFacebookRun } from './facebook-feed.js';
+import { projectedPhotoUrls, publiclyVisibleVehicles, serveVehiclePhoto } from './vehicle-photos.js';
+import { buildFacebookRows, facebookCsv, feedOptionsFingerprint } from './facebook-feed.js';
 import type { Vehicle } from '@freedms/shared';
 import { ApiError, missing } from './errors.js';
 import { response, type ApiRequest, type ApiResponse } from './handler.js';
@@ -9,8 +9,8 @@ import type { RepositoryFactory } from './repository.js';
 export function buildPublicInventory(dealer: string, vehicles: Vehicle[], photoBase = '') {
   return {
     '@context': 'https://schema.org', '@type': 'ItemList', name: `${dealer} — Inventory`,
-    numberOfItems: vehicles.filter(v => v.status === 'available').length,
-    itemListElement: vehicles.filter(v => v.status === 'available')
+    numberOfItems: publiclyVisibleVehicles(vehicles).length,
+    itemListElement: publiclyVisibleVehicles(vehicles)
       .sort((a, b) => a.stockNumber.localeCompare(b.stockNumber) || a.id.localeCompare(b.id))
       .map((v, i) => {
         const image = projectedPhotoUrls(v, photoBase);
@@ -61,22 +61,34 @@ export function createPublicInventoryHandler(documents?: DocumentStore, photoBas
     if (++bucket.count > 120) throw new ApiError(429, 'RATE_LIMITED', 'Too many requests. Try again later.');
     if (photoId) return serveVehiclePhoto(repo, photoId, documents?.forTenant(tenantId));
     if (format === 'facebook.csv') {
-      if (!(await repo.feedConfig())?.facebookEnabled) throw missing();
-      const latest = newestFacebookRun(await repo.feedRuns());
-      if (!latest) throw missing();
+      // Bounded published-feed pointer (#171): one config read, one pointer
+      // read, then rows rebuilt from current inventory so withdrawals and
+      // price/status/photo changes are reconciled at serve time. A settings
+      // change since generation invalidates the pointer until regeneration;
+      // feed history is never scanned on this public path.
+      const config = await repo.feedConfig();
+      if (!config?.facebookEnabled) throw missing();
+      const pointer = await repo.facebookFeedPointer();
+      if (!pointer || pointer.fingerprint !== feedOptionsFingerprint(config)) throw missing();
       const result = response(200, null);
       result.headers['content-type'] = 'text/csv; charset=utf-8';
-      result.body = facebookCsv(latest.facebookRows!);
+      result.body = facebookCsv(buildFacebookRows(await repo.list({}), config, tenantId, tenant.name, photoBase));
       return result;
     }
-    const document = buildPublicInventory(tenant.name, await repo.list({}), photoBase);
+    // The agent index is a static pointer list: serve it without reading any
+    // vehicles (#170). Only the inventory document formats enumerate inventory,
+    // and they ask the repository for available vehicles directly.
+    if (format === 'llms.txt') {
+      const result = response(200, null);
+      result.headers['content-type'] = 'text/plain; charset=utf-8';
+      result.body = `# ${tenant.name}\n\nInventory:\n- /public/${tenantId}/inventory.json\n- /public/${tenantId}/inventory.html\n- /public/${tenantId}/site/\n`;
+      return result;
+    }
+    const document = buildPublicInventory(tenant.name, await repo.list({status: 'available'}), photoBase);
     const result = response(200, document);
     if (format === 'inventory.html') {
       result.headers['content-type'] = 'text/html; charset=utf-8';
       result.body = publicInventoryHtml(tenant.name, document);
-    } else if (format === 'llms.txt') {
-      result.headers['content-type'] = 'text/plain; charset=utf-8';
-      result.body = `# ${tenant.name}\n\nInventory:\n- /public/${tenantId}/inventory.json\n- /public/${tenantId}/inventory.html\n- /public/${tenantId}/site/\n`;
     }
     return result;
   };

@@ -8,6 +8,11 @@ import { invalid, object, onlyKeys, text } from './validation.js';
 
 export const VEHICLE_PHOTO_BODY_LIMIT = VEHICLE_PHOTO_PART_BYTES / 3 * 4 + 1024;
 export const vehiclePhotoBase = (appBaseUrl?: string) => appBaseUrl ? `${appBaseUrl.replace(/\/$/, '')}/api` : '';
+// The one public-visibility rule: only available vehicles are public. The
+// inventory document, the dealer site, and photo reads all use this, so
+// pulling a vehicle from public sale pulls its photos at the same moment.
+export const isPubliclyVisibleVehicle = (vehicle: Pick<Vehicle, 'status'>) => vehicle.status === 'available';
+export const publiclyVisibleVehicles = (vehicles: Vehicle[]) => vehicles.filter(isPubliclyVisibleVehicle);
 export const projectedPhotoUrls = (vehicle: Vehicle, base = '', size: VehiclePhotoSize = 'display') =>
   effectiveVehiclePhotos(vehicle).map(photo => vehiclePhotoUrl(photo, vehicle.tenantId, base, size));
 
@@ -102,12 +107,14 @@ export async function serveVehiclePhoto(repo: TenantRepository, id: string, stor
   if (!match) throw missing();
   const vehicle = await repo.get(match[1]);
   const photo = vehicle?.photos?.find(photo => photo.source === 'upload' && photo.id === originalId);
-  if (!photo || photo.source !== 'upload') throw missing();
+  if (!vehicle || !isPubliclyVisibleVehicle(vehicle) || !photo || photo.source !== 'upload') throw missing();
   const key = id !== originalId ? id : `${id}-display`;
   if (/(?:-hero|-feed)$/.test(key) && !photo.derivedFrom) throw missing();
   const bytes = await store?.get(key);
   if (!bytes) throw missing();
-  return {statusCode: 200, headers: {'content-type': photo.type, 'cache-control': 'public, max-age=300', 'x-content-type-options': 'nosniff'},
+  // No-store: a withdrawal must take effect on the next request, so no cache
+  // may keep serving a pulled listing's photos (previously public, max-age=300).
+  return {statusCode: 200, headers: {'content-type': photo.type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff'},
     body: Buffer.from(bytes).toString('base64'), isBase64Encoded: true};
 }
 export function requireVehiclePhotoStore(documents: DocumentStore | undefined, tenantId: string) {

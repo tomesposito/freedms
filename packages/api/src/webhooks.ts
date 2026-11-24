@@ -5,7 +5,7 @@ import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { webhookEventTypes, type OutboxEvent, type Principal, type PublicWebhookEndpoint, type WebhookDelivery, type WebhookEndpoint, type WebhookEventType } from '@freedms/shared';
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
-import { deliveryId, type RepositoryFactory, type TenantRepository } from './repository.js';
+import { deliveryId, type RepositoryFactory, type TenantRepository, type WebhookDispatchCandidate, type WebhookDrainPage } from './repository.js';
 import { invalid, onlyKeys, version } from './validation.js';
 export type WebhookSender = (url: string, init: {headers: Record<string, string>; body: string}) => Promise<{status: number}>;
 export const fetchWebhookSender: WebhookSender = async (url, init) => {
@@ -119,48 +119,88 @@ export async function dispatchWebhooks(repo: TenantRepository, sender: WebhookSe
   for (const {event, endpointId, previous} of await repo.webhookDispatchCandidates(endpoints, now)) {
     const endpoint = endpoints.find(endpoint => endpoint.id === endpointId)!;
     if (summary.created >= limit) { summary.remaining++; continue; }
-    const date = now.toISOString();
-    const delivery: WebhookDelivery = {id: deliveryId(endpoint.id, event.id), tenantId: endpoint.tenantId, endpointId: endpoint.id, eventId: event.id, eventType: event.type as WebhookEventType, status: 'pending', attempts: 0, lastStatusCode: null, lastError: null, createdAt: date, updatedAt: date};
-    if (!await repo.claimWebhookDelivery(delivery, previous?.updatedAt)) continue;
-    summary.created++;
-    delivery.status = 'failed';
-    const {id, type, tenantId, aggregateId, aggregateVersion, occurredAt, actorId} = event;
-    const body = JSON.stringify({id, type, tenantId, aggregateId, aggregateVersion, occurredAt, actorId});
-    const headers = {'content-type': 'application/json', 'x-freedms-event': type, 'x-freedms-delivery': delivery.id, 'x-freedms-signature': `sha256=${createHmac('sha256', endpoint.secret).update(body).digest('hex')}`};
-    // Retries are immediate, bounded, and terminal for this pair.
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      delivery.attempts = attempt; delivery.lastStatusCode = null; delivery.lastError = null;
-      try {
-        const result = await sender(endpoint.url, {headers, body});
-        delivery.lastStatusCode = result.status;
-        if (result.status >= 200 && result.status < 300) { delivery.status = 'delivered'; break; }
-        delivery.lastError = 'HTTP failure';
-      } catch { delivery.lastError = 'Network or timeout failure'; }
-    }
-    await repo.saveWebhookDelivery(delivery);
-    summary[delivery.status]++;
+    const status = await attemptWebhook(repo, sender, now, endpoint, {event, endpointId, previous});
+    if (status) { summary.created++; summary[status]++; }
   }
   return summary;
 }
+async function attemptWebhook(repo: TenantRepository, sender: WebhookSender, now: Date, endpoint: WebhookEndpoint,
+  {event, previous}: WebhookDispatchCandidate) {
+  const date = now.toISOString();
+  const delivery: WebhookDelivery = {id: deliveryId(endpoint.id, event.id), tenantId: endpoint.tenantId, endpointId: endpoint.id, eventId: event.id, eventType: event.type as WebhookEventType, status: 'pending', attempts: 0, lastStatusCode: null, lastError: null, createdAt: date, updatedAt: date};
+  if (!await repo.claimWebhookDelivery(delivery, previous?.updatedAt)) return undefined;
+  delivery.status = 'failed';
+  const {id, type, tenantId, aggregateId, aggregateVersion, occurredAt, actorId} = event;
+  const body = JSON.stringify({id, type, tenantId, aggregateId, aggregateVersion, occurredAt, actorId});
+  const headers = {'content-type': 'application/json', 'x-freedms-event': type, 'x-freedms-delivery': delivery.id, 'x-freedms-signature': `sha256=${createHmac('sha256', endpoint.secret).update(body).digest('hex')}`};
+  // Retries are immediate, bounded, and terminal for this pair.
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    delivery.attempts = attempt; delivery.lastStatusCode = null; delivery.lastError = null;
+    try {
+      const result = await sender(endpoint.url, {headers, body});
+      delivery.lastStatusCode = result.status;
+      if (result.status >= 200 && result.status < 300) { delivery.status = 'delivered'; break; }
+      delivery.lastError = 'HTTP failure';
+    } catch { delivery.lastError = 'Network or timeout failure'; }
+  }
+  await repo.saveWebhookDelivery(delivery);
+  return delivery.status;
+}
+
+const MAX_DRAIN_DISCOVERY_PAGES = 5;
 /** Shared hosted entry logic; the budget counts successful claims across all tenants. */
 export async function drainWebhooks(repositories: RepositoryFactory, sender: WebhookSender, now: Date, budget = 5) {
   if (!Number.isInteger(budget) || budget < 1) throw new RangeError('Invalid drain budget');
-  if (!repositories.webhookTenantIds) throw new Error('Webhook tenant enumeration unavailable');
+  const {webhookDrainTenants, webhookDrainCursor, saveWebhookDrainCursor} = repositories;
+  if (!webhookDrainTenants || !webhookDrainCursor || !saveWebhookDrainCursor) throw new Error('Webhook drain unavailable');
+  const readCursor = webhookDrainCursor.bind(repositories);
+  const saveCursor = saveWebhookDrainCursor.bind(repositories);
   const summary = {created: 0, delivered: 0, failed: 0};
-  let active = await repositories.webhookTenantIds();
-  // One claim per tenant per round prevents a busy tenant monopolizing the budget.
-  // Fairness is within each invocation, so it survives stateless Lambda cold starts.
-  while (active.length && summary.created < budget) {
-    const before = summary.created;
-    const next: string[] = [];
-    for (const tenantId of active) {
-      const pass = await dispatchWebhooks(repositories.forTenant(tenantId), sender, now, {maxDeliveries: 1});
-      summary.created += pass.created; summary.delivered += pass.delivered; summary.failed += pass.failed;
-      if (pass.remaining) next.push(tenantId);
+  const lastTenant = await readCursor([]);
+  const ordered = await webhookDrainTenants.call(repositories, lastTenant, MAX_DRAIN_DISCOVERY_PAGES);
+  type Work = {tenantId: string; repo: TenantRepository; endpoint: WebhookEndpoint; page: WebhookDrainPage; cursor?: string; attempted: number};
+  const work: Work[] = [];
+  const attempt = async (entry: Work) => {
+    const {repo, endpoint, page} = entry;
+    while (entry.attempted < page.candidates.length) {
+      const status = await attemptWebhook(repo, sender, now, endpoint, page.candidates[entry.attempted]);
+      entry.attempted++;
+      if (status) { summary.created++; summary[status]++; return; }
+    }
+  };
+  let visited: string | undefined;
+  try {
+    // Every newly visited tenant gets one turn before any tenant gets a second.
+    for (const tenantId of ordered) {
+      visited = tenantId;
+      const repo = repositories.forTenant(tenantId);
+      const lastEndpoint = await readCursor([tenantId]);
+      const endpoint = await repo.webhookDrainEndpoint(lastEndpoint);
+      if (!endpoint) continue;
+      const cursor = await readCursor([tenantId, endpoint.id]);
+      const page = await repo.webhookDrainPage(endpoint, now, cursor);
+      const entry = {tenantId, repo, endpoint, page, cursor, attempted: 0};
+      work.push(entry);
+      if (lastEndpoint !== endpoint.id) await saveCursor([tenantId], lastEndpoint, endpoint.id);
+      await attempt(entry);
       if (summary.created >= budget) break;
     }
-    if (summary.created === before) break; // Lost claims must not cause an endless round.
-    active = next;
+    while (summary.created < budget) {
+      const before = summary.created;
+      for (const entry of work) {
+        await attempt(entry);
+        if (summary.created >= budget) break;
+      }
+      if (summary.created === before) break;
+    }
+  } finally {
+    if (visited && visited !== lastTenant) await saveCursor([], lastTenant, visited);
+    for (const {tenantId, endpoint, page, attempted, cursor} of work) {
+      // A partial page resumes after the last attempted pair. A fully evaluated
+      // page uses its raw continuation, including when filters returned no pairs.
+      const next = attempted === page.candidates.length ? page.next ?? '' : page.candidates[attempted - 1]?.event.id;
+      if (next !== undefined && next !== (cursor ?? '')) await saveCursor([tenantId, endpoint.id], cursor, next);
+    }
   }
   return summary;
 }

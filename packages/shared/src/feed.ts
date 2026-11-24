@@ -12,6 +12,8 @@ export interface FeedRun {
   excluded: {vehicleId: string; stockNumber: string; reason: 'sold' | 'status_not_included' | 'missing_price'; message: string}[];
   rows: FeedRow[];
   facebookRows?: FacebookFeedRow[];
+  /** Fingerprint of the FeedOptions the facebookRows were generated with (#171). The adapters copy it into the bounded published-feed pointer at append time. */
+  facebookFingerprint?: string;
 }
 
 export interface FacebookFeedRow {

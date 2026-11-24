@@ -10,8 +10,10 @@ export const vehicleFields = {
   mileage: {type: ['integer', 'null']}, status: {type: 'string', enum: ['available', 'reserved', 'sold', 'in recon']},
   listPrice: money, cost: money, reconCosts: {type: 'array', items: {type: 'object', properties: {description: string, amount: money}, required: ['description', 'amount'], additionalProperties: false}},
   dateStocked: string, location: string, notes: string,
+  photoUrls: {type: 'array', maxItems: 20, items: string, description: 'External photo URLs for this vehicle, at most 20 HTTP(S) URLs. Uploaded photos are managed in the app, not here.'},
+  listingDescription: {type: 'string', description: 'Public listing description shown on the dealer site and feeds.'},
 };
-const requiredVehicleFields = Object.keys(vehicleFields).filter(key => key !== 'mileage');
+const requiredVehicleFields = Object.keys(vehicleFields).filter(key => !['mileage', 'photoUrls', 'listingDescription'].includes(key));
 const nullableString = {type: ['string', 'null']};
 const customerFields = {
   name: string, phone: string, email: string, address: string,
@@ -46,6 +48,8 @@ const applicant = {type: 'object', properties: {
 }, required: ['fullName', 'dateOfBirth', 'address', 'housingStatus', 'monthlyHousingPayment', 'yearsAtAddress', 'yearsEmployed', 'grossMonthlyIncome', 'otherMonthlyIncome'], additionalProperties: false};
 // Certification and decision attestations are human-only; never expose status or decision here.
 const creditFields = {applicant, coApplicant: {...applicant, type: ['object', 'null']}, consentAt: string};
+// A credit application lives on its deal and its id IS the deal id (#195).
+const creditDealId = {type: 'string', description: 'The deal id that owns the application — a credit application\'s id is its deal id. Find applications with list_credit_applications.'};
 const skill = {type: 'string', enum: serviceSkills};
 const dispatchFields = {technicianId: nullableString, requiredSkill: {...skill, type: ['string', 'null'], enum: [...serviceSkills, null]},
   acknowledgeSkillMismatch: {type: 'boolean', description: 'Explicitly acknowledge assigning a technician without the required skill.'}};
@@ -89,7 +93,10 @@ export const tools = [
   tool('search_documents', '/documents', {name: string, type: documentType, buyer: string, ...range}),
   tool('list_past_retention_documents', '/documents/past-retention'),
   tool('get_document_retention', '/documents/retention'),
-  tool('get_document_content', '/deals/:id/documents/:documentId/content', {id: string, documentId: string}, ['id', 'documentId']),
+  tool('get_document_content', '/deals/:id/documents/:documentId/content', {
+    id: {type: 'string', description: 'The deal id that owns the document — the dealId field on a search_documents result.'},
+    documentId: {type: 'string', description: 'The document\'s own id — the id field on a search_documents result.'},
+  }, ['id', 'documentId'], 'GET', 'Fetch one document\'s content. Both ids come from a search_documents result: id is that result\'s dealId, documentId is that result\'s id.'),
   tool('upload_document', '/deals/:id/documents', {id: string, name: string, type: documentType, content: string}, ['id', 'name', 'type', 'content'], 'POST'),
   tool('update_document_retention', '/documents/retention', {version: integer, retentionDays: {type: ['integer', 'null'], minimum: 1, maximum: 36500}}, ['version', 'retentionDays'], 'PUT'),
   tool('dispose_document', '/documents/:id/dispose', {...periodVersion, confirm}, ['id', 'version', 'confirm'], 'POST'),
@@ -159,8 +166,10 @@ export const tools = [
   tool('remove_reconciliation_line', '/accounting/reconciliations/:id/remove', {...periodVersion, lineId: string}, ['id', 'version', 'lineId'], 'POST'),
   tool('match_reconciliation_line', '/accounting/reconciliations/:id/match', {...periodVersion, lineId: string, registerId: nullableString}, ['id', 'version', 'lineId', 'registerId'], 'POST', 'Match a statement line to a cash register entry; pass null to unmatch.'),
   tool('close_reconciliation', '/accounting/reconciliations/:id/close', periodVersion, ['id', 'version'], 'POST'),
-  tool('search_vehicles', '/vehicles', {...page, status: vehicleFields.status, search: string}),
-  tool('get_vehicle', '/vehicles/:id', {id: string}, ['id']),
+  tool('search_vehicles', '/vehicles', {...page, status: vehicleFields.status, search: string}, [], 'GET',
+    'Search vehicles. Every result includes photoUrls (always present; an empty array means the vehicle has no photos) and photoCount. Uploaded-photo URLs serve publicly only while the vehicle is available.'),
+  tool('get_vehicle', '/vehicles/:id', {id: string}, ['id'], 'GET',
+    'Get one vehicle, including photoUrls (always present; an empty array means the vehicle has no photos) and photoCount. Uploaded-photo URLs serve publicly only while the vehicle is available.'),
   tool('list_leads', '/leads', {...page, search: string, stage: string, assignee: string}),
   tool('get_lead', '/leads/:id', {id: string}, ['id']),
   tool('list_customers', '/customers', {search: string}), tool('get_customer', '/customers/:id', {id: string}, ['id']),
@@ -197,7 +206,9 @@ export const tools = [
   tool('quick_entry_confirm', '/leads', leadFields, ['customer', 'source'], 'POST',
     'Create the lead from a reviewed quick-entry draft. This is the step that saves; the draft step alone saves nothing.'),
   tool('list_fi_products', '/fi-products'),
-  tool('get_credit_application', '/deals/:id/credit-application', {id: string}, ['id']),
+  tool('list_credit_applications', '/credit-applications', {}, [], 'GET',
+    'List credit applications in this workspace (summary: applicant name, masked SSN, status, deal). Each entry\'s id is its deal id — pass it to get_credit_application for the full application.'),
+  tool('get_credit_application', '/deals/:id/credit-application', {id: creditDealId}, ['id'], 'GET', 'Get the credit application for one deal. The id is the deal id; discover applications with list_credit_applications.'),
   tool('get_deal_jacket', '/deals/:id/jacket', {id: string}, ['id']),
   // These desking, deal, F&I and credit operations ask for no UI confirmation; no confirm argument is needed.
   tool('create_deal', '/deals', {vehicleId: string, customerId: string, leadId: nullableString, type: dealType}, ['vehicleId', 'customerId', 'type'], 'POST'),
@@ -211,8 +222,8 @@ export const tools = [
   tool('set_working_pencil', '/deals/:id', {id: string, version: integer, pencilId: string}, ['id', 'version', 'pencilId'], 'PUT'),
   tool('create_fi_product', '/fi-products', fiFields, ['name', 'category', 'cost', 'retailPrice', 'termNotes'], 'POST'),
   tool('update_fi_product', '/fi-products/:id', {id: string, version: integer, ...fiFields}, ['id', 'version', ...Object.keys(fiFields)], 'PUT'),
-  tool('create_credit_application', '/deals/:id/credit-application', {id: string, ...creditFields}, ['id', 'applicant', 'consentAt'], 'POST'),
-  tool('update_credit_application', '/deals/:id/credit-application', {id: string, version: integer, ...creditFields}, ['id', 'version', ...Object.keys(creditFields)], 'PUT'),
+  tool('create_credit_application', '/deals/:id/credit-application', {id: creditDealId, ...creditFields}, ['id', 'applicant', 'consentAt'], 'POST'),
+  tool('update_credit_application', '/deals/:id/credit-application', {id: creditDealId, version: integer, ...creditFields}, ['id', 'version', ...Object.keys(creditFields)], 'PUT'),
   // Service/parts confirmations are explicit acknowledgements, never implicit overrides.
   tool('create_appointment', '/service/appointments', {customerId: string, ...appointmentFields}, ['customerId', 'scheduledStart', 'scheduledEnd'], 'POST'),
   tool('update_appointment', '/service/appointments/:id', {id: string, version: integer, ...appointmentFields}, ['id', 'version'], 'PUT'),

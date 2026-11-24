@@ -282,13 +282,20 @@ retention/deletion must also cover logs, backups, and derived stores.
 
 Scheduled webhook discovery uses secret-free per-endpoint rows under
 `OPERATOR#WEBHOOKS`, maintained in the endpoint/outbox transaction. A durable
-migration marker gates a one-time, paginated legacy scan and conditional backfill;
-the Scan permission remains for that compatibility path. Dispatch queries event
-pages with server-side subscription and terminal-pair filters, then uses delivery
-point reads to retain only claimable pairs. Terminal saves atomically mark the
-corresponding event/endpoint pair; legacy terminal pairs acquire that marker on
-first lookup. Exact `remaining` counts require examining all candidate pairs,
-while retained memory and transferred dispatch results exclude terminal history.
+migration marker gates a one-time, paginated legacy scan and conditional backfill.
+The Scan permission remains for that compatibility path. Scheduled invocations
+advance at most one migration page, then discover work for at most five tenants.
+A secret-free cursor rotates tenants across invocations, and each tenant rotates
+enabled endpoints. Each endpoint resumes its event scan from the last attempted
+event or the end of the evaluated page. A scheduled pass evaluates one page of
+up to 25 events per visited tenant, with at most one delivery lookup per event.
+Further rounds reuse those pages and allow one successful claim per tenant per
+round. Dispatch queries event pages with server-side subscription and
+terminal-pair filters, then uses delivery point reads to retain claimable pairs.
+Terminal saves atomically mark the corresponding event and endpoint pair. Legacy
+terminal pairs acquire that marker on first lookup. Exact `remaining` counts for
+manual and inline dispatch require examining all candidate pairs. Retained memory
+and transferred dispatch results exclude terminal history.
 Generic event and delivery history APIs retain their existing contracts.
 
 Tenant identity comes from authenticated membership, never a client-supplied ID
@@ -732,6 +739,45 @@ rolling back to pre-custom application code also requires disabling discovery
 and asking those clients to reconnect through the classic flow. Verification
 covers adversarial protocol cases, revocation and replay, the shared login/MFA UI
 on desktop/mobile, and a real connector connection completed by the owner.
+
+**Shared browser session — November 23, 2026 (#190):** dealers work in
+several tabs at once, so sign-in is shared across the tabs of one browser
+profile. The design was settled before picking a store, as the issue
+required. The ID, access and refresh tokens move from tab-scoped
+`sessionStorage` to origin-shared `localStorage` under the same keys
+(`freedms-token`, `freedms-refresh-token`, `freedms-access-token`); legacy
+tab-scoped copies are migrated on first read and removed. Stated plainly,
+the tradeoff: any script running on the origin can read a shared store for
+as long as the session lasts, where tab-scoped storage limited exposure to
+one tab's lifetime. That wider exposure is inherent to the requested
+feature; the mitigations are the ones already in force (no injected HTML,
+escaped rendering, short-lived ID tokens with refresh) plus the lifecycle
+below. Persistence past a browser restart comes with `localStorage` and is
+accepted, though it was not required. Transient OAuth state
+(`freedms-pkce`, `freedms-state`, `freedms-return`) stays in
+`sessionStorage`, isolated to the tab and flow that started it. A shared
+epoch (`freedms-session-epoch`) is bumped on every sign-out: a tab whose
+refresh completes after the epoch moved discards the result instead of
+reviving the session. Refresh is serialized across tabs with the Web Locks
+API (`freedms-session-refresh`) when available; the tab that wins the lock
+refreshes, and a waiting tab re-reads the shared store inside the lock and
+adopts a session another tab already refreshed instead of calling Cognito
+again. Without Web Locks, the per-tab in-flight dedupe remains and the
+Cognito refresh used here does not rotate the refresh token, so a rare
+double refresh writes equivalent tokens. Tabs learn about each other
+through `storage` events (plus a `BroadcastChannel` sign-out signal):
+token removal returns every open tab to login, and a token whose subject
+differs from the one a tab rendered drops that tab's session and
+re-bootstraps, so no tab keeps showing another user's or dealership's
+data. Expiry is handled by the same proactive refresh in every tab, so
+tabs reauthenticate together. The branded login and MFA screens are
+unchanged. The custom MCP OAuth flow reuses a valid shared web session
+for its authorization call when one exists, still shows the explicit
+consent page, and never replaces the web session; without a valid session
+it signs in as before. Verification: unit coverage for the shared store,
+PKCE isolation, the cross-tab refresh lock and the sign-out epoch, plus a
+real two-page browser tour (new tab opens signed in, sign-out propagates,
+a fresh tab does not restore the signed-out session).
 
 ### D-11 — Billing rail for paid AI
 

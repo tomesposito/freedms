@@ -30,7 +30,10 @@ test('all five public pages are live, tenant scoped, read only, escaped and agen
     for (const secret of ['B-SECRET', 'Private notes', 'Private location', '1111000']) assert.ok(!r.body.includes(secret), secret);
     assert.match(r.body, /\/public\/A\/llms.txt/); assert.match(r.body, /application\/ld\+json/);
     const block = r.body.match(/<script type="application\/ld\+json">(.*?)<\/script>/)![1];
-    assert.ok(!block.includes('<')); assert.equal(JSON.parse(block).numberOfItems, 1);
+    assert.ok(!block.includes('<'));
+    // #170: JSON-LD carries only the vehicles the page renders — about and
+    // contact render none; the other pages render the one available vehicle.
+    assert.equal(JSON.parse(block).numberOfItems, page === '/about' || page === '/contact' ? 0 : 1);
     assert.match(r.body, /name="viewport"/);
   }
   assert.deepEqual(await repositories.forTenant('A').events(), before);

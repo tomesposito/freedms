@@ -63,6 +63,13 @@ test('Facebook mapping, public snapshot, sold exclusion, status, isolation and r
   assert.equal((await call('/feeds/config')).data.facebook.lastGeneratedAt, run.createdAt);
   await call('/feeds/config', 'PUT', options); assert.equal((await publicGet()).body, served.body);
   assert.equal((await call(`/vehicles/${v.id}`, 'PUT', {...input, status: 'sold', version: 1})).status, 200);
+  // #171: the withdrawal is reconciled at serve time, without regenerating.
+  const reconciled = await publicGet();
+  assert.equal(reconciled.statusCode, 200); assert.ok(!reconciled.body.includes(input.vin)); assert.ok(reconciled.body.includes('1HGCM82633A004353'));
+  // A price change is reconciled at serve time too.
+  const s1 = (await repositories.forTenant('A').list({})).find(x => x.stockNumber === 'S1')!;
+  assert.equal((await call(`/vehicles/${s1.id}`, 'PUT', {...input, stockNumber: 'S1', vin: '1HGCM82633A004353', trim: '', listPrice: 999900, version: s1.version})).status, 200);
+  assert.ok((await publicGet()).body.includes('9999.00 USD'));
   advance(); const sold = (await call('/feeds/generate', 'POST')).data;
   assert.equal(sold.facebookRows.length, 1); assert.ok(!(await publicGet()).body.includes(input.vin));
   await call('/feeds/config', 'PUT', options, 'B'); advance(); await call('/feeds/generate', 'POST', {}, 'B');
@@ -71,8 +78,41 @@ test('Facebook mapping, public snapshot, sold exclusion, status, isolation and r
   // Deletion is reflected in the next snapshot too.
   const remaining = (await repo.list({})).find(v => v.stockNumber === 'S1')!;
   await repo.delete(remaining.id, remaining.version, {id: 'remove', tenantId: 'A', actorId: 'user', aggregateId: remaining.id, aggregateVersion: remaining.version + 1, type: 'vehicle.deleted', occurredAt: start.toISOString(), deliveryStatus: 'pending'});
+  // The deletion is reconciled at serve time too, before any regeneration.
+  assert.equal((await publicGet()).body, facebookCsv([]));
   advance(); await call('/feeds/generate', 'POST');
   assert.equal((await publicGet()).body, facebookCsv([]));
+});
+test('changing publication settings invalidates the published feed until regeneration (#171)', async () => {
+  const {call, add, handler} = await setup();
+  const publicGet = (tenant = 'A') => handler({path: `/public/${tenant}/facebook.csv`, method: 'GET'});
+  const options = {...defaultFeedOptions, facebookEnabled: true};
+  await call('/feeds/config', 'PUT', options);
+  // Enabled but never generated: nothing is published yet.
+  assert.equal((await publicGet()).statusCode, 404);
+  await add();
+  await call('/feeds/generate', 'POST');
+  assert.equal((await publicGet()).statusCode, 200);
+  // A settings change moves the publication on: the old pointer no longer serves.
+  await call('/feeds/config', 'PUT', {...options, requirePrice: false});
+  assert.equal((await publicGet()).statusCode, 404);
+  assert.equal((await call('/feeds/config')).data.facebook.vehicleCount, null);
+  assert.ok((await call('/feeds/config')).data.facebook.lastGeneratedAt);
+  // Regenerating under the new settings republishes.
+  await call('/feeds/generate', 'POST');
+  const republished = await publicGet();
+  assert.equal(republished.statusCode, 200); assert.ok(republished.body.includes(input.vin));
+  assert.equal((await call('/feeds/config')).data.facebook.vehicleCount, 1);
+});
+test('public facebook.csv serves without ever calling feedRuns (#171)', async () => {
+  const {call, add, repositories} = await setup();
+  await call('/feeds/config', 'PUT', {...defaultFeedOptions, facebookEnabled: true});
+  await add();
+  await call('/feeds/generate', 'POST');
+  const guarded = {forTenant: (tenantId: string) => { const repo = repositories.forTenant(tenantId); return new Proxy(repo, {get: (target, prop) => prop === 'feedRuns' ? async () => { throw new Error('feedRuns must not be called on the public path'); } : Reflect.get(target, prop)}); }};
+  const handler2 = createHandler(guarded as never, {decode: async () => { throw new Error('No network'); }}, () => start);
+  const served = await handler2({path: '/public/A/facebook.csv', method: 'GET'});
+  assert.equal(served.statusCode, 200); assert.ok(served.body.includes(input.vin));
 });
 test('empty Facebook feed is header-only and combined snapshots respect the size cap', async () => {
   const {call, add, repositories} = await setup();

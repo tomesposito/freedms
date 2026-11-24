@@ -7,7 +7,7 @@ import { DynamoRepositories } from '../src/dynamo.js';
 import { createHandler } from '../src/handler.js';
 import { LocalTokens } from '../src/auth.js';
 import { bodyLimit } from '../src/quick-entry.js';
-import { IMPORT_BODY_LIMIT, MAX_VIN_DECODES_PER_IMPORT } from '../src/import.js';
+import { IMPORT_BODY_LIMIT, MAX_VIN_DECODES_PER_IMPORT, VIN_ENRICHMENT_BUDGET_MS } from '../src/import.js';
 const now = new Date('2026-10-22T12:00:00Z');
 const headers = ['year', 'make', 'model', 'vin', 'stock #', 'cost', 'price', 'mileage', 'notes', 'trim', 'status', 'date stocked', 'location'];
 const base = ['2003', 'Honda', 'Accord', '1HGCM82633A004352', 'S1', '$12,999.00', '15000', '88,000', 'Dealer note', '', '', '', ''];
@@ -136,6 +136,58 @@ test('VIN enrichment caps distinct attempts and carries skipped-row warnings thr
   assert.equal(result.importedCount, MAX_VIN_DECODES_PER_IMPORT + 1);
   assert.deepEqual(result.skipped.find(r => r.rowNumber === required.rowNumber)?.warnings, required.warnings);
   assert.equal(Object.hasOwn(result.skipped.find(r => r.rowNumber === cached.rowNumber)!, 'warnings'), false);
+});
+test('VIN enrichment decodes rows missing required fields before trim-only rows when the cap binds', async () => {
+  const {call, calls} = await setup();
+  const trimOnly = [0, 1].map(i => row({3: `1HGCM82633A${String(100 + i).padStart(6, '0')}`, 4: `T${i}`, 9: ''}));
+  const required = Array.from({length: MAX_VIN_DECODES_PER_IMPORT}, (_, i) => row({0: '', 1: '', 2: '', 3: `1HGCM82633A${String(i).padStart(6, '0')}`, 4: `S${i}`, 9: ''}));
+  const p: ImportPreview = (await call({csv: csv([...trimOnly, ...required]), enrich: true})).data;
+  assert.equal(calls(), MAX_VIN_DECODES_PER_IMPORT);
+  for (const r of p.rows.slice(2)) { assert.equal(r.status, 'valid'); assert.equal(r.vehicle?.make, 'Decoded'); }
+  for (const r of p.rows.slice(0, 2)) {
+    assert.equal(r.status, 'valid'); assert.equal(r.vehicle?.make, 'Honda'); assert.equal(r.vehicle?.trim, '');
+    assert.match(r.warnings?.[0] ?? '', /per-import decode limit/);
+  }
+});
+test('VIN enrichment orders a repeated VIN by the first row that needs it for a required field', async () => {
+  const {call, calls} = await setup();
+  const vinA = '1HGCM82633A000100', vinB = '1HGCM82633A000101';
+  const trimOnlyA = row({3: vinA, 4: 'TA', 9: ''});
+  const requiredB = row({0: '', 1: '', 2: '', 3: vinB, 4: 'SB', 9: ''});
+  const fillers = Array.from({length: MAX_VIN_DECODES_PER_IMPORT - 1}, (_, i) => row({0: '', 1: '', 2: '', 3: `1HGCM82633A${String(200 + i).padStart(6, '0')}`, 4: `F${i}`, 9: ''}));
+  const requiredA = row({0: '', 1: '', 2: '', 3: vinA, 4: 'SA', 9: ''});
+  const p: ImportPreview = (await call({csv: csv([trimOnlyA, requiredB, ...fillers, requiredA]), enrich: true})).data;
+  assert.equal(calls(), MAX_VIN_DECODES_PER_IMPORT);
+  // B and every filler decode; A is last in the required group, so the cap leaves it out.
+  assert.equal(p.rows[1].vehicle?.make, 'Decoded');
+  for (const r of p.rows.slice(2, -1)) assert.equal(r.vehicle?.make, 'Decoded');
+  const last = p.rows.at(-1)!;
+  assert.equal(last.status, 'error');
+  assert.match(last.warnings?.[0] ?? '', /per-import decode limit/);
+  assert.equal(p.rows[0].status, 'valid'); assert.equal(p.rows[0].vehicle?.trim, '');
+  assert.match(p.rows[0].warnings?.[0] ?? '', /per-import decode limit/);
+});
+test('VIN enrichment stops at the aggregate time budget and warns the remaining rows', async () => {
+  const repositories = new MemoryRepositories();
+  const tokens = new LocalTokens('test-secret-must-be-at-least-32-characters', () => now.getTime());
+  await repositories.forTenant('A').provision({id: 'A', name: 'A', createdAt: now.toISOString()}, {id: 'user', name: 'Test'}, {tenantId: 'A', userId: 'user', role: 'staff', active: true}, {id: 'provision', tenantId: 'A', actorId: 'user', aggregateId: 'A', aggregateVersion: 1, type: 'tenant.created', occurredAt: now.toISOString(), deliveryStatus: 'pending'});
+  let fakeNow = 0, calls = 0;
+  const handler = createHandler(repositories, {decode: async vin => { calls++; fakeNow += 9_000; return {vin, year: 2004, make: 'Decoded', model: 'Model', trim: 'Trim', warnings: []}; }}, () => now);
+  const rows = Array.from({length: 5}, (_, i) => row({0: '', 1: '', 2: '', 3: `1HGCM82633A${String(i).padStart(6, '0')}`, 4: `S${i}`}));
+  const realNow = Date.now; Date.now = () => fakeNow;
+  let p: ImportPreview;
+  try {
+    const response = await handler({method: 'POST', path: '/vehicles/import/preview', claims: tokens.verify(tokens.issue('user', 'A')), body: JSON.stringify({csv: csv(rows), enrich: true})});
+    p = JSON.parse(response.body).data;
+  } finally { Date.now = realNow; }
+  // 9s per decode against a 20s budget: decodes start at 0s, 9s and 18s, then the budget is spent.
+  assert.ok(VIN_ENRICHMENT_BUDGET_MS < 60_000);
+  assert.equal(calls, 3);
+  for (const r of p.rows.slice(0, 3)) { assert.equal(r.status, 'valid'); assert.equal(Object.hasOwn(r, 'warnings'), false); }
+  for (const r of p.rows.slice(3)) {
+    assert.equal(r.status, 'error');
+    assert.match(r.warnings?.[0] ?? '', /enrichment time budget/);
+  }
 });
 test('VIN enrichment memoizes failures and counts them against the per-preview budget', async () => {
   const {call, calls} = await setup(true);
