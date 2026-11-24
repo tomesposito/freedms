@@ -74,7 +74,12 @@ export function createMcpHandler(repositories: RepositoryFactory, execute: (requ
       if (!['tools/list', 'tools/call'].includes(message.method)) return fail(id, -32601, 'Method not found.');
       const available = claims ? tools.filter(t => t.method === 'GET' || access.scope.split(' ').includes('freedms/mcp.write')) : [];
       if (message.method === 'tools/list') return rpc(id, {tools: available.map(({path: _path, method, ...t}) => ({...t, annotations: {readOnlyHint: method === 'GET', destructiveHint: method !== 'GET', openWorldHint: t.name === 'import_vehicles'}}))});
-      const params = object(message.params); onlyKeys(params, ['name', 'arguments']);
+      const params = object(message.params); onlyKeys(params, ['name', 'arguments', '_meta']);
+      // The MCP base protocol reserves _meta for client request metadata
+      // (progress tokens, extension data). Accept it only as a plain object
+      // and drop it: it is never forwarded into tool arguments, stored, or
+      // read for tenant, scope, or identity — those come from the token.
+      if (params._meta !== undefined) object(params._meta);
       const tool = available.find(t => t.name === params.name);
       if (!tool) return fail(id, -32602, 'Tool unavailable.');
       return rpc(id, await executeTool(tool, params.arguments, claims!, execute));
