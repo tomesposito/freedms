@@ -74,7 +74,9 @@ export function createMcpHandler(repositories: RepositoryFactory, execute: (requ
       if (!['tools/list', 'tools/call'].includes(message.method)) return fail(id, -32601, 'Method not found.');
       const available = claims ? tools.filter(t => t.method === 'GET' || access.scope.split(' ').includes('freedms/mcp.write')) : [];
       if (message.method === 'tools/list') return rpc(id, {tools: available.map(({path: _path, method, ...t}) => ({...t, annotations: {readOnlyHint: method === 'GET', destructiveHint: method !== 'GET', openWorldHint: t.name === 'import_vehicles'}}))});
-      const params = object(message.params); onlyKeys(params, ['name', 'arguments']);
+      const params = object(message.params); onlyKeys(params, ['name', 'arguments', '_meta']);
+      // MCP request metadata is client context, never tool arguments or authority.
+      if (params._meta !== undefined) object(params._meta);
       const tool = available.find(t => t.name === params.name);
       if (!tool) return fail(id, -32602, 'Tool unavailable.');
       return rpc(id, await executeTool(tool, params.arguments, claims!, execute));

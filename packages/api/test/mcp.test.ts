@@ -57,6 +57,36 @@ test('MCP initialize, ping, scoped tool discovery, metadata and adapter dispatch
   assert.equal(JSON.parse(result.body).result.tools.length, 131);
   assert.deepEqual(localAuth('/mcp', false, 'access-token', {verify: () => {throw Error('Must not verify as ID token');}}), {authorization: 'Bearer access-token'});
 });
+test('MCP tool calls accept request metadata without forwarding it or changing authorization', async () => {
+  const s = await setup();
+  const expected = await s.call('get_inventory_aging');
+  assert.equal(expected.isError, false);
+  for (const _meta of [{}, {progressToken: 'report-1'}, {'com.example/context': {locale: 'en-US'}, tenantId: 'B', scope: 'freedms/mcp.write'}]) {
+    const result = await s.request('tools/call', {name: 'get_inventory_aging', arguments: {}, _meta});
+    assert.deepEqual(result.result, expected);
+  }
+  const _meta = {tenantId: 'B', sub: 'admin-B', scope: 'freedms/mcp.write'};
+  const denied = await s.request('tools/call', {name: 'create_vehicle', arguments: {}, _meta}, token({scope: 'freedms/mcp.read'}));
+  assert.equal(denied.error.message, 'Tool unavailable.');
+  const unknown = await s.request('tools/call', {name: 'get_inventory_aging', _meta}, token({sub: 'unknown'}));
+  assert.equal(unknown.error.message, 'Tool unavailable.');
+});
+test('MCP metadata does not loosen envelope or tool argument validation', async () => {
+  const s = await setup();
+  for (const _meta of [null, [], 'metadata', 1, true]) {
+    const result = (await s.request('tools/call', {name: 'get_inventory_aging', arguments: {}, _meta})).result;
+    assert.equal(result.isError, true);
+    assert.equal(JSON.parse(result.content[0].text).error.code, 'VALIDATION');
+  }
+  for (const params of [
+    {name: 'get_inventory_aging', arguments: {}, _meta: {}, extra: 'no'},
+    {name: 'get_inventory_aging', arguments: {_meta: {tenantId: 'B'}}, _meta: {}},
+  ]) {
+    const result = (await s.request('tools/call', params)).result;
+    assert.equal(result.isError, true);
+    assert.equal(JSON.parse(result.content[0].text).error.code, 'VALIDATION');
+  }
+});
 test('MCP rejects invalid access tokens with a resource challenge and caches offline JWKS', async () => {
   const s = await setup();
   for (const jwt of ['', 'broken', token({client_id: 'web-client'}), token({scope: 'openid'}), token({exp: 1}), token({iss: 'wrong'}), token({token_use: 'id'}), token({}, {alg: 'HS256', kid: 'offline'}), token({}, {alg: 'RS256', kid: 'unknown'}), token().slice(0, -10) + 'invalid']) {
