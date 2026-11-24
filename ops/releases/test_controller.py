@@ -9,6 +9,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+from email.message import Message
 from unittest.mock import patch
 import zipfile
 import controller as c
@@ -25,7 +26,7 @@ def package(directory):
     with zipfile.ZipFile(code, 'w') as archive:
         archive.writestr('lambda.cjs', 'exports.handler = async () => 1;')
     files = {'index.html': b'<html>test</html>', 'assets/main-12345678.js': b'console.log(1)', 'assets/logo-12345678.svg': b'<svg/>', 'marketing/index.html': b'<html>marketing</html>', 'marketing/assets/hero-12345678.png': b'image'}
-    files.update({path: b'marketing content' for path in c.MARKETING_DOCUMENTS})
+    files.update({path: b'marketing content' for path in c.FRONTEND_DOCUMENTS})
     files['marketing/assets/og-image-12345678.jpg'] = b'marketing content'
     web = io.BytesIO()
     with tarfile.open(fileobj=web, mode='w:gz') as archive:
@@ -61,6 +62,30 @@ class PackageTests(unittest.TestCase):
                    for path in ['index.html', 'marketing/index.html', 'logo.svg']]
         with self.assertRaisesRegex(RuntimeError, 'Unsafe frontend path'):
             c.frontend_files(b'', entries)
+
+    def test_icon_allowlist_does_not_allow_other_root_images_or_nested_icons(self):
+        for path in ['favicon.gif', 'logo.png', 'marketing/logo.svg', 'nested/favicon.ico', 'marketing/favicon.ico/extra']:
+            with self.subTest(path=path), self.assertRaisesRegex(RuntimeError, 'Unsafe frontend path'):
+                c.frontend_files(b'', [{'path': name, 'size': 1, 'sha256': c.digest(b'x')} for name in ['index.html', path]])
+
+    def test_icon_smoke_checks_bytes_and_content_types_on_both_hosts(self):
+        files = {path: b'icon bytes' for path in c.ROOT_ICONS}
+        def response(url, timeout):
+            if '/api/' in url:
+                raise c.urllib.error.HTTPError(url, 401 if url.endswith('/session') else 404, '', {}, None)
+            prefix = 'marketing/' if url.startswith(CONFIG['marketingUrl'] + '/') else ''
+            path = prefix + url.rsplit('/', 1)[1]
+            result = io.BytesIO(files[path]); result.status = 200; result.geturl = lambda: url
+            result.headers = Message(); result.headers['Content-Type'] = c.ROOT_ICONS[path]
+            return result
+        with patch('controller.urllib.request.urlopen', side_effect=response):
+            c.smoke(CONFIG, files)
+        def wrong_type(url, timeout):
+            result = response(url, timeout)
+            result.headers.replace_header('Content-Type', 'text/html')
+            return result
+        with patch('controller.urllib.request.urlopen', side_effect=wrong_type), self.assertRaisesRegex(RuntimeError, 'icon content type mismatch'):
+            c.smoke(CONFIG, files)
 
     def test_unlisted_marketing_files_and_app_copies_are_rejected(self):
         for path in ['robots.txt', 'sitemap.xml', 'llms.txt', 'dms-cost.html', 'free-dealer-management-software.html', 'bhph.html', 'compare.html', 'paperwork.html', 'recon.html', 'states.html', 'switching.html', 'marketing/unknown.html', 'marketing/assets/image.gif']:
@@ -135,12 +160,12 @@ class FakeAws:
         self.fail_assets = False
         self.updates = []
         self.current = {'source': 'old', 'codeSha256': base64.b64encode(hashlib.sha256(self.code).digest()).decode(), 'indexSha256': c.digest(b'old index'), 'marketingIndexSha256': c.digest(b'old marketing')}
-        self.current['marketingDocumentsSha256'] = {path: c.digest(b'old ' + path.encode()) for path in c.MARKETING_DOCUMENTS}
+        self.current['marketingDocumentsSha256'] = {path: c.digest(b'old ' + path.encode()) for path in c.FRONTEND_DOCUMENTS}
         self.put('config.json', c.encode(CONFIG))
         self.etag = self.put('state/current.json', c.encode(self.current))
         self.put('index.html', b'old index', bucket='frontend')
         self.put('marketing/index.html', b'old marketing', bucket='frontend')
-        for path in c.MARKETING_DOCUMENTS:
+        for path in c.FRONTEND_DOCUMENTS:
             self.put(path, b'old ' + path.encode(), bucket='frontend')
 
     def get(self, key, bucket=None):
@@ -198,18 +223,18 @@ class PromotionTests(unittest.TestCase):
         self.assertIn((None, 'history/test-run/api.zip'), aws.rows)
         self.assertIn((None, 'history/test-run/marketing.html'), aws.rows)
         self.assertEqual(record['marketingIndexSha256'], c.digest(aws.get('marketing/index.html', 'frontend')[0]))
-        for path in c.MARKETING_DOCUMENTS:
+        for path in c.FRONTEND_DOCUMENTS:
             self.assertEqual(record['marketingDocumentsSha256'][path], c.digest(aws.get(path, 'frontend')[0]))
             self.assertEqual(aws.get('history/test-run/frontend/' + path)[0], b'old ' + path.encode())
         self.assertNotEqual(aws.get('state/current.json')[1], aws.etag)
 
     def test_marketing_documents_are_mutable_and_assets_have_correct_content_types(self):
         aws = FakeAws()
-        etags = {path: aws.get(path, 'frontend')[1] for path in c.MARKETING_DOCUMENTS}
+        etags = {path: aws.get(path, 'frontend')[1] for path in c.FRONTEND_DOCUMENTS}
         with patch.object(aws, 'put', wraps=aws.put) as put, patch.object(aws, 'asset', wraps=aws.asset) as asset:
             self.run_release(aws)
         self.assertEqual(aws.get('marketing/robots.txt', 'frontend')[0], b'marketing content')
-        for path, content_type in c.MARKETING_DOCUMENTS.items():
+        for path, content_type in c.FRONTEND_DOCUMENTS.items():
             put.assert_any_call(path, b'marketing content', bucket='frontend', etag=etags[path], content_type=content_type)
             self.assertFalse(any(call.args[0] == path for call in asset.call_args_list))
         asset.assert_any_call('marketing/assets/og-image-12345678.jpg', b'marketing content', 'frontend', 'image/jpeg')
@@ -228,7 +253,7 @@ class PromotionTests(unittest.TestCase):
         self.assertEqual(aws.code, b'old code')
         self.assertEqual(aws.get('index.html', 'frontend')[0], b'old index')
         self.assertEqual(aws.get('marketing/index.html', 'frontend')[0], b'old marketing')
-        for path in c.MARKETING_DOCUMENTS:
+        for path in c.FRONTEND_DOCUMENTS:
             self.assertEqual(aws.get(path, 'frontend')[0], b'old ' + path.encode())
         self.assertNotIn((None, 'state/lock.json'), aws.rows)
         self.assertNotEqual(aws.get('state/current.json')[1], aws.etag)
@@ -285,7 +310,7 @@ class PromotionTests(unittest.TestCase):
     def test_marketing_document_drift_blocks_before_application_writes(self):
         aws = FakeAws()
         aws.put('marketing/robots.txt', b'external edit', bucket='frontend')
-        with self.assertRaisesRegex(RuntimeError, 'marketing document differs'):
+        with self.assertRaisesRegex(RuntimeError, 'frontend document differs'):
             self.run_release(aws)
         self.assertEqual(aws.updates, [])
         self.assertEqual(aws.get('marketing/robots.txt', 'frontend')[0], b'external edit')
@@ -293,7 +318,7 @@ class PromotionTests(unittest.TestCase):
 
     def test_new_document_paths_require_an_operator_baseline(self):
         aws = FakeAws()
-        del aws.current['marketingDocumentsSha256']['marketing/robots.txt']
+        del aws.current['marketingDocumentsSha256']['favicon.ico']
         aws.etag = aws.put('state/current.json', c.encode(aws.current))
         with self.assertRaisesRegex(RuntimeError, 'operator baseline migration'):
             self.run_release(aws)
@@ -311,7 +336,7 @@ class PromotionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'Document write failed'):
                 self.run_release(aws)
         self.assertEqual(aws.code, b'old code')
-        for path in c.MARKETING_DOCUMENTS:
+        for path in c.FRONTEND_DOCUMENTS:
             self.assertEqual(aws.get(path, 'frontend')[0], b'old ' + path.encode())
         self.assertEqual(aws.get('index.html', 'frontend')[0], b'old index')
         self.assertNotIn((None, 'state/lock.json'), aws.rows)
@@ -325,7 +350,7 @@ class PromotionTests(unittest.TestCase):
                 original(key, b'external document edit', bucket='frontend')
             return original(key, data, **kwargs)
         with patch.object(aws, 'put', side_effect=put):
-            with self.assertRaisesRegex(RuntimeError, 'Unrecognized marketing document change'):
+            with self.assertRaisesRegex(RuntimeError, 'Unrecognized frontend document change'):
                 self.run_release(aws)
         self.assertEqual(aws.get('marketing/robots.txt', 'frontend')[0], b'external document edit')
         self.assertEqual(len(aws.updates), 1)

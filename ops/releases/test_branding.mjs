@@ -4,10 +4,12 @@ import {cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync,
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {build} from 'vite';
+import {rootIcons} from './marketing.mjs';
 
 test('production branding uses allowed versioned assets and resolvable references', () => {
   const root = 'packages/web/dist';
-  assert.deepEqual(readdirSync(root).sort(), ['assets', 'index.html']);
+  assert.deepEqual(readdirSync(root).sort(), ['assets', 'index.html', ...rootIcons].sort());
+  for (const name of rootIcons) assert.deepEqual(readFileSync(`${root}/${name}`), readFileSync(`packages/web/public/${name}`));
   const assets = readdirSync(`${root}/assets`);
   const html = readFileSync(`${root}/index.html`, 'utf8');
   const javascript = assets.filter(name => name.endsWith('.js')).map(name => readFileSync(`${root}/assets/${name}`, 'utf8')).join('\n');

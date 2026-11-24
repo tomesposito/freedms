@@ -94,6 +94,12 @@ Resources:
                   - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/recon.html'
                   - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/states.html'
                   - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/switching.html'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/favicon.ico'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/favicon.svg'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/apple-touch-icon.png'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/favicon.ico'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/favicon.svg'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${FrontendBucket}/marketing/apple-touch-icon.png'
 Outputs:
   OperationsBucket: {Value: !Ref Operations}
   DeployRoleArn: {Value: !GetAtt DeployRole.Arn}

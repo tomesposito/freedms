@@ -19,6 +19,11 @@ MARKETING_DOCUMENTS = {f'marketing/{name}': content_type for name, content_type 
     ('robots.txt', 'text/plain'), ('sitemap.xml', 'application/xml'), ('llms.txt', 'text/plain'),
     ('dms-cost.html', 'text/html'), ('free-dealer-management-software.html', 'text/html')]}
 MARKETING_DOCUMENTS.update({f'marketing/{name}.html': 'text/html' for name in ['bhph', 'compare', 'paperwork', 'recon', 'states', 'switching']})
+ROOT_ICONS = {prefix + name: content_type for prefix in ['', 'marketing/'] for name, content_type in [
+    ('favicon.ico', 'image/x-icon'), ('favicon.svg', 'image/svg+xml'), ('apple-touch-icon.png', 'image/png')]}
+FRONTEND_DOCUMENTS = {**MARKETING_DOCUMENTS, **ROOT_ICONS}
+# The legacy marketingDocumentsSha256 state key also covers mutable root icons.
+# Retaining the key keeps existing baselines readable during the operator migration.
 
 
 def require(condition, message):
@@ -99,7 +104,7 @@ def frontend_files(archive, entries):
     expected = {}
     for entry in entries:
         path = entry['path']
-        require(re.fullmatch(r'(marketing/)?index\.html', path) or path in MARKETING_DOCUMENTS or re.fullmatch(r'(marketing/)?assets/[A-Za-z0-9_-]+\.(js|css|woff2|png|svg|jpg)', path), 'Unsafe frontend path')
+        require(re.fullmatch(r'(marketing/)?index\.html', path) or path in FRONTEND_DOCUMENTS or re.fullmatch(r'(marketing/)?assets/[A-Za-z0-9_-]+\.(js|css|woff2|png|svg|jpg)', path), 'Unsafe frontend path')
         require(path not in expected and 0 < entry['size'] <= 20_000_000, 'Invalid frontend entry')
         expected[path] = entry
     require(sum(entry['size'] for entry in entries) <= 50_000_000, 'Frontend exceeds release limit')
@@ -175,11 +180,11 @@ def inspect(aws, config, current):
 
 def inspect_marketing_documents(aws, config, current):
     hashes = current.get('marketingDocumentsSha256', {})
-    require(isinstance(hashes, dict) and set(hashes) <= set(MARKETING_DOCUMENTS), 'Invalid marketing document baseline')
+    require(isinstance(hashes, dict) and set(hashes) <= set(FRONTEND_DOCUMENTS), 'Invalid frontend document baseline')
     documents = {}
     for path, expected in hashes.items():
         data, etag = aws.get(path, config['frontendBucket'])
-        require(digest(data) == expected, 'Live marketing document differs from recorded release')
+        require(digest(data) == expected, 'Live frontend document differs from recorded release')
         documents[path] = (data, etag)
     return documents
 
@@ -195,6 +200,8 @@ def smoke(config, files):
         public_path = path.removeprefix('marketing/')
         for suffix in [public_path, ''] if public_path == 'index.html' else [public_path]:
             with urllib.request.urlopen(site + '/' + suffix, timeout=20) as response:
+                if path in ROOT_ICONS:
+                    require(response.headers.get_content_type() == ROOT_ICONS[path], 'Live icon content type mismatch')
                 require(response.status == 200 and response.geturl() == site + '/' + suffix and digest(response.read()) == digest(expected), 'Live frontend mismatch')
     for path, status in [('/api/session', 401), ('/api/share/invalid-release-smoke', 404)]:
         try:
@@ -232,8 +239,8 @@ def promote(aws, config, current, current_etag, config_digest, source, manifest_
         previous_marketing, marketing_etag = aws.get('marketing/index.html', config['frontendBucket'])
         require(digest(previous_marketing) == current['marketingIndexSha256'], 'Marketing site changed before snapshot')
         previous_documents = inspect_marketing_documents(aws, config, current)
-        documents = {path: data for path, data in files.items() if path in MARKETING_DOCUMENTS}
-        require(set(documents) == set(previous_documents), 'Marketing documents require an operator baseline migration')
+        documents = {path: data for path, data in files.items() if path in FRONTEND_DOCUMENTS}
+        require(set(documents) == set(previous_documents), 'Frontend documents require an operator baseline migration')
         with urllib.request.urlopen(info['Code']['Location'], timeout=30) as response:
             previous_code = response.read(50_000_001)
         require(base64.b64encode(hashlib.sha256(previous_code).digest()).decode() == current['codeSha256'], 'Rollback code mismatch')
@@ -242,18 +249,18 @@ def promote(aws, config, current, current_etag, config_digest, source, manifest_
         aws.put(prefix + '/index.html', previous_index, content_type='text/html', create=True)
         aws.put(prefix + '/marketing.html', previous_marketing, content_type='text/html', create=True)
         for path, (data, _) in previous_documents.items():
-            aws.put(prefix + '/frontend/' + path, data, content_type=MARKETING_DOCUMENTS[path], create=True)
+            aws.put(prefix + '/frontend/' + path, data, content_type=FRONTEND_DOCUMENTS[path], create=True)
         snapshot = {'previous': current, 'target': source, 'manifest': manifest_digest, 'operation': operation, 'prefix': prefix}
         aws.put(prefix + '/snapshot.json', encode(snapshot), create=True)
         for path, data in files.items():
-            if path not in ['index.html', 'marketing/index.html'] and path not in MARKETING_DOCUMENTS:
+            if path not in ['index.html', 'marketing/index.html'] and path not in FRONTEND_DOCUMENTS:
                 content_type = {'js': 'application/javascript', 'css': 'text/css', 'svg': 'image/svg+xml', 'png': 'image/png', 'jpg': 'image/jpeg', 'woff2': 'font/woff2', 'html': 'text/html', 'txt': 'text/plain', 'xml': 'application/xml'}[path.rsplit('.', 1)[1]]
                 aws.asset(path, data, config['frontendBucket'], content_type)
         # Changes are compatible application bytes only. Existing assets remain available.
         started = True
         code_sha = replace_code(aws, config, code, info['Configuration']['RevisionId'])
         for path, data in documents.items():
-            aws.put(path, data, bucket=config['frontendBucket'], etag=previous_documents[path][1], content_type=MARKETING_DOCUMENTS[path])
+            aws.put(path, data, bucket=config['frontendBucket'], etag=previous_documents[path][1], content_type=FRONTEND_DOCUMENTS[path])
         aws.put('index.html', files['index.html'], bucket=config['frontendBucket'], etag=index_etag, content_type='text/html')
         aws.put('marketing/index.html', files['marketing/index.html'], bucket=config['frontendBucket'], etag=marketing_etag, content_type='text/html')
         document_hashes = {path: digest(data) for path, data in documents.items()}
@@ -280,10 +287,10 @@ def promote(aws, config, current, current_etag, config_digest, source, manifest_
             document_etags = {}
             for path, (previous, _) in previous_documents.items():
                 live_document, document_etags[path] = aws.get(path, config['frontendBucket'])
-                require(digest(live_document) in [digest(previous), digest(documents[path])], 'Unrecognized marketing document change; operator recovery required')
+                require(digest(live_document) in [digest(previous), digest(documents[path])], 'Unrecognized frontend document change; operator recovery required')
             replace_code(aws, config, previous_code, live['Configuration']['RevisionId'])
             for path, (previous, _) in previous_documents.items():
-                aws.put(path, previous, bucket=config['frontendBucket'], etag=document_etags[path], content_type=MARKETING_DOCUMENTS[path])
+                aws.put(path, previous, bucket=config['frontendBucket'], etag=document_etags[path], content_type=FRONTEND_DOCUMENTS[path])
             aws.put('index.html', previous_index, bucket=config['frontendBucket'], etag=rollback_index_etag, content_type='text/html')
             aws.put('marketing/index.html', previous_marketing, bucket=config['frontendBucket'], etag=rollback_marketing_etag, content_type='text/html')
             inspect(aws, config, current)
