@@ -57,35 +57,38 @@ test('MCP initialize, ping, scoped tool discovery, metadata and adapter dispatch
   assert.equal(JSON.parse(result.body).result.tools.length, 131);
   assert.deepEqual(localAuth('/mcp', false, 'access-token', {verify: () => {throw Error('Must not verify as ID token');}}), {authorization: 'Bearer access-token'});
 });
-test('MCP tool calls accept request metadata without forwarding it or changing authorization', async () => {
+test('MCP tools/call accepts standard _meta request metadata and ignores it (#200)', async () => {
   const s = await setup();
-  const expected = await s.call('get_inventory_aging');
-  assert.equal(expected.isError, false);
-  for (const _meta of [{}, {progressToken: 'report-1'}, {'com.example/context': {locale: 'en-US'}, tenantId: 'B', scope: 'freedms/mcp.write'}]) {
-    const result = await s.request('tools/call', {name: 'get_inventory_aging', arguments: {}, _meta});
-    assert.deepEqual(result.result, expected);
+  const callMeta = async (name: string, args: unknown, meta: unknown, jwt = token()) =>
+    (await s.request('tools/call', {name, arguments: args, _meta: meta}, jwt));
+  // The two report calls a connected client was blocked on live, with a
+  // standard progress-token metadata object attached.
+  const aging = await callMeta('get_inventory_aging', {}, {progressToken: 'abc'});
+  assert.equal(aging.result.isError, false);
+  const sales = await callMeta('get_sales_report', {from: '2026-10-01', to: '2026-10-30'}, {progressToken: 7, 'io.modelcontextprotocol/client': {name: 'codex'}});
+  assert.equal(sales.result.isError, false);
+  // Extension metadata with namespaced keys and nested objects, and empty metadata.
+  assert.equal((await callMeta('get_inventory_aging', {}, {'com.example/feature': {x: 1, nested: {y: [1, 2]}}})).result.isError, false);
+  assert.equal((await callMeta('get_inventory_aging', {}, {})).result.isError, false);
+  // Metadata has no effect on the result: identical structured content with and without it.
+  const plain = await s.call('search_vehicles', {});
+  const withMeta = await callMeta('search_vehicles', {}, {tenant_id: 'B', tenantId: 'B', scope: 'freedms/mcp.write'});
+  assert.equal(withMeta.result.isError, false);
+  assert.deepEqual(withMeta.result.structuredContent, plain.structuredContent);
+  // A metadata scope claim does not unlock write tools for a read-scoped token.
+  assert.equal((await callMeta('create_vehicle', {}, {scope: 'freedms/mcp.write'}, token({scope: 'freedms/mcp.read'}))).error.message, 'Tool unavailable.');
+  // Malformed metadata is rejected and no tool runs.
+  for (const bad of ['meta', 42, [], null, true]) {
+    const rejected = await callMeta('get_inventory_aging', {}, bad);
+    assert.equal(rejected.result.isError, true, JSON.stringify(bad));
+    assert.match(rejected.result.content[0].text, /JSON object/);
   }
-  const _meta = {tenantId: 'B', sub: 'admin-B', scope: 'freedms/mcp.write'};
-  const denied = await s.request('tools/call', {name: 'create_vehicle', arguments: {}, _meta}, token({scope: 'freedms/mcp.read'}));
-  assert.equal(denied.error.message, 'Tool unavailable.');
-  const unknown = await s.request('tools/call', {name: 'get_inventory_aging', _meta}, token({sub: 'unknown'}));
-  assert.equal(unknown.error.message, 'Tool unavailable.');
-});
-test('MCP metadata does not loosen envelope or tool argument validation', async () => {
-  const s = await setup();
-  for (const _meta of [null, [], 'metadata', 1, true]) {
-    const result = (await s.request('tools/call', {name: 'get_inventory_aging', arguments: {}, _meta})).result;
-    assert.equal(result.isError, true);
-    assert.equal(JSON.parse(result.content[0].text).error.code, 'VALIDATION');
-  }
-  for (const params of [
-    {name: 'get_inventory_aging', arguments: {}, _meta: {}, extra: 'no'},
-    {name: 'get_inventory_aging', arguments: {_meta: {tenantId: 'B'}}, _meta: {}},
-  ]) {
-    const result = (await s.request('tools/call', params)).result;
-    assert.equal(result.isError, true);
-    assert.equal(JSON.parse(result.content[0].text).error.code, 'VALIDATION');
-  }
+  // Unknown envelope fields still reject, naming the field and the allowed set.
+  const unknown = await s.request('tools/call', {name: 'get_inventory_aging', arguments: {}, _meta: {progressToken: 'x'}, bogus: 1});
+  assert.equal(unknown.result.isError, true);
+  assert.match(unknown.result.content[0].text, /Unexpected field in request: bogus\. Allowed fields: name, arguments, _meta\./);
+  // _meta inside arguments is still just an unknown argument: strict as before.
+  assert.equal((await s.call('search_vehicles', {_meta: {progressToken: 'x'}})).isError, true);
 });
 test('MCP rejects invalid access tokens with a resource challenge and caches offline JWKS', async () => {
   const s = await setup();
