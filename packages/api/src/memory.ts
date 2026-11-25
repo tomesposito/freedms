@@ -1,3 +1,5 @@
+import type { MigrationImport } from '@freedms/shared';
+import { assertMigrationCommit, migrationHistoryEntry } from './repository.js';
 import { WEBHOOK_DRAIN_PAGE_SIZE, webhookCandidates, type WebhookDrainScope } from './repository.js';
 import { assertAssistantBalance } from './assistant-settlement.js';
 import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry, AssistantWaitlistEntry } from '@freedms/shared';
@@ -15,7 +17,7 @@ import type { Customer, CrmEntity, Invite, Membership, OutboxEvent, Tenant, User
 import { assertBillingLink, type AssistantBillingLink, assertAssistantCommit, assertAssistantPlan, assertAssistantWaitlist, assertAssistantWaitlistRemoved, assertAssistantCycle, assertAssistantLedger, assertMcpGrant, assertIdea, assertMfa, assertWebhookEndpoint, assertFeedConfig, assertVehicleWrites, assertCrmWrites, assertEvent, assertScope, matches, commandSearchSelection, vehiclePage, leadPage, countLeads, serviceBoardKinds, serviceBoardSelection, salesReportSelection, forecastSelection, accountingBalanceSelection, type ForecastRows, type LeadPage, type RepositoryFactory, type TenantRepository } from './repository.js';
 import { conflict, requireId, requireCycleStart } from './errors.js';
 const forecastKinds = new Set<CrmEntity['kind']>(['deal', 'service-appointment', 'part', 'parts-sale', 'repair-order']);
-interface State { billingLink?: AssistantBillingLink; stripeReceipts: Set<string>; assistantPlan?: AssistantPlan; assistantWaitlist?: AssistantWaitlistEntry; assistantCycles: Map<string, AssistantCycle>; assistantLedger: Map<string, AssistantLedgerEntry>; mcpGrants: Map<string, McpGrant>; mcpRegistrations: Map<string, McpRegistration>; mcpAttempts: Map<string, {bucket: number; count: number}>; ideas: Map<string, Idea>; accessRequests: Map<string, AccessRequest>; leadPageEpoch: number; leadPageCache: Map<string, LeadPage>; accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedPointer?: {runId: string; createdAt: string; fingerprint: string}; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent>; eventIds: string[]; eventOffsets: Map<string, number> }
+interface State { billingLink?: AssistantBillingLink; stripeReceipts: Set<string>; assistantPlan?: AssistantPlan; assistantWaitlist?: AssistantWaitlistEntry; assistantCycles: Map<string, AssistantCycle>; assistantLedger: Map<string, AssistantLedgerEntry>; mcpGrants: Map<string, McpGrant>; mcpRegistrations: Map<string, McpRegistration>; mcpAttempts: Map<string, {bucket: number; count: number}>; ideas: Map<string, Idea>; accessRequests: Map<string, AccessRequest>; leadPageEpoch: number; leadPageCache: Map<string, LeadPage>; accountingEpoch: number; accountingCache: Map<string, AccountBalance[]>; forecastEpoch: number; forecastCache: Map<string, ForecastRows>; serviceBoardEpoch: number; mfa: Map<string, MfaRecord>; webhookEndpoints: Map<string, WebhookEndpoint>; webhookDeliveries: Map<string, WebhookDelivery>; feedConfig?: FeedConfig; feedPointer?: {runId: string; createdAt: string; fingerprint: string}; feedRuns: Map<string, FeedRun>; imports: Map<string, InventoryImport>; migrations: Map<string, MigrationImport>; migrationVersion: number; analytics: Map<string, AnalyticsRecord>; usage: Map<string, QuickEntryUsage>; crm: Map<string, CrmEntity>; crmByKind: Map<CrmEntity['kind'], Map<string, CrmEntity>>; partNumbers: Map<string, string>; tenant?: Tenant; users: Map<string, User>; memberships: Map<string, Membership>; vehicles: Map<string, Vehicle>; events: Map<string, OutboxEvent>; eventIds: string[]; eventOffsets: Map<string, number> }
 export class MemoryRepositories implements RepositoryFactory {
   private states = new Map<string, State>();
   private webhookDrainCursors = new Map<string, string>();
@@ -50,7 +52,7 @@ export class MemoryRepositories implements RepositoryFactory {
   forTenant(tenantId: string): TenantRepository {
     requireId(tenantId);
     let state = this.states.get(tenantId);
-    if (!state) { state = {stripeReceipts: new Set(), assistantCycles: new Map(), assistantLedger: new Map(), mcpGrants: new Map(), mcpRegistrations: new Map(), mcpAttempts: new Map(), ideas: new Map(), accessRequests: new Map(), leadPageEpoch: 0, leadPageCache: new Map(), accountingEpoch: 0, accountingCache: new Map(), forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), analytics: new Map(), usage: new Map(), crm: new Map(), crmByKind: new Map(), partNumbers: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map(), eventIds: [], eventOffsets: new Map()}; this.states.set(tenantId, state); }
+    if (!state) { state = {stripeReceipts: new Set(), assistantCycles: new Map(), assistantLedger: new Map(), mcpGrants: new Map(), mcpRegistrations: new Map(), mcpAttempts: new Map(), ideas: new Map(), accessRequests: new Map(), leadPageEpoch: 0, leadPageCache: new Map(), accountingEpoch: 0, accountingCache: new Map(), forecastEpoch: 0, forecastCache: new Map(), serviceBoardEpoch: 0, mfa: new Map(), webhookEndpoints: new Map(), webhookDeliveries: new Map(), feedRuns: new Map(), imports: new Map(), migrations: new Map(), migrationVersion: 0, analytics: new Map(), usage: new Map(), crm: new Map(), crmByKind: new Map(), partNumbers: new Map(), users: new Map(), memberships: new Map(), vehicles: new Map(), events: new Map(), eventIds: [], eventOffsets: new Map()}; this.states.set(tenantId, state); }
     const s = state;
     const storeEvent = (event: OutboxEvent) => {
       if (!s.events.has(event.id)) {
@@ -245,6 +247,29 @@ export class MemoryRepositories implements RepositoryFactory {
       feedRuns: async () => structuredClone([...s.feedRuns.values()]),
       feedRun: async id => structuredClone(s.feedRuns.get(requireId(id))),
       appendImport: async (record, event) => { assertScope(tenantId, record); requireId(record.id); check(event); assertEvent(record.id, 1, event, 'vehicle.imported'); if (s.imports.has(record.id)) throw conflict(); s.imports.set(record.id, structuredClone(record)); storeEvent(event); },
+      migrationHistory: async () => structuredClone([...s.migrations.values()].map(migrationHistoryEntry)),
+      migrationReport: async id => structuredClone(s.migrations.get(requireId(id))),
+      migrationVersion: async () => s.migrationVersion,
+      commitMigration: async commit => {
+        const {report, event, writes, expectedVersion} = commit;
+        assertMigrationCommit(tenantId, commit);
+        check(event);
+        if (s.migrationVersion !== expectedVersion || s.migrations.has(report.id)) throw conflict();
+        for (const {record, event} of writes) {
+          check(event);
+          if ('kind' in record ? s.crm.has(`${record.kind}#${record.id}`) : s.vehicles.has(record.id)) throw conflict();
+        }
+        for (const {record, event} of writes) {
+          if ('kind' in record) storeCrm(record);
+          else s.vehicles.set(record.id, structuredClone(record));
+          storeEvent(event);
+        }
+        if (writes.some(({record}) => 'kind' in record && (record.kind === 'customer' || record.kind === 'lead'))) s.leadPageEpoch++;
+        if (writes.some(({record}) => !('kind' in record) || forecastKinds.has(record.kind))) s.forecastEpoch++;
+        s.migrations.set(report.id, structuredClone(report));
+        storeEvent(event);
+        s.migrationVersion++;
+      },
       imports: async () => structuredClone([...s.imports.values()]),
       events: async () => structuredClone([...s.events.values()]),
       appendAnalytics: async record => { assertScope(tenantId, record); requireId(record.id); if (s.analytics.has(record.id)) throw conflict(); s.analytics.set(record.id, structuredClone(record)); },

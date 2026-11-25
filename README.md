@@ -443,6 +443,21 @@ or blank values become `IMP-` plus the uppercase VIN’s last 8 characters, with
 
 ![Import preview](docs/screenshots/import-preview.png)
 
+**Switch from another DMS** — from Inventory → Import CSV, a workspace
+administrator can migrate inventory, customers, leads, and open deals. Upload
+an export, check the suggested mapping and cleanup, then approve the import.
+Supply the old system’s record count and, for inventory and deals, the expected
+dollar total for each file. Larger exports can be split into files of up to 47
+data rows so each approval commits atomically.
+
+Import history includes a parallel-run report with expected and imported totals,
+field changes, and skipped rows. View reports by file or download all four
+entity types together as JSON.
+
+![Empty migration workspace](docs/screenshots/migration-empty.png)
+
+![Parallel-run report with reconciliation and inventory cleanup details](docs/screenshots/migration-report.png)
+
 **Listing feeds** — outbound feed generation with a run log; excluded vehicles
 always carry a reason.
 

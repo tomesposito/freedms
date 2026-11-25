@@ -1,3 +1,5 @@
+import { requireId } from './errors.js';
+import { migrationBatchLimit, type MigrationImport, type MigrationHistory } from '@freedms/shared';
 import { createHash } from 'node:crypto';
 import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry, AssistantWaitlistEntry } from '@freedms/shared';
 import type { McpRegistration } from './mcp/registration.js';
@@ -82,6 +84,10 @@ export interface TenantRepository {
   feedRun(id: string): Promise<FeedRun | undefined>;
   appendImport(record: InventoryImport, event: OutboxEvent): Promise<void>;
   imports(): Promise<InventoryImport[]>;
+  migrationHistory(): Promise<MigrationHistory[]>;
+  migrationReport(id: string): Promise<MigrationImport | undefined>;
+  migrationVersion(): Promise<number>;
+  commitMigration(commit: MigrationCommit): Promise<void>;
   events(): Promise<OutboxEvent[]>;
   appendAnalytics(record: AnalyticsRecord): Promise<void>;
   analytics(): Promise<AnalyticsRecord[]>;
@@ -149,6 +155,36 @@ export function assertCrmWrites(tenantId: string, writes: CrmWrite[]): void {
     const key = `${record.kind}#${record.id}`;
     if (keys.has(key) || events.has(event.id)) throw new Error('Duplicate CRM transaction item');
     keys.add(key); events.add(event.id);
+  }
+}
+
+export type MigrationRecord = Vehicle | Extract<CrmEntity, {kind: 'customer' | 'lead' | 'deal'}>;
+export interface MigrationCommit {
+  report: MigrationImport;
+  event: OutboxEvent;
+  writes: {record: MigrationRecord; event: OutboxEvent}[];
+  expectedVersion: number;
+}
+
+export function migrationHistoryEntry({rows, columns: _columns, ...report}: MigrationImport): MigrationHistory {
+  return {...report, totalRows: rows.length};
+}
+
+export function assertMigrationCommit(tenantId: string, {report, event, writes}: MigrationCommit): void {
+  assertScope(tenantId, report, event);
+  requireId(report.id);
+  assertEvent(report.id, 1, event, 'migration.imported');
+  const eventIds = new Set([event.id]);
+  const recordIds = new Set<string>();
+  if (writes.length > migrationBatchLimit || writes.length !== report.actual.count) throw new Error('Invalid migration batch');
+  for (const {record, event} of writes) {
+    assertScope(tenantId, record, event);
+    requireId(record.id);
+    const kind = 'kind' in record ? record.kind : 'vehicle';
+    assertEvent(record.id, 1, event, `${kind}.created`);
+    if (record.version !== 1 || recordIds.has(record.id) || eventIds.has(event.id)) throw new Error('Invalid migration write');
+    recordIds.add(record.id);
+    eventIds.add(event.id);
   }
 }
 
