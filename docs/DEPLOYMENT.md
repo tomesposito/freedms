@@ -164,6 +164,32 @@ together to enable CAPTCHA protection.
 
 ## Local verification
 
+### API failure diagnostics
+
+The HTTP API writes JSON access logs to `/aws/apigateway/<stack-name>/access`
+with seven-day retention. Logs contain request IDs, timestamps, HTTP methods,
+route templates, response statuses, and latency. They exclude actual request
+paths, query strings, headers, IP addresses, identity claims, bodies, and error
+messages. A route such as `/share/{token}` records the template, never the token.
+
+Use the API request ID to correlate a failing response with its access log.
+`lambdaStatus` is the Lambda service invocation status; `applicationStatus` is
+the status returned by application code. This distinguishes a rejected Lambda
+invocation from a handled application error or a gateway authorization rejection.
+See [AWS HTTP API logging variables](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-logging-variables.html).
+Metrics alone cannot identify the source of historical failures before logging
+was enabled. The two-invocation Lambda reservation remains unchanged; logging
+does not increase serving capacity. CloudWatch Logs usage counts toward the
+account's shared allowance.
+
+For an existing stack, add the log group and stage access-log settings under the
+operator migration lock. Preserve the processed live template, Lambda artifact,
+and stack parameters, review the change set, then verify log delivery and
+retention before updating the private infrastructure baseline. Do not include
+request contents when adding diagnostic fields.
+
+### Build and test
+
 Use Node 24 (`.nvmrc`), then:
 
 ```sh
