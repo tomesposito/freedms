@@ -253,6 +253,7 @@ footer a:hover{color:#fff}
 .access-request{margin-top:36px;max-width:760px}
 .access-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-bottom:20px}
 .access-fields label{display:block;font-weight:600}
+.access-fields label[hidden]{display:none}
 .access-fields input,.access-fields select,.access-fields textarea{display:block;width:100%;margin-top:6px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font:inherit;color:var(--ink);background:var(--paper)}
 .access-fields textarea{resize:vertical}
 .access-wide{grid-column:1/-1}
@@ -516,6 +517,16 @@ footer a:hover{color:#fff}
             <option value="201+">201+ vehicles</option>
           </select></label>
           <label>Current DMS (optional)<input name="currentDms" maxlength="120"></label>
+          <label>How did you hear about freeDMS? (optional)<select name="hearAbout">
+            <option value="">Select…</option>
+            <option value="referred">Referred by another dealer</option>
+            <option value="ai-assistant">An AI assistant (ChatGPT, Gemini, or similar)</option>
+            <option value="search">Search (Google, Bing, …)</option>
+            <option value="community">Community or trade press</option>
+            <option value="invited">Invited directly</option>
+            <option value="other">Other</option>
+          </select></label>
+          <label id="hear-about-prompt" hidden>What did you ask it? (optional)<input name="hearAboutPrompt" maxlength="500" placeholder="e.g. best free DMS for a small used car lot"><small>The exact words help us show up when other dealers ask the same thing.</small></label>
           <label class="access-wide">Message (optional)<textarea name="message" maxlength="2000" rows="4"></textarea></label>
         </div>
         <div class="access-honeypot" aria-hidden="true"><label>Website<input name="website" type="text" tabindex="-1" autocomplete="off"></label></div>
@@ -629,6 +640,9 @@ document.querySelector('#tourThumbs button').setAttribute('aria-pressed','true')
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 <script>
 const accessForm = document.getElementById('access-form');
+accessForm.querySelector('[name="hearAbout"]').addEventListener('change', (event) => {
+  document.getElementById('hear-about-prompt').hidden = event.target.value !== 'ai-assistant';
+});
 accessForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const button = accessForm.querySelector('button[type="submit"]');
@@ -637,7 +651,7 @@ accessForm.addEventListener('submit', async (event) => {
   error.hidden = true;
   const fields = new FormData(accessForm);
   const body = {};
-  for (const key of ['contactName', 'dealershipName', 'email', 'phone', 'inventorySize', 'currentDms', 'message', 'website']) body[key] = fields.get(key);
+  for (const key of ['contactName', 'dealershipName', 'email', 'phone', 'inventorySize', 'currentDms', 'message', 'hearAbout', 'hearAboutPrompt', 'website']) body[key] = fields.get(key);
   if (accessForm.querySelector('.cf-turnstile')) body.turnstileToken = fields.get('cf-turnstile-response') || '';
   const controller = new AbortController();
   let timer;

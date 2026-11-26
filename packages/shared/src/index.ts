@@ -26,7 +26,7 @@ export * from './jacket.js';
 import type { Deal, WorkspaceSettings } from './desking.js';
 export * from './desking.js';
 export type Role = 'admin' | 'staff';
-export interface Tenant { id: string; name: string; createdAt: string; inviteAcceptedAt?: string; address?: string; phone?: string; dealerType?: 'independent' | 'franchise' | 'other' }
+export interface Tenant { id: string; name: string; createdAt: string; inviteAcceptedAt?: string; address?: string; phone?: string; dealerType?: 'independent' | 'franchise' | 'other'; hearAbout?: string; hearAboutPrompt?: string }
 export interface User { id: string; name: string; email?: string }
 export interface Membership { tenantId: string; userId: string; role: Role; active: boolean; version?: number }
 export interface SessionUser { id: string; name: string; email: string | null }
@@ -118,10 +118,22 @@ export * from './ownership.js';
 export * from './reports-p3.js';
 
 export const inventorySizes = ['1-25', '26-50', '51-100', '101-200', '201+'] as const;
+/** Optional signup attribution (#208): stable values stored on records, labels shown in forms and review screens. */
+export const hearAboutOptions = [
+  {value: 'referred', label: 'Referred by another dealer'},
+  {value: 'ai-assistant', label: 'An AI assistant (ChatGPT, Gemini, or similar)'},
+  {value: 'search', label: 'Search (Google, Bing, …)'},
+  {value: 'community', label: 'Community or trade press'},
+  {value: 'invited', label: 'Invited directly'},
+  {value: 'other', label: 'Other'}
+] as const;
+export type HearAboutValue = typeof hearAboutOptions[number]['value'];
+export const hearAboutLabel = (value: string): string => hearAboutOptions.find(option => option.value === value)?.label ?? value;
 export interface AccessRequest {
   id: string; tenantId: string; email: string;
   contactName: string; dealershipName: string;
   phone: string; inventorySize: string; currentDms: string; message: string;
+  hearAbout: string; hearAboutPrompt: string;
   status: 'pending' | 'handled'; handledAt: string | null;
   version: number; createdAt: string; updatedAt: string;
 }

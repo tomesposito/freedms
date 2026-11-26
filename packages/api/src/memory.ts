@@ -73,8 +73,8 @@ export class MemoryRepositories implements RepositoryFactory {
     // Synchronous validation followed by synchronous map writes: no interleaved await or partial commits.
     return {
       webhookDispatchScope: {owner: this, tenantId},
-      acceptInvite: async (invite, user, now) => {
-        const write = acceptanceWrite(tenantId, s.crm.get(`invite#${invite.id}`) as import('@freedms/shared').Invite | undefined, invite, user, [...s.memberships.values()].map(membership => ({membership, user: s.users.get(membership.userId)!})), now, s.tenant);
+      acceptInvite: async (invite, user, now, attribution) => {
+        const write = acceptanceWrite(tenantId, s.crm.get(`invite#${invite.id}`) as import('@freedms/shared').Invite | undefined, invite, user, [...s.memberships.values()].map(membership => ({membership, user: s.users.get(membership.userId)!})), now, s.tenant, attribution);
         if (!write) return 'already-member';
         const {record, member, event, memberEvent, tenant} = write;
         check(event); check(memberEvent);

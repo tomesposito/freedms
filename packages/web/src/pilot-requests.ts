@@ -1,4 +1,4 @@
-import { assistantTiers, type AccessRequest, type AssistantWaitlistEntry } from '@freedms/shared';
+import { assistantTiers, hearAboutLabel, type AccessRequest, type AssistantWaitlistEntry } from '@freedms/shared';
 import type { UI } from './desking';
 import { escapeHtml as e } from './format';
 import { showLoadError } from './load-error';
@@ -10,7 +10,7 @@ export function pilotRequestsHtml(requests: AccessRequest[], status: AccessReque
     <nav class="filters" aria-label="Request status"><a class="button${status === 'pending' ? ' primary' : ''}" href="#/pilot-requests" ${status === 'pending' ? 'aria-current="page"' : ''}>Pending</a><a class="button${status === 'handled' ? ' primary' : ''}" href="#/pilot-requests/handled" ${status === 'handled' ? 'aria-current="page"' : ''}>Handled</a></nav>
     <p class="muted">${requests.length} ${status} request${requests.length === 1 ? '' : 's'}</p>
     ${requests.length ? requests.map(r => `<section class="card pilot-request"><h2>${e(r.dealershipName)}</h2><p><strong>${e(r.contactName)}</strong> · <a href="mailto:${e(encodeURIComponent(r.email))}">${e(r.email)}</a></p>
-      <dl class="detail-grid"><div><dt>Phone</dt><dd>${e(r.phone || 'Not provided')}</dd></div><div><dt>Inventory</dt><dd>${e(r.inventorySize || 'Not provided')}</dd></div><div><dt>Current DMS</dt><dd>${e(r.currentDms || 'Not provided')}</dd></div><div><dt>Submitted</dt><dd>${date(r.createdAt)}</dd></div></dl>
+      <dl class="detail-grid"><div><dt>Phone</dt><dd>${e(r.phone || 'Not provided')}</dd></div><div><dt>Inventory</dt><dd>${e(r.inventorySize || 'Not provided')}</dd></div><div><dt>Current DMS</dt><dd>${e(r.currentDms || 'Not provided')}</dd></div><div><dt>Submitted</dt><dd>${date(r.createdAt)}</dd></div><div><dt>Heard about freeDMS</dt><dd>${e(r.hearAbout ? hearAboutLabel(r.hearAbout) : 'Not provided')}</dd></div>${r.hearAboutPrompt ? `<div><dt>Asked the assistant</dt><dd>${e(r.hearAboutPrompt)}</dd></div>` : ''}</dl>
       <h3>Message</h3><p class="pilot-request-message">${e(r.message || 'No message provided.')}</p>
       <p class="muted">Last updated: ${date(r.updatedAt)}${r.handledAt ? ` · Handled: ${date(r.handledAt)}` : ''}</p>
       ${r.status === 'pending' ? `<div class="form-actions"><button type="button" class="primary" data-handle-request="${e(r.id)}">Mark handled</button></div>` : '<span class="badge">Handled</span>'}</section>`).join('') : `<div class="empty"><h2>No ${status} requests</h2><p>${status === 'pending' ? 'New pilot requests will appear here.' : 'Requests you finish reviewing will appear here.'}</p></div>`}

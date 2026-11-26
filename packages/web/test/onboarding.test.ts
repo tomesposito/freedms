@@ -4,7 +4,7 @@ import { onboardingError, type Onboarding } from '../src/onboarding.js';
 import { inviteLinksHtml, inviteLandingHtml, inviteLink, welcomeHtml, welcomeDismissed, dismissWelcome, invitedEmailMatches } from '../src/invites.js';
 import { usersHtml } from '../src/users.js';
 import type { Invite } from '@freedms/shared';
-const data: Onboarding = {name: 'Owner', email: 'owner@example.test', dealership: 'Motors', address: 'Main St', phone: '555', dealerType: 'other', invites: []};
+const data: Onboarding = {name: 'Owner', email: 'owner@example.test', dealership: 'Motors', address: 'Main St', phone: '555', dealerType: 'other', invites: [], hearAbout: '', hearAboutPrompt: ''};
 test('wizard validates each step, permits skipping invites, and rejects duplicate/self invites', () => {
   for (const step of [0, 1, 2]) assert.equal(onboardingError(data, step), '');
   assert.ok(onboardingError({...data, name: ''}, 0)); assert.ok(onboardingError({...data, email: 'bad'}, 0));
@@ -15,6 +15,8 @@ test('wizard validates each step, permits skipping invites, and rejects duplicat
 test('invite pages escape content and explain pending acceptance and unavailable links', () => {
   const html = inviteLandingHtml({valid: true, dealership: '<Motors>', inviter: 'Owner', name: 'Team', email: 'team@example.test', role: 'staff'});
   assert.match(html, /&lt;Motors&gt;/); assert.match(html, /Set up your profile/);
+  assert.match(html, /How did you hear about freeDMS\? \(optional\)/); assert.match(html, /An AI assistant \(ChatGPT, Gemini, or similar\)/);
+  assert.match(html, /data-hear-about-prompt hidden/); assert.match(html, /What did you ask it\? \(optional\)/);
   assert.match(inviteLandingHtml({valid: false}), /Ask your admin to reissue a link/);
   assert.equal(inviteLink('token', 'https://example.test/app/'), 'https://example.test/app/#/invite/token');
 });
@@ -33,7 +35,7 @@ test('users explain one-time pending links and final revocation without mutation
 test('profile has fixed role, prefilled identity and reason-specific dead ends', () => {
   const html = inviteLandingHtml({valid: true, dealership: 'Motors', inviter: 'Owner', name: 'Team', email: 'team@example.test', role: 'staff'});
   for (const value of ['Owner', 'staff', 'value="Team"', 'value="team@example.test"']) assert.ok(html.includes(value));
-  assert.doesNotMatch(html, /name="role"|<select/);
+  assert.doesNotMatch(html, /name="role"|<select name="role"/);
   for (const [reason, title] of [['expired', 'expired'], ['revoked', 'revoked'], ['accepted', 'already used']] as const) {
     const dead = inviteLandingHtml({valid: false, reason}); assert.ok(dead.includes(title)); assert.match(dead, /reissue a link/);
   }

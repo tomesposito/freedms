@@ -251,11 +251,11 @@ export class DynamoRepositories implements RepositoryFactory {
     };
     return {
       webhookDispatchScope: {owner: this, tenantId},
-      acceptInvite: async (invite, user, now) => {
+      acceptInvite: async (invite, user, now, attribution) => {
         // Read the guard before the profile: competing acceptances cannot move the first stamp.
         const guard = await get<{version: number}>('MEMBERSHIP_GUARD');
         const current = await get<import('@freedms/shared').Invite>(`INVITE#${requireId(invite.id)}`);
-        const write = acceptanceWrite(tenantId, current, invite, user, await workspaceUsers(), now, await get<Tenant>('PROFILE'));
+        const write = acceptanceWrite(tenantId, current, invite, user, await workspaceUsers(), now, await get<Tenant>('PROFILE'), attribution);
         if (!write) return 'already-member';
         const {record, member, event, memberEvent, tenant} = write;
         await transact([

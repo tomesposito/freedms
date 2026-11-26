@@ -5,7 +5,7 @@ import type { UI } from '../src/desking.js';
 import { pilotRequestsHtml, pilotRequestsRoute } from '../src/pilot-requests.js';
 import { sidebarNavigation } from '../src/sidebar.js';
 
-const record: AccessRequest = {id: 'request', tenantId: 'operator', email: 'dealer@example.test', contactName: '<Dealer>', dealershipName: 'A & B Motors', phone: '555-0100', inventorySize: '26-50', currentDms: 'Manual', message: '<script>alert(1)</script>', status: 'pending', handledAt: null, version: 2, createdAt: '2026-10-31T22:00:00Z', updatedAt: '2026-10-31T22:01:00Z'};
+const record: AccessRequest = {id: 'request', tenantId: 'operator', email: 'dealer@example.test', contactName: '<Dealer>', dealershipName: 'A & B Motors', phone: '555-0100', inventorySize: '26-50', currentDms: 'Manual', message: '<script>alert(1)</script>', hearAbout: '', hearAboutPrompt: '', status: 'pending', handledAt: null, version: 2, createdAt: '2026-10-31T22:00:00Z', updatedAt: '2026-10-31T22:01:00Z'};
 test('pilot inbox escapes submitted details and distinguishes pending and handled states', () => {
   const html = pilotRequestsHtml([record], 'pending');
   assert.match(html, /&lt;Dealer&gt;/); assert.match(html, /A &amp; B Motors/); assert.match(html, /&lt;script&gt;/); assert.doesNotMatch(html, /<script>/);
@@ -13,6 +13,12 @@ test('pilot inbox escapes submitted details and distinguishes pending and handle
   assert.match(pilotRequestsHtml([], 'pending'), /No pending requests/);
   const handled = pilotRequestsHtml([{...record, status: 'handled', handledAt: record.updatedAt}], 'handled');
   assert.match(handled, /Handled:/); assert.doesNotMatch(handled, /data-handle-request/);
+});
+test('pilot inbox shows hear-about attribution and the escaped AI prompt', () => {
+  const html = pilotRequestsHtml([{...record, hearAbout: 'ai-assistant', hearAboutPrompt: 'best <free> DMS'}], 'pending');
+  assert.match(html, /Heard about freeDMS/); assert.match(html, /An AI assistant \(ChatGPT, Gemini, or similar\)/);
+  assert.match(html, /Asked the assistant/); assert.match(html, /best &lt;free&gt; DMS/);
+  assert.match(pilotRequestsHtml([record], 'pending'), /Not provided/);
 });
 test('pilot navigation and route require explicit operator capability as well as admin', async () => {
   assert.match(sidebarNavigation(true, true), /#\/pilot-requests/);

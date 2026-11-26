@@ -11,6 +11,7 @@ import { brandIconUrl, brandLogoUrl, brandReversedLogoUrl } from './brand';
 import { legalPageHtml } from './legal';
 import { mountOnboarding } from './onboarding';
 import { inviteLandingHtml, invitedEmailMatches, inviteSignInHtml, welcomeHtml, welcomeDismissed, dismissWelcome, type InviteView } from './invites';
+import { bindHearAbout } from './hear-about';
 import { publicApi } from './retail';
 import type { Invite } from '@freedms/shared';
 import { icon, sidebarUserHtml, sidebarToggleIcon, sidebarNavigation, readSidebarPreference, writeSidebarPreference } from './sidebar';
@@ -251,6 +252,7 @@ async function route(): Promise<void> {
       document.querySelector('#invite-signin')?.addEventListener('click', () => { if (authFlow === 'inapp') void login(); else void signIn().catch(flash); });
       if (view.valid) {
         const form = app.querySelector<HTMLFormElement>('#accept-invite')!;
+        bindHearAbout(form);
         const email = form.querySelector<HTMLInputElement>('[name=email]')!;
         email.addEventListener('input', () => { form.querySelector<HTMLElement>('#email-warning')!.hidden = invitedEmailMatches(email.value, view.email); });
         const path = `/invite/${encodeURIComponent(location.hash.slice(9))}/accept`;

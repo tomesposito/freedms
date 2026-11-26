@@ -6,6 +6,7 @@ import { ApiError, conflict, missing } from './errors.js';
 import { parseBody, response, type ApiRequest, type ApiResponse } from './handler.js';
 import { OPERATOR_TENANT_ID, type RepositoryFactory } from './repository.js';
 import { emailAddress } from './users.js';
+import { hearAbout } from './hear-about.js';
 import { invalid, onlyKeys, text, version } from './validation.js';
 
 export type PilotOperator = Pick<Principal, 'tenantId' | 'userId'>;
@@ -40,7 +41,7 @@ export interface AccessRequestMail {
 export async function submitAccessRequest(request: ApiRequest, repositories: RepositoryFactory, now: Date, mail?: AccessRequestMail, turnstile?: TurnstileVerifier): Promise<ApiResponse> {
   if (request.method !== 'POST') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
   const body = parseBody(request.body, 16 * 1024);
-  onlyKeys(body, ['contactName', 'dealershipName', 'email', 'phone', 'inventorySize', 'currentDms', 'message', 'website', 'turnstileToken']);
+  onlyKeys(body, ['contactName', 'dealershipName', 'email', 'phone', 'inventorySize', 'currentDms', 'message', 'hearAbout', 'hearAboutPrompt', 'website', 'turnstileToken']);
   if (typeof body.website === 'string' && body.website.trim()) return response(201, {data: {received: true}});
   if (turnstile?.configured) {
     let verified = false;
@@ -57,13 +58,14 @@ export async function submitAccessRequest(request: ApiRequest, repositories: Rep
   if (inventorySize && !inventorySizes.includes(inventorySize as typeof inventorySizes[number])) throw invalid('Invalid inventory size.');
   const currentDms = text(body.currentDms ?? '', 'Current DMS', 120, true);
   const message = text(body.message ?? '', 'Message', 2000, true);
+  const attribution = hearAbout(body);
   const repository = repositories.forTenant(OPERATOR_TENANT_ID);
   const existing = await repository.accessRequest(email);
   if (existing) return response(201, {data: {received: true}});
   const timestamp = now.toISOString();
   const record: AccessRequest = {
     id: randomUUID(), tenantId: OPERATOR_TENANT_ID, email,
-    contactName, dealershipName, phone, inventorySize, currentDms, message,
+    contactName, dealershipName, phone, inventorySize, currentDms, message, ...attribution,
     status: 'pending', handledAt: null,
     version: 1, createdAt: timestamp, updatedAt: timestamp
   };
@@ -77,7 +79,8 @@ export async function submitAccessRequest(request: ApiRequest, repositories: Rep
         text: [
           `Contact name: ${record.contactName}`, `Dealership name: ${record.dealershipName}`,
           `Email: ${record.email}`, `Phone: ${record.phone}`, `Inventory size: ${record.inventorySize}`,
-          `Current DMS: ${record.currentDms}`, `Message: ${record.message}`, `Submitted: ${record.createdAt}`
+          `Current DMS: ${record.currentDms}`, `Message: ${record.message}`,
+          `How they heard about freeDMS: ${record.hearAbout}`, `What they asked the assistant: ${record.hearAboutPrompt}`, `Submitted: ${record.createdAt}`
         ].join('\n')
       });
     } catch (error) {

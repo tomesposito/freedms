@@ -44,6 +44,25 @@ test('wizard provisions the profile, admin email and seven-day pending invites w
   assert.ok(!JSON.stringify(events).includes('token')); assert.ok(!JSON.stringify(events).includes('example.test'));
   assert.equal((await repo.list({})).length, 0);
 });
+test('wizard stores optional hear-about attribution on the tenant record', async () => {
+  const s = await setup();
+  const result = await localSession(JSON.stringify({...payload(), hearAbout: 'ai-assistant', hearAboutPrompt: 'best free DMS for a small used car lot'}), s.repositories, s.tokens, now);
+  assert.equal(result.statusCode, 201);
+  const claims = s.tokens.verify(JSON.parse(result.body).data.token);
+  const tenant = await s.repositories.forTenant(claims['custom:tenant_id']).tenant();
+  assert.equal(tenant!.hearAbout, 'ai-assistant'); assert.equal(tenant!.hearAboutPrompt, 'best free DMS for a small used car lot');
+  await assert.rejects(localSession(JSON.stringify({...payload(), hearAbout: 'billboard'}), s.repositories, s.tokens, now), error => (error as {status: number}).status === 400);
+});
+test('invite acceptance stores attribution on the tenant once and never overwrites it', async () => {
+  const s = await setup(), a = await s.create();
+  const repo = s.repositories.forTenant(a.invites[0].tenantId);
+  const first = await s.call(`/invite/${a.invites[0].token}/accept`, '', 'POST', {name: a.invites[0].name, email: a.invites[0].email, hearAbout: 'search', hearAboutPrompt: 'dropped'});
+  assert.equal(first.data.outcome, 'accepted');
+  assert.equal((await repo.tenant())!.hearAbout, 'search'); assert.equal((await repo.tenant())!.hearAboutPrompt, '');
+  const second = await s.call(`/invite/${a.invites[1].token}/accept`, '', 'POST', {name: a.invites[1].name, email: a.invites[1].email, hearAbout: 'ai-assistant', hearAboutPrompt: 'best free DMS'});
+  assert.equal(second.data.outcome, 'accepted');
+  assert.equal((await repo.tenant())!.hearAbout, 'search'); assert.equal((await repo.tenant())!.hearAboutPrompt, '');
+});
 test('invalid wizard payloads never access a repository or provision a tenant', async () => {
   const s = await setup();
   const invalid = [{invites: [{name: 'X', email: 'bad', role: 'staff'}]}, {invites: [payload().invites[0], {...payload().invites[0], email: ' STAFF@example.test '}]}, {invites: [{name: 'Me', email: 'owner@example.test', role: 'admin'}]}, {dealerType: 'unknown'}, {email: 'bad'}, {address: ''}, {phone: ''}, {invites: Array(11).fill(payload().invites[0])}];

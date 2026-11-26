@@ -58,7 +58,7 @@ export interface TenantRepository {
   accessRequest(email: string): Promise<AccessRequest | undefined>;
   accessRequests(): Promise<AccessRequest[]>;
   saveAccessRequest(record: AccessRequest, expectedVersion: number): Promise<void>;
-  acceptInvite(invite: import('@freedms/shared').Invite, user: User, now: Date): Promise<'accepted' | 'already-member'>;
+  acceptInvite(invite: import('@freedms/shared').Invite, user: User, now: Date, attribution?: {hearAbout: string; hearAboutPrompt: string}): Promise<'accepted' | 'already-member'>;
   /** Rewrite a stored invite in place at the SAME version, with no outbox event, solely to drop a legacy plaintext token field (#179). The caller passes the scrubbed record; returns false — rewriting nothing — when the stored record is gone, changed version, or no longer carries a plaintext token. */
   scrubInvite(record: import('@freedms/shared').Invite): Promise<boolean>;
   workspaceUsers(): Promise<import('@freedms/shared').WorkspaceUser[]>;

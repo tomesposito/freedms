@@ -4,6 +4,7 @@ import type { CrmWrite, RepositoryFactory, TenantRepository } from './repository
 import { ApiError, conflict, missing, requireId } from './errors.js';
 import { parseBody, response, type ApiRequest } from './handler.js';
 import { invalid, object, onlyKeys, text } from './validation.js';
+import { hearAbout as parseHearAbout } from './hear-about.js';
 import { emailAddress } from './users.js';
 const hash = (token: string) => createHash('sha256').update(token).digest('hex');
 function credentials(tenantId: string) {
@@ -11,11 +12,12 @@ function credentials(tenantId: string) {
   return {token, tokenHash: hash(token)};
 }
 export function validateOnboarding(input: Record<string, unknown>) {
-  onlyKeys(input, ['acceptance', 'onboarding', 'name', 'email', 'dealership', 'address', 'phone', 'dealerType', 'invites']);
+  onlyKeys(input, ['acceptance', 'onboarding', 'name', 'email', 'dealership', 'address', 'phone', 'dealerType', 'invites', 'hearAbout', 'hearAboutPrompt']);
   text(input.name, 'Your name'); text(input.dealership, 'Dealership');
   const email = emailAddress(input.email);
   if (!['independent', 'franchise', 'other'].includes(String(input.dealerType))) throw invalid('Choose a dealer type.');
-  const profile = {address: text(input.address, 'Address', 500), phone: text(input.phone, 'Phone', 50), dealerType: input.dealerType as Tenant['dealerType']};
+  const attribution = parseHearAbout(input);
+  const profile = {address: text(input.address, 'Address', 500), phone: text(input.phone, 'Phone', 50), dealerType: input.dealerType as Tenant['dealerType'], ...(attribution.hearAbout ? {hearAbout: attribution.hearAbout, hearAboutPrompt: attribution.hearAboutPrompt} : {})};
   if (!Array.isArray(input.invites) || input.invites.length > 10) throw invalid('Enter at most 10 invites.');
   const seen = new Set([email]);
   const invites = input.invites.map(value => {
@@ -94,7 +96,7 @@ export async function manageInvites(request: ApiRequest, principal: Principal, r
   return response(200, {data: fresh ? {...record, token: fresh.token} : record});
 }
 /** Validate against the stored invite inside the repository write boundary. */
-export function acceptanceWrite(tenantId: string, current: Invite | undefined, supplied: Invite, user: User, rows: WorkspaceUser[], now: Date, tenant: Tenant | undefined) {
+export function acceptanceWrite(tenantId: string, current: Invite | undefined, supplied: Invite, user: User, rows: WorkspaceUser[], now: Date, tenant: Tenant | undefined, attribution?: {hearAbout: string; hearAboutPrompt: string}) {
   if (!tenant || tenant.id !== tenantId) throw conflict();
   if (!current || current.tenantId !== tenantId || supplied.tenantId !== tenantId || current.version !== supplied.version || current.tokenHash !== supplied.tokenHash || current.status !== 'pending' || current.expiresAt <= now.toISOString()) throw conflict();
   if (user.email !== current.email || !user.name.trim() || rows.some(r => r.user.id === user.id)) throw conflict();
@@ -105,14 +107,17 @@ export function acceptanceWrite(tenantId: string, current: Invite | undefined, s
   const member = {tenantId, userId: user.id, role: current.role, active: true, version: 1};
   const event = {...inviteWrite(record, user.id, current.version).event, type: 'invite.accepted' as const};
   const memberEvent = {...event, id: randomUUID(), aggregateId: user.id, aggregateVersion: 1, type: 'user.added' as const};
-  return {record, member, event, memberEvent, tenant: {...tenant, inviteAcceptedAt: tenant.inviteAcceptedAt ?? now.toISOString()}};
+  // Attribution is asked once per tenant (#208): the first answer given at any
+  // acceptance wins and later acceptances never overwrite it.
+  return {record, member, event, memberEvent, tenant: {...tenant, inviteAcceptedAt: tenant.inviteAcceptedAt ?? now.toISOString(), ...(attribution?.hearAbout && !tenant.hearAbout ? {hearAbout: attribution.hearAbout, hearAboutPrompt: attribution.hearAboutPrompt} : {})}};
 }
 export async function publicInvite(request: ApiRequest, repositories: RepositoryFactory, now: Date, hosted = false) {
   const method = request.method.toUpperCase();
   const accepting = request.path.endsWith('/accept');
   if (method !== (accepting ? 'POST' : 'GET')) throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
   let profile: {name: string; email: string} | undefined;
-  if (accepting) { const body = parseBody(request.body); onlyKeys(body, ['name', 'email']); profile = {name: text(body.name, 'Name'), email: emailAddress(body.email)}; }
+  let attribution: {hearAbout: string; hearAboutPrompt: string} | undefined;
+  if (accepting) { const body = parseBody(request.body); onlyKeys(body, ['name', 'email', 'hearAbout', 'hearAboutPrompt']); profile = {name: text(body.name, 'Name'), email: emailAddress(body.email)}; attribution = parseHearAbout(body); }
   const refuse = (reason?: 'expired' | 'revoked' | 'accepted') => response(200, {data: accepting ? {outcome: 'refused', ...(reason ? {reason} : {})} : {valid: false, ...(reason ? {reason} : {})}});
   const match = /^\/invite\/([\w-]{1,128}\.[a-f0-9]{64})(?:\/accept)?$/.exec(request.path);
   if (!match) return refuse();
@@ -132,7 +137,7 @@ export async function publicInvite(request: ApiRequest, repositories: Repository
       throw new ApiError(403, 'INVITE_IDENTITY', 'Sign in with the verified account invited to this dealership.');
     const user = {id: hosted ? requireId(request.claims!.sub) : randomUUID(), name: profile.name, email: invite.email};
     try {
-      const outcome = await repo.acceptInvite(invite, user, now);
+      const outcome = await repo.acceptInvite(invite, user, now, attribution);
       return response(200, {data: {outcome, tenantId: tenant.id, email: invite.email, role: invite.role, dealership: tenant.name}});
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {

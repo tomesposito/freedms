@@ -28,7 +28,7 @@ test('public access capture stores only an operator record, with no membership, 
   const result = await post();
   assert.equal(result.statusCode, 201); assert.deepEqual(JSON.parse(result.body), {data: {received: true}});
   const records = await repo.accessRequests(); assert.equal(records.length, 1);
-  assert.deepEqual(records[0], {...fields, id: records[0].id, tenantId: 'operator', status: 'pending', handledAt: null, version: 1, createdAt: start.toISOString(), updatedAt: start.toISOString()});
+  assert.deepEqual(records[0], {...fields, hearAbout: '', hearAboutPrompt: '', id: records[0].id, tenantId: 'operator', status: 'pending', handledAt: null, version: 1, createdAt: start.toISOString(), updatedAt: start.toISOString()});
   for (const partition of [repo, repositories.forTenant('real-dealership')]) {
     assert.equal(await partition.tenant(), undefined);
     assert.deepEqual(await partition.users(), []); assert.deepEqual(await partition.workspaceUsers(), []);
@@ -133,6 +133,21 @@ test('Dynamo access requests use operator keys, conditional writes without event
   await assert.rejects(dynamo.saveAccessRequest({...record, version: 3}, 0), /version/);
 });
 
+test('access capture stores hear-about attribution and the AI prompt, and only for the AI answer', async () => {
+  const {post, repo} = setup();
+  assert.equal((await post({...fields, hearAbout: 'ai-assistant', hearAboutPrompt: 'best free DMS for a small used car lot'})).statusCode, 201);
+  const record = (await repo.accessRequests())[0];
+  assert.equal(record.hearAbout, 'ai-assistant'); assert.equal(record.hearAboutPrompt, 'best free DMS for a small used car lot');
+  const {post: post2, repo: repo2} = setup();
+  await post2({...fields, hearAbout: 'search', hearAboutPrompt: 'should be dropped'});
+  const other = (await repo2.accessRequests())[0];
+  assert.equal(other.hearAbout, 'search'); assert.equal(other.hearAboutPrompt, '');
+  for (const body of [{...fields, hearAbout: 'billboard'}, {...fields, hearAbout: 'ai-assistant', hearAboutPrompt: 'x'.repeat(501)}, {...fields, hearAbout: 42}]) {
+    const {post: postBad, repo: repoBad} = setup();
+    assert.equal((await postBad(body)).statusCode, 400); assert.deepEqual(await repoBad.accessRequests(), []);
+  }
+});
+
 test('access capture refuses oversized UTF-8 bodies before saving', async () => {
   const {post, repo} = setup();
   const result = await post({...fields, message: 'é'.repeat(8192)});
@@ -156,7 +171,7 @@ test('new access request emails the operator after saving, and repeats never ema
   assert.equal((await post()).statusCode, 201);
   assert.deepEqual(sent, [{to: notifyTo, replyTo: fields.email,
     subject: `New freeDMS pilot access request — ${fields.dealershipName}`,
-    text: `Contact name: ${fields.contactName}\nDealership name: ${fields.dealershipName}\nEmail: ${fields.email}\nPhone: ${fields.phone}\nInventory size: ${fields.inventorySize}\nCurrent DMS: ${fields.currentDms}\nMessage: ${fields.message}\nSubmitted: ${start.toISOString()}`}]);
+    text: `Contact name: ${fields.contactName}\nDealership name: ${fields.dealershipName}\nEmail: ${fields.email}\nPhone: ${fields.phone}\nInventory size: ${fields.inventorySize}\nCurrent DMS: ${fields.currentDms}\nMessage: ${fields.message}\nHow they heard about freeDMS: \nWhat they asked the assistant: \nSubmitted: ${start.toISOString()}`}]);
   const first = await repo.accessRequest(fields.email);
   setNow(new Date('2026-10-31T12:00:00Z'));
   const repeat = await post({...fields, message: 'Updated'});
@@ -170,7 +185,7 @@ test('notification labels include blank optional fields', async () => {
   const {sent, mail} = fakeMail(); const {post} = setup(mail);
   await post({contactName: fields.contactName, dealershipName: fields.dealershipName, email: fields.email});
   assert.equal(sent.length, 1);
-  assert.ok(sent[0].text.includes('\nPhone: \nInventory size: \nCurrent DMS: \nMessage: \nSubmitted: '));
+  assert.ok(sent[0].text.includes('\nPhone: \nInventory size: \nCurrent DMS: \nMessage: \nHow they heard about freeDMS: \nWhat they asked the assistant: \nSubmitted: '));
 });
 
 test('honeypot and rejected requests never send email', async () => {
