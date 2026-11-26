@@ -1,6 +1,7 @@
 import type { DocumentStore } from './document-store.js';
 import { projectedPhotoUrls, publiclyVisibleVehicles, serveVehiclePhoto } from './vehicle-photos.js';
-import { buildFacebookRows, facebookCsv, feedOptionsFingerprint } from './facebook-feed.js';
+import { buildFacebookRows, facebookCsv, feedDestinationFingerprint } from './facebook-feed.js';
+import { buildCarsforsaleRows, buildGoogleRows, carsforsaleCsv, googleCsv } from './destination-feeds.js';
 import type { Vehicle } from '@freedms/shared';
 import { ApiError, missing } from './errors.js';
 import { response, type ApiRequest, type ApiResponse } from './handler.js';
@@ -46,7 +47,7 @@ export function createPublicInventoryHandler(documents?: DocumentStore, photoBas
   // Best-effort per-process protection only: Lambda instances do not share buckets.
   const buckets = new Map<string, {start: number; count: number}>();
   return async (request: ApiRequest, repositories: RepositoryFactory, now: Date): Promise<ApiResponse> => {
-    const match = /^\/public\/([\w-]{1,128})\/(inventory\.json|inventory\.html|llms\.txt|facebook\.csv|photos\/([\w-]{1,128}))$/.exec(request.path);
+    const match = /^\/public\/([\w-]{1,128})\/(inventory\.json|inventory\.html|llms\.txt|facebook\.csv|google\.csv|carsforsale\.csv|photos\/([\w-]{1,128}))$/.exec(request.path);
     if (!match || Object.keys(request.query ?? {}).length) throw missing();
     if (request.method.toUpperCase() !== 'GET') throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
     const [, tenantId, format, photoId] = match;
@@ -60,19 +61,24 @@ export function createPublicInventoryHandler(documents?: DocumentStore, photoBas
     buckets.set(key, bucket);
     if (++bucket.count > 120) throw new ApiError(429, 'RATE_LIMITED', 'Too many requests. Try again later.');
     if (photoId) return serveVehiclePhoto(repo, photoId, documents?.forTenant(tenantId));
-    if (format === 'facebook.csv') {
-      // Bounded published-feed pointer (#171): one config read, one pointer
-      // read, then rows rebuilt from current inventory so withdrawals and
-      // price/status/photo changes are reconciled at serve time. A settings
-      // change since generation invalidates the pointer until regeneration;
-      // feed history is never scanned on this public path.
+    if (format === 'facebook.csv' || format === 'google.csv' || format === 'carsforsale.csv') {
+      // Bounded published-feed pointer (#171, generalized to every
+      // destination in #205): one config read, one pointer read for this
+      // destination, then rows rebuilt from current inventory so withdrawals
+      // and price/status/photo changes are reconciled at serve time. A
+      // settings change since generation invalidates the pointer until
+      // regeneration; feed history is never scanned on this public path.
+      const destination = format === 'facebook.csv' ? 'facebook' : format === 'google.csv' ? 'google' : 'carsforsale';
       const config = await repo.feedConfig();
-      if (!config?.facebookEnabled) throw missing();
-      const pointer = await repo.facebookFeedPointer();
-      if (!pointer || pointer.fingerprint !== feedOptionsFingerprint(config)) throw missing();
+      if (!(destination === 'facebook' ? config?.facebookEnabled : destination === 'google' ? config?.googleEnabled : config?.carsforsaleEnabled)) throw missing();
+      const pointer = await repo.destinationFeedPointer(destination);
+      if (!pointer || pointer.fingerprint !== feedDestinationFingerprint(config!, destination)) throw missing();
+      const vehicles = await repo.list({});
       const result = response(200, null);
       result.headers['content-type'] = 'text/csv; charset=utf-8';
-      result.body = facebookCsv(buildFacebookRows(await repo.list({}), config, tenantId, tenant.name, photoBase));
+      result.body = destination === 'facebook' ? facebookCsv(buildFacebookRows(vehicles, config!, tenantId, tenant.name, photoBase))
+        : destination === 'google' ? googleCsv(buildGoogleRows(vehicles, config!, tenantId, tenant.name, photoBase))
+        : carsforsaleCsv(buildCarsforsaleRows(vehicles, config!, tenantId, tenant.name, photoBase));
       return result;
     }
     // The agent index is a static pointer list: serve it without reading any

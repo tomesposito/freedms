@@ -34,6 +34,7 @@ import { mfa } from './mfa.js';
 import { dispatchWebhooks, scheduleWebhookDispatch, fetchWebhookSender, hostedWebhookSender, guardHostedWebhookSender, webhooks, type WebhookSender } from './webhooks.js';
 import { feeds } from './feed.js';
 import { inventoryImport } from './import.js';
+import { migrationImport } from './migration.js';
 import { analytics, analyticsFromEnv, track, type AnalyticsVendor } from './analytics.js';
 import { quickEntry } from './quick-entry.js';
 import { UnconfiguredProvider, type QuickEntryProvider } from './ai-provider.js';
@@ -245,6 +246,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
           return response(200, {data});
         }
         if (method === 'GET' && path.startsWith('/vin/')) return response(200, {data: await decoder.decode(vin(decodeURIComponent(path.slice(5))))});
+        if (/^\/migration(\/|$)/.test(path)) return await migrationImport(request, principal, repository, now(), decoder);
         if (/^\/vehicles\/imports?(\/|$)/.test(path)) return await inventoryImport(request, principal, repository, now(), decoder);
         const date = now();
         const event = (type: OutboxEvent['type'], aggregateId: string, aggregateVersion: number): OutboxEvent => ({id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, ...(request.agent ? {actorType: 'agent' as const} : {}), type, aggregateId, aggregateVersion, occurredAt: date.toISOString(), deliveryStatus: 'pending'});

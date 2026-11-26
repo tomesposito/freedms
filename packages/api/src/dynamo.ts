@@ -1,3 +1,5 @@
+import type { MigrationImport, MigrationHistory } from '@freedms/shared';
+import { assertMigrationCommit, migrationHistoryEntry } from './repository.js';
 import { WEBHOOK_DRAIN_PAGE_SIZE, webhookCandidates, type WebhookDrainScope } from './repository.js';
 import { assertAssistantBalance } from './assistant-settlement.js';
 import type { AssistantPlan, AssistantCycle, AssistantLedgerEntry, AssistantWaitlistEntry } from '@freedms/shared';
@@ -518,10 +520,35 @@ export class DynamoRepositories implements RepositoryFactory {
       },
       feedConfig: () => get<FeedConfig>('FEEDCONFIG#feed-config'),
       saveFeedConfig: async (record, expectedVersion, event) => { assertFeedConfig(tenantId, record, expectedVersion, event); await transact([put('FEEDCONFIG#feed-config', record, expectedVersion ? '#d.#v = :v' : 'attribute_not_exists(PK)', expectedVersion || undefined), eventPut(event)]); },
-      appendFeedRun: async (record, event) => { assertScope(tenantId, record); assertEvent(record.id, 1, event, 'feed.generated'); const items: TransactWriteCommandInput['TransactItems'] = [put(`FEEDRUN#${requireId(record.id)}`, record), eventPut(event)]; if (record.facebookRows !== undefined && record.facebookFingerprint) items.push({Put: {TableName: this.table, Item: {...key('FEEDPUBLISH#current'), data: {tenantId, runId: record.id, createdAt: record.createdAt, fingerprint: record.facebookFingerprint}}, ConditionExpression: 'attribute_not_exists(PK) OR #d.#ca <= :ca', ExpressionAttributeNames: {'#d': 'data', '#ca': 'createdAt'}, ExpressionAttributeValues: {':ca': record.createdAt}}}); await transact(items); },
+      appendFeedRun: async (record, event) => { assertScope(tenantId, record); assertEvent(record.id, 1, event, 'feed.generated'); const items: TransactWriteCommandInput['TransactItems'] = [put(`FEEDRUN#${requireId(record.id)}`, record), eventPut(event)]; for (const [destination, rows, pointerKey] of [['facebook', record.facebookRows, 'FEEDPUBLISH#current'], ['google', record.googleRows, 'FEEDPUBLISH#google'], ['carsforsale', record.carsforsaleRows, 'FEEDPUBLISH#carsforsale']] as const) { if (rows === undefined) continue; const fingerprint = record.feedFingerprints?.[destination] ?? (destination === 'facebook' ? record.facebookFingerprint : undefined); if (!fingerprint) continue; items.push({Put: {TableName: this.table, Item: {...key(pointerKey), data: {tenantId, runId: record.id, createdAt: record.createdAt, fingerprint}}, ConditionExpression: 'attribute_not_exists(PK) OR #d.#ca <= :ca', ExpressionAttributeNames: {'#d': 'data', '#ca': 'createdAt'}, ExpressionAttributeValues: {':ca': record.createdAt}}}); } await transact(items); },
       facebookFeedPointer: () => get<{tenantId: string; runId: string; createdAt: string; fingerprint: string}>('FEEDPUBLISH#current'),
+      destinationFeedPointer: (destination: string) => get<{tenantId: string; runId: string; createdAt: string; fingerprint: string}>(destination === 'facebook' ? 'FEEDPUBLISH#current' : `FEEDPUBLISH#${destination}`),
       feedRuns: () => listRows<FeedRun>('FEEDRUN#'),
       feedRun: id => get<FeedRun>(`FEEDRUN#${requireId(id)}`),
+      migrationHistory: () => listRows<MigrationHistory>('MIGRATION-HISTORY#'),
+      migrationReport: id => get<MigrationImport>(`MIGRATION-REPORT#${requireId(id)}`),
+      migrationVersion: async () => (await get<{version: number}>('MIGRATION#EPOCH'))?.version ?? 0,
+      commitMigration: async commit => {
+        const {report, event, writes, expectedVersion} = commit;
+        assertMigrationCommit(tenantId, commit);
+        const epochPut = (key: string, version: number) => put(key, {version: version + 1},
+          version ? '#d.#v = :v' : 'attribute_not_exists(PK)', version || undefined);
+        const items = [
+          epochPut('MIGRATION#EPOCH', expectedVersion),
+          put(`MIGRATION-REPORT#${report.id}`, report),
+          put(`MIGRATION-HISTORY#${report.id}`, migrationHistoryEntry(report)),
+          eventPut(event),
+          ...writes.flatMap(({record, event}) => [
+            put(`${'kind' in record ? record.kind.toUpperCase() : 'VEHICLE'}#${record.id}`, record),
+            eventPut(event)
+          ])
+        ];
+        if (writes.some(({record}) => 'kind' in record && (record.kind === 'lead' || record.kind === 'customer'))) {
+          const epoch = await get<{version: number}>('LEADLIST#EPOCH');
+          items.push(epochPut('LEADLIST#EPOCH', epoch?.version ?? 0));
+        }
+        await transact(items);
+      },
       appendImport: async (record, event) => { assertScope(tenantId, record); assertEvent(record.id, 1, event, 'vehicle.imported'); await transact([put(`IMPORT#${requireId(record.id)}`, record), eventPut(event)]); },
       imports: () => listRows<InventoryImport>('IMPORT#'),
       events: () => listRows<OutboxEvent>('EVENT#'),

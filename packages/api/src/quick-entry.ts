@@ -20,6 +20,7 @@ export function bodyLimit(method: string, path: string): number {
   if (/^\/accounting\/reconciliations\/[^/]+\/(preview|import)\/?$/.test(path)) return IMPORT_BODY_LIMIT;
   if (method.toUpperCase() === 'POST' && /^\/vehicles\/[^/]+\/photos\/?$/.test(path)) return VEHICLE_PHOTO_BODY_LIMIT;
   if (/^\/vehicles\/imports?(\/|$)/.test(path)) return IMPORT_BODY_LIMIT;
+  if (/^\/migration\/[^/]+\/import(\/preview)?\/?$/.test(path)) return IMPORT_BODY_LIMIT;
   return method.toUpperCase() === 'POST' && path.replace(/\/$/, '') === '/quick-entry/vehicle-photo' ? PHOTO_BODY_LIMIT : 65536;
 }
 const clean = (value: unknown, max: number): string | undefined => typeof value === 'string' && value.trim() && value.trim().length <= max ? value.trim() : undefined;

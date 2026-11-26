@@ -443,6 +443,21 @@ or blank values become `IMP-` plus the uppercase VIN’s last 8 characters, with
 
 ![Import preview](docs/screenshots/import-preview.png)
 
+**Switch from another DMS** — from Inventory → Import CSV, a workspace
+administrator can migrate inventory, customers, leads, and open deals. Upload
+an export, check the suggested mapping and cleanup, then approve the import.
+Supply the old system’s record count and, for inventory and deals, the expected
+dollar total for each file. Larger exports can be split into files of up to 47
+data rows so each approval commits atomically.
+
+Import history includes a parallel-run report with expected and imported totals,
+field changes, and skipped rows. View reports by file or download all four
+entity types together as JSON.
+
+![Empty migration workspace](docs/screenshots/migration-empty.png)
+
+![Parallel-run report with reconciliation and inventory cleanup details](docs/screenshots/migration-report.png)
+
 **Listing feeds** — outbound feed generation with a run log; excluded vehicles
 always carry a reason.
 
@@ -1047,21 +1062,48 @@ Local in-memory configurations and runs are cleared when the API restarts.
 Facebook Marketplace vehicle catalog feeds are free with the DMS. Enable the
 Facebook option in Feeds, save, generate, then paste the public feed URL into Meta
 Commerce Manager → Catalog → Data feeds and choose a pull schedule. Sold or
-removed cars drop out on the next generation; sold cars are always excluded.
-Photos are currently unavailable and image fields are empty. Meta controls
+removed cars drop out of the feed right away, without waiting for the next
+generation; sold cars are always excluded. Meta controls
 catalog approval, eligibility (including country, account type, and page standing),
 and ranking; placement is never promised. freeDMS holds no Facebook credentials
 and makes no calls to Meta. Meta can pull the URL when the app is hosted.
 
+Two more destinations work the same way — enable, save, generate, hand over the
+public URL — and are free with the DMS. **Google Vehicle Ads**: a feed in Google's
+published Merchant Center vehicle format (exact Google attribute names, prices as
+`12345.67 USD`, mileage as `10000 Miles`, each available vehicle linked to its page
+on the dealer's own site). Register a vehicle ads data source in Google Merchant
+Center and add the URL as a scheduled fetch. Vehicle ads are in-store offers, so
+enter the store code from your Google Business Profile in Feeds; without it the
+fulfillment column ships empty and Google will disapprove the rows. Google also
+requires an exterior color per vehicle; freeDMS does not record color, so that
+column ships empty too. **Carsforsale.com**: an inventory CSV carrying the field
+set documented for Carsforsale.com dealer feeds (VIN, stock number, year, make,
+model, trim, price and special price, mileage, colors, engine, transmission,
+drivetrain, description, features, photos); give the URL to Carsforsale.com or
+the feed provider you already work with and they pull it on their schedule.
+Fields freeDMS does not record (special price, color, engine, transmission,
+drivetrain, features) ship empty. Every destination feed rebuilds
+from live inventory when served, so sold or removed cars drop out right away and
+price or photo changes reconcile without regenerating; changing the shared
+publication settings unpublishes every destination until the next generation,
+while toggling one destination never unpublishes another. Descriptions
+are the assistant-drafted listing description when one exists. Cars.com,
+AutoTrader, and CarGurus accept inventory only through partner or approved
+feed-provider agreements, so freeDMS offers no feed URL for them; the Feeds page
+names them as agreement-gated.
+
 | Method | Path | Result |
 | --- | --- | --- |
-| GET | `/feeds/config` | Saved config or `null`, defaults, local generation/scheduling flags, and Facebook feed status |
-| PUT | `/feeds/config` | Save formats, includedStatuses, requirePrice, schedule, facebookEnabled; authenticated write role |
+| GET | `/feeds/config` | Saved config or `null`, defaults, local generation/scheduling flags, Facebook feed status, per-destination feed status, and the agreement-gated destination list |
+| PUT | `/feeds/config` | Save formats, includedStatuses, requirePrice, schedule, facebookEnabled, googleEnabled, carsforsaleEnabled, googleStoreCode; authenticated write role |
 | POST | `/feeds/generate` | Body `{}`; save an immutable run with counts, included identities, excluded identities/reasons, and public snapshot rows |
 | GET | `/feeds/runs` | Tenant run history, newest first |
 | GET | `/feeds/runs/{id}.csv` | Download CSV snapshot if generated for this run |
 | GET | `/feeds/runs/{id}.json` | Download JSON array snapshot if generated for this run |
 | GET | `/public/{tenantId}/facebook.csv` | Public, unauthenticated CSV; 404 unless enabled with a generated Facebook feed |
+| GET | `/public/{tenantId}/google.csv` | Public, unauthenticated CSV in Google's vehicle ads format; 404 unless enabled with a generated feed |
+| GET | `/public/{tenantId}/carsforsale.csv` | Public, unauthenticated Carsforsale.com CSV; 404 unless enabled with a generated feed |
 
 ### Webhooks (local build)
 

@@ -29,6 +29,7 @@ import { webhooksRoute } from './webhooks';
 import { fiRoute } from './fi';
 import { feedRoute } from './feed';
 import { importRoute } from './import';
+import { migrationRoute } from './migration';
 import { bindDraftOutcome, quickEntryCard, bindQuickEntry, takeVehicleDraft, takeVehicleDraftPhoto, fillDraft, reviewNote, clearDrafts } from './quick-entry';
 import { reportsRoute } from './reports';
 import { jacketRoute } from './jacket';
@@ -290,6 +291,7 @@ async function route(): Promise<void> {
       else if (parts[2] === 'jacket' && parts[1]) await jacketRoute(parts[1], ui);
       else await dealsRoute(parts, ui);
     }
+    else if (parts[0] === 'migration') await migrationRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'import') await importRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'overview') await overviewRoute({api, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});
     else if (parts[0] === 'reports') await reportsRoute({api, download, shell, flash, current: () => sequence === routeSequence, refresh: () => { void route(); }, admin: session.principal.role === 'admin'});

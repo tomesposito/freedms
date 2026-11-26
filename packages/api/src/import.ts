@@ -13,11 +13,21 @@ export const MAX_VIN_DECODES_PER_IMPORT = 25;
 // hosted Lambda's 60s, leaving time for validation, writes, and the response.
 export const VIN_ENRICHMENT_BUDGET_MS = 20_000;
 
-async function preview(csv: string, enrich: boolean, repo: TenantRepository, now: Date, decoder: VinDecoder): Promise<ImportPreview> {
-  let parsed: string[][];
-  try { parsed = inventoryCsvRows(csv); } catch (error) { throw invalid(error instanceof Error ? error.message : 'Invalid CSV.'); }
+export function parseImportCsv(csv: string): string[][] {
+  try { return inventoryCsvRows(csv); }
+  catch (error) { throw invalid(error instanceof Error ? error.message : 'Invalid CSV.'); }
+}
+
+interface InventoryPreviewOptions {
+  columns?: (string | null)[];
+  normalizeDate?: (value: string) => string;
+  audit?: (index: number, values: Record<string, unknown>) => void;
+}
+
+export async function previewInventory(parsed: string[][], enrich: boolean, repo: TenantRepository, now: Date, decoder: VinDecoder,
+  {columns: mappedColumns, audit, normalizeDate = value => value}: InventoryPreviewOptions = {}): Promise<ImportPreview> {
   const [header, ...data] = parsed;
-  const columns = header.map(h => { const key = h.trim().toLowerCase(); return Object.hasOwn(inventoryCsvHeaders, key) ? inventoryCsvHeaders[key] : undefined; });
+  const columns = mappedColumns ?? header.map(h => { const key = h.trim().toLowerCase(); return Object.hasOwn(inventoryCsvHeaders, key) ? inventoryCsvHeaders[key] : undefined; });
   if (columns.filter(Boolean).some((c, i, all) => all.indexOf(c) !== i)) throw invalid('Duplicate recognized CSV header.');
   if (data.some(row => row.length !== header.length)) throw invalid('CSV rows must have the same number of fields as the header.');
   const existing = await repo.list({});
@@ -87,7 +97,7 @@ async function preview(csv: string, enrich: boolean, repo: TenantRepository, now
     for (const key of ['cost', 'listPrice']) value[key] = check(key, () => { const cents = dollarCents(raw[key]); if (cents === undefined) throw invalid('Use a dollar amount from 0 to $100,000,000 with at most two decimal places.'); return cents; });
     value.status = check('status', () => { const status = raw.status?.toLowerCase() || 'available'; if (!vehicleStatuses.includes(status as VehicleInput['status'])) throw invalid('Invalid vehicle status.'); return status; });
     value.dateStocked = check('dateStocked', () => {
-      const date = raw.dateStocked || now.toISOString().slice(0, 10);
+      const date = normalizeDate(raw.dateStocked ?? '') || now.toISOString().slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date || date > now.toISOString().slice(0, 10)) throw invalid('Date stocked must be a valid date no later than today (UTC).'); return date;
     });
     if (raw.mileage) check('mileage', () => {
@@ -95,6 +105,7 @@ async function preview(csv: string, enrich: boolean, repo: TenantRepository, now
       if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(raw.mileage) || !Number.isSafeInteger(miles) || miles > 10_000_000) throw invalid('Mileage must be an integer from 0 to 10,000,000.');
       value.mileage = miles;
     });
+    audit?.(index, value);
     if (result.errors.length) result.status = 'error';
     else {
       result.vehicle = vehicleInput(value, now);
@@ -121,7 +132,7 @@ export async function inventoryImport(request: ApiRequest, principal: Principal,
   requireWrite(principal, method);
   const body = parseBody(request.body, IMPORT_BODY_LIMIT); onlyKeys(body, ['csv', 'enrich']);
   if (typeof body.csv !== 'string' || (body.enrich !== undefined && typeof body.enrich !== 'boolean')) throw invalid('CSV text and an optional boolean enrich flag are required.');
-  const p = await preview(body.csv, body.enrich === true, repo, now, decoder);
+  const p = await previewInventory(parseImportCsv(body.csv), body.enrich === true, repo, now, decoder);
   if (path.endsWith('/preview')) return response(200, {data: p});
   const event = (type: OutboxEvent['type'], aggregateId: string): OutboxEvent => ({id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, ...(request.agent ? {actorType: 'agent' as const} : {}), type, aggregateId, aggregateVersion: 1, occurredAt: now.toISOString(), deliveryStatus: 'pending'});
   const result: ImportResult = {importId: randomUUID(), totalRows: p.totalRows, importedCount: 0, errorCount: p.errorCount, duplicateCount: p.duplicateCount, importedVehicleIds: [], skipped: []};

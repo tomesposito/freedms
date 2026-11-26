@@ -19,7 +19,7 @@ export function gatewayHandler(handle: (request: ApiRequest) => Promise<ApiRespo
       const path = event.rawPath.replace(/\/$/, ''), method = event.requestContext.http.method.toUpperCase();
       const claims = event.requestContext.authorizer?.jwt?.claims ?? {};
       const intake = path === '/intake/adf' && method === 'POST';
-      const publicInventory = (method === 'GET' && /^\/public\/[\w-]{1,128}\/(inventory\.(json|html)|llms\.txt|facebook\.csv|photos\/[\w-]{1,128}|site(\/(inventory|about|contact|vehicles\/[\w-]{1,128}))?)$/.test(path)) ||
+      const publicInventory = (method === 'GET' && /^\/public\/[\w-]{1,128}\/(inventory\.(json|html)|llms\.txt|facebook\.csv|google\.csv|carsforsale\.csv|photos\/[\w-]{1,128}|site(\/(inventory|about|contact|vehicles\/[\w-]{1,128}))?)$/.test(path)) ||
         (method === 'POST' && /^\/public\/[\w-]{1,128}\/site\/(contact|vehicles\/[\w-]{1,128})$/.test(path));
       const publicLink = publicInventory || (method === 'GET' && /^\/(share|invite)\/[^/]+$/.test(path)) ||
         (method === 'POST' && /^\/share\/[^/]+\/(respond|documents)$/.test(path)) ||
