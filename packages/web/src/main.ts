@@ -39,7 +39,14 @@ import { vehicleStatuses, type ApiEnvelope, type DecodedVin, type Session, type 
 import { cents, currency, escapeHtml as e } from './format';
 import { mountLogin } from './login';
 import { authFlow, cognito, storeTokens, freshToken, refreshSession, clearSession, finishSignIn, getToken, localMode, setToken, signIn, signOut, onSharedSessionChange } from './auth';
+import { registerServiceWorker } from './pwa';
 import './style.css';
+// Installable app shell (#206): register the service worker in production
+// builds only, so local development is never served a cached shell. The
+// worker caches the static shell only — never API or tenant data.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => { void registerServiceWorker(navigator.serviceWorker)?.catch(() => {}); });
+}
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const base = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
 let session: Session;

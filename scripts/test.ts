@@ -108,5 +108,6 @@ import '../packages/api/test/facebook-feed.test.js';
 import '../packages/api/test/destination-feeds.test.js';
 
 import '../packages/api/test/dealer-site.test.js';
+import '../packages/web/test/pwa.test.js';
 
 import '../packages/api/test/mcp-oauth.test.js';
