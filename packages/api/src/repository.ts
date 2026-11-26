@@ -80,6 +80,8 @@ export interface TenantRepository {
   appendFeedRun(record: FeedRun, event: OutboxEvent): Promise<void>;
   /** Bounded pointer to the currently published Facebook feed (#171): written by appendFeedRun when a run carries facebookRows, never a scan of feed history. */
   facebookFeedPointer(): Promise<FacebookFeedPointer | undefined>;
+  /** Bounded pointer to a published destination feed (#205): one per destination, written by appendFeedRun when a run carries that destination's rows, never a scan of feed history. The Facebook destination delegates to facebookFeedPointer so its storage stays identical. */
+  destinationFeedPointer(destination: import('@freedms/shared').FeedDestinationId): Promise<FacebookFeedPointer | undefined>;
   feedRuns(): Promise<FeedRun[]>;
   feedRun(id: string): Promise<FeedRun | undefined>;
   appendImport(record: InventoryImport, event: OutboxEvent): Promise<void>;

@@ -15,4 +15,4 @@ export function buildFacebookRows(vehicles: Vehicle[], config: FeedOptions, tena
 }
 export const facebookCsv = (rows: FacebookFeedRow[]) => toCsv([[...facebookColumns], ...rows.map(row => facebookColumns.map(key => String(row[key])))]);
 /** Stable fingerprint of the publication settings a Facebook feed was generated under (#171). Any change to these settings invalidates the published pointer until the dealer regenerates. */
-export const feedOptionsFingerprint = (options: FeedOptions) => JSON.stringify({formats: [...options.formats].sort(), includedStatuses: [...options.includedStatuses].sort(), requirePrice: options.requirePrice, schedule: options.schedule, facebookEnabled: options.facebookEnabled});
+export const feedOptionsFingerprint = (options: FeedOptions) => JSON.stringify({formats: [...options.formats].sort(), includedStatuses: [...options.includedStatuses].sort(), requirePrice: options.requirePrice, schedule: options.schedule, facebookEnabled: options.facebookEnabled, googleEnabled: options.googleEnabled ?? false, syndicationEnabled: options.syndicationEnabled ?? false});
