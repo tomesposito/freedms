@@ -345,10 +345,19 @@ Resources:
     Properties:
       Domain: !Ref CognitoDomainPrefix
       UserPoolId: !Ref UserPool
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}/access'
+      RetentionInDays: 7
   Api:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: '$default'
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        # Route templates and service statuses only: no paths, headers, claims, or bodies.
+        Format: '{"requestId":"$context.requestId","time":"$context.requestTimeEpoch","method":"$context.httpMethod","route":"$context.routeKey","status":"$context.status","lambdaStatus":"$context.integration.integrationStatus","applicationStatus":"$context.integration.status","integrationRequestId":"$context.integration.requestId","latencyMs":"$context.responseLatency"}'
       DefaultRouteSettings:
         ThrottlingRateLimit: 100
         ThrottlingBurstLimit: 200
