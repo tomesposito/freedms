@@ -105,6 +105,7 @@ import '../packages/web/test/command-bar.test.js';
 import '../packages/web/test/overview.test.js';
 
 import '../packages/api/test/facebook-feed.test.js';
+import '../packages/api/test/destination-feeds.test.js';
 
 import '../packages/api/test/dealer-site.test.js';
 

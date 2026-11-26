@@ -576,6 +576,20 @@ Resources:
             Path: '/public/{tenantId}/facebook.csv'
             Method: GET
             Auth: {Authorizer: NONE}
+        PublicGoogleFeed:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/public/{tenantId}/google.csv'
+            Method: GET
+            Auth: {Authorizer: NONE}
+        PublicCarsforsaleFeed:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/public/{tenantId}/carsforsale.csv'
+            Method: GET
+            Auth: {Authorizer: NONE}
         PublicDealerHome:
           Type: HttpApi
           Properties:

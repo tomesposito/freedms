@@ -55,7 +55,7 @@ test('hosted public routes allow only inventory reads and dealer inquiries, with
   const template = readFileSync('infra/template.yaml', 'utf8');
   const configured = [...template.matchAll(/Path: '(\/public\/[^']+)'\s+Method: (GET|POST)\s+Auth: \{Authorizer: NONE\}/g)]
     .map(([, path, method]) => `${method} ${path}`);
-  const reads = ['inventory.json', 'inventory.html', 'llms.txt', 'facebook.csv', 'photos/{photoId}',
+  const reads = ['inventory.json', 'inventory.html', 'llms.txt', 'facebook.csv', 'google.csv', 'carsforsale.csv', 'photos/{photoId}',
     'site', 'site/inventory', 'site/about', 'site/contact', 'site/vehicles/{vehicleId}'];
   const expected = [...reads.map(path => `GET /public/{tenantId}/${path}`),
     'POST /public/{tenantId}/site/contact', 'POST /public/{tenantId}/site/vehicles/{vehicleId}'];
