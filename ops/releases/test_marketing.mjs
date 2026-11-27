@@ -167,7 +167,8 @@ function accessHarness(fetchRequest, challenge = false) {
   const panel = () => ({hidden: true, scrollIntoView() { this.scrolled = true; }, focus() { this.focused = true; }});
   const error = panel(), success = panel();
   let resets = 0;
-  const form = {hidden: false, querySelector: selector => selector === '.cf-turnstile' ? (challenge ? {} : null) : button, addEventListener: (name, handler) => { submit = handler; }};
+  const hearAbout = {addEventListener: () => {}};
+  const form = {hidden: false, querySelector: selector => selector === '.cf-turnstile' ? (challenge ? {} : null) : selector === '[name="hearAbout"]' ? hearAbout : button, addEventListener: (name, handler) => { submit = handler; }};
   const fields = Object.fromEntries(['contactName', 'dealershipName', 'email', 'phone', 'inventorySize', 'currentDms', 'message', 'website'].map(key => [key, `value-${key}`]));
   runInNewContext(accessScript, {
     document: {getElementById: id => ({'access-form': form, 'access-error': error, 'access-success': success})[id]},

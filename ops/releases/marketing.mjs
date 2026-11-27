@@ -5,6 +5,9 @@ export const marketingPages = ['index.html', 'dms-cost.html', 'free-dealer-manag
   'bhph.html', 'compare.html', 'paperwork.html', 'recon.html', 'states.html', 'switching.html'];
 export const marketingDocuments = ['robots.txt', 'sitemap.xml', 'llms.txt', ...marketingPages.filter(page => page !== 'index.html')];
 export const rootIcons = ['favicon.ico', 'favicon.svg', 'apple-touch-icon.png'];
+// PWA shell files (#206) served from the app root, next to the root icons.
+export const pwaFiles = ['manifest.webmanifest', 'offline.html', 'sw.js'];
+export const pwaIconPattern = /^icons\/[A-Za-z0-9_-]+\.png$/;
 
 // Content-addressed assets let CloudFront cache screenshots without serving an old
 // screenshot under a new page. Previous assets remain usable during rollback.
