@@ -43,7 +43,7 @@ export function publicInventoryHtml(dealer: string, document: ReturnType<typeof 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(document.name)}</title><script type="application/ld+json">${JSON.stringify(document).replace(/</g, '\\u003c')}</script></head><body><h1>${escapeHtml(dealer)}</h1>${list ? `<ul>${list}</ul>` : '<p>No vehicles are currently available.</p>'}</body></html>`;
 }
 
-export function createPublicInventoryHandler(documents?: DocumentStore, photoBase = '') {
+export function createPublicInventoryHandler(documents?: DocumentStore, photoBase = '', publicBase = '') {
   // Best-effort per-process protection only: Lambda instances do not share buckets.
   const buckets = new Map<string, {start: number; count: number}>();
   return async (request: ApiRequest, repositories: RepositoryFactory, now: Date): Promise<ApiResponse> => {
@@ -76,9 +76,9 @@ export function createPublicInventoryHandler(documents?: DocumentStore, photoBas
       const vehicles = await repo.list({});
       const result = response(200, null);
       result.headers['content-type'] = 'text/csv; charset=utf-8';
-      result.body = destination === 'facebook' ? facebookCsv(buildFacebookRows(vehicles, config!, tenantId, tenant.name, photoBase))
-        : destination === 'google' ? googleCsv(buildGoogleRows(vehicles, config!, tenantId, tenant.name, photoBase))
-        : carsforsaleCsv(buildCarsforsaleRows(vehicles, config!, tenantId, tenant.name, photoBase));
+      result.body = destination === 'facebook' ? facebookCsv(buildFacebookRows(vehicles, config!, tenantId, tenant.name, photoBase, publicBase))
+        : destination === 'google' ? googleCsv(buildGoogleRows(vehicles, config!, tenantId, tenant.name, photoBase, publicBase))
+        : carsforsaleCsv(buildCarsforsaleRows(vehicles, config!, tenantId, tenant.name, photoBase, publicBase));
       return result;
     }
     // The agent index is a static pointer list: serve it without reading any

@@ -8,6 +8,8 @@ import { invalid, object, onlyKeys, text } from './validation.js';
 
 export const VEHICLE_PHOTO_BODY_LIMIT = VEHICLE_PHOTO_PART_BYTES / 3 * 4 + 1024;
 export const vehiclePhotoBase = (appBaseUrl?: string) => appBaseUrl ? `${appBaseUrl.replace(/\/$/, '')}/api` : '';
+/** The trusted configured public origin itself (no path suffix), for consumer-ready /public/* URLs (#210). Empty when unconfigured, so local development keeps relative URLs. */
+export const publicBaseUrl = (appBaseUrl?: string) => appBaseUrl ? appBaseUrl.replace(/\/$/, '') : '';
 // The one public-visibility rule: only available vehicles are public. The
 // inventory document, the dealer site, and photo reads all use this, so
 // pulling a vehicle from public sale pulls its photos at the same moment.

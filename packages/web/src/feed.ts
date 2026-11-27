@@ -2,6 +2,8 @@ import { fetchAllVehicles } from './vehicles.js';
 import { vehicleStatuses, type AgreementGatedDestination, type DestinationFeedStatus, type FacebookFeedStatus, type FeedConfig, type FeedOptions, type FeedRun, type Vehicle } from '@freedms/shared';
 import { escapeHtml as e } from './format';
 import type { UI } from './desking';
+/** Tenant id from a feed URL, relative (`/public/<tenant>/…`) or absolute (`<origin>/public/<tenant>/…`) (#210). */
+export const tenantIdFromFeedUrl = (feedUrl: string): string => /\/public\/([^/]+)\//.exec(feedUrl)?.[1] ?? '';
 export function feedRunHtml(run: FeedRun): string {
   return `<article class="card"><h3>${e(run.createdAt)}</h3><p>${e(run.includedCount)} included · ${e(run.excludedCount)} excluded</p>${run.formats.map(format => `<button type="button" data-feed-download="${e(run.id)}.${e(format)}">Download ${e(format.toUpperCase())}</button>`).join(' ')}${run.excluded.length ? `<ul>${run.excluded.map(v => `<li>${e(v.stockNumber)} (${e(v.vehicleId)}): ${e(v.message)}</li>`).join('')}</ul>` : '<p>No vehicles excluded.</p>'}</article>`;
 }
@@ -35,8 +37,8 @@ export async function feedRoute(ui: UI & {download: (path: string, filename: str
       <fieldset><legend>Included statuses</legend>${vehicleStatuses.map(s => `<label><input type="checkbox" name="includedStatuses" value="${e(s)}" ${config.includedStatuses.includes(s) ? 'checked' : ''}>${e(s)}</label>`).join('')}</fieldset>
       <label><input type="checkbox" name="requirePrice" ${config.requirePrice ? 'checked' : ''}>Require a positive list price</label><label>Cadence preference<select name="schedule">${['manual', 'daily', 'weekly'].map(s => `<option value="${s}" ${config.schedule === s ? 'selected' : ''}>${s[0].toUpperCase() + s.slice(1)}</option>`).join('')}</select></label><fieldset><legend>Destinations</legend><label><input type="checkbox" name="facebookEnabled" ${config.facebookEnabled ? 'checked' : ''}>Enable Facebook Marketplace feed</label><label><input type="checkbox" name="googleEnabled" ${config.googleEnabled ? 'checked' : ''}>Enable Google Vehicle Ads feed</label><label><input type="checkbox" name="carsforsaleEnabled" ${config.carsforsaleEnabled ? 'checked' : ''}>Enable Carsforsale.com feed</label><label>Google store code (from your Google Business Profile)<input type="text" name="googleStoreCode" value="${e(config.googleStoreCode ?? '')}" maxlength="64" autocomplete="off"></label></fieldset><button>Save configuration</button></form></section>
       <p>Generate uses the saved configuration, or defaults if none is saved. Save form changes first. CSV prices are USD dollars; JSON uses listPriceCents. Internal costs and notes are excluded.</p><button id="feed-generate" class="primary">Generate feed</button>
-      ${facebookFeedHtml(settings.facebook, settings.facebook.feedUrl.split('/')[2])}
-      ${settings.destinations.filter(d => d.id !== 'facebook').map(d => destinationFeedHtml(d, d.feedUrl.split('/')[2])).join('')}
+      ${facebookFeedHtml(settings.facebook, tenantIdFromFeedUrl(settings.facebook.feedUrl))}
+      ${settings.destinations.filter(d => d.id !== 'facebook').map(d => destinationFeedHtml(d, tenantIdFromFeedUrl(d.feedUrl))).join('')}
       ${agreementGatedHtml(settings.agreementGated)}
       <section><h2>Last run</h2>${runs.length ? feedRunHtml(runs[0]) : '<p>No runs yet. Click Generate to create a downloadable snapshot and exclusion log.</p>'}</section><section><h2>Run history</h2>${runs.length > 1 ? runs.slice(1).map(feedRunHtml).join('') : '<p>No earlier runs.</p>'}</section>`);
     const form = document.querySelector<HTMLFormElement>('#feed-config')!;

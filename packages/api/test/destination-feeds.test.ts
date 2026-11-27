@@ -9,11 +9,11 @@ import { LocalTokens } from '../src/auth.js';
 import { googleRow, googleCsv, googleColumns, carsforsaleRow, carsforsaleCsv, carsforsaleColumns, agreementGatedDestinations } from '../src/destination-feeds.js';
 const start = new Date('2026-11-26T12:00:00Z');
 const input: VehicleInput = {mileage: null, stockNumber: 'S2', vin: '1HGCM82633A004352', year: 2003, make: 'Honda', model: 'Accord', trim: 'EX', status: 'available', listPrice: 1234567, cost: 990000, reconCosts: [{description: 'Internal', amount: 100}], notes: 'Private note', dateStocked: '2026-10-01', location: 'Lot, "A"'};
-async function setup() {
+async function setup(options?: {appBaseUrl?: string}) {
   const repositories = new MemoryRepositories(); let now = start;
   const tokens = new LocalTokens('test-secret-must-be-at-least-32-characters', () => start.getTime());
   for (const tenantId of ['A', 'B']) await repositories.forTenant(tenantId).provision({id: tenantId, name: tenantId, createdAt: start.toISOString()}, {id: 'user', name: 'Test'}, {tenantId, userId: 'user', role: 'staff', active: true}, {id: 'provision', tenantId, actorId: 'user', aggregateId: tenantId, aggregateVersion: 1, type: 'tenant.created', occurredAt: start.toISOString(), deliveryStatus: 'pending'});
-  const handler = createHandler(repositories, {decode: async () => { throw new Error('No network'); }}, () => now);
+  const handler = createHandler(repositories, {decode: async () => { throw new Error('No network'); }}, () => now, undefined, undefined, undefined, undefined, options);
   const raw = (path: string, method = 'GET', body: unknown = {}, tenant = 'A', query?: ApiRequest['query']) => handler({method, path, query, claims: tokens.verify(tokens.issue('user', tenant)), body: JSON.stringify(body)});
   const call = async (path: string, method = 'GET', body: unknown = {}, tenant = 'A') => { const r = await raw(path, method, body, tenant); return {status: r.statusCode, ...JSON.parse(r.body)}; };
   const add = async (changes: Partial<VehicleInput> = {}, tenant = 'A') => (await call('/vehicles', 'POST', {...input, ...changes}, tenant)).data;
@@ -159,4 +159,27 @@ test('Dynamo append writes one bounded pointer per destination in the same trans
   await repo.destinationFeedPointer('facebook');
   assert.deepEqual((commands[2] as GetCommand).input.Key, {PK: 'TENANT#A', SK: 'FEEDPUBLISH#current'});
   assert.equal(commands.length, 3);
+});
+
+test('configured public origin makes Google and Carsforsale links consumer-ready (#210)', async () => {
+  const origin = 'https://app.example.test';
+  const {call, add, handler} = await setup({appBaseUrl: origin});
+  const v = await add({mileage: 10000});
+  // Row builders prefix links with the configured origin and keep Google's store suffix; without an origin they stay relative.
+  assert.equal(googleRow(v, 'A', 'A', [], 'STORE1', origin).link_template, `${origin}/public/A/site/vehicles/${v.id}?store={store_code}`);
+  assert.equal(googleRow(v, 'A', 'A', []).link_template, `/public/A/site/vehicles/${v.id}?store={store_code}`);
+  assert.equal(carsforsaleRow(v, 'A', 'A', [], origin).link, `${origin}/public/A/site/vehicles/${v.id}`);
+  assert.equal(carsforsaleRow(v, 'A', 'A', []).link, `/public/A/site/vehicles/${v.id}`);
+  // Status URLs, generated rows, and live-served CSVs all agree on the absolute form.
+  const before = (await call('/feeds/config')).data;
+  assert.equal(before.destinations[1].feedUrl, `${origin}/public/A/google.csv`);
+  assert.equal(before.destinations[2].feedUrl, `${origin}/public/A/carsforsale.csv`);
+  await call('/feeds/config', 'PUT', allOn);
+  const run = (await call('/feeds/generate', 'POST')).data;
+  assert.equal(run.googleRows[0].link_template, `${origin}/public/A/site/vehicles/${v.id}?store={store_code}`);
+  assert.equal(run.carsforsaleRows[0].link, `${origin}/public/A/site/vehicles/${v.id}`);
+  const google = await handler({path: '/public/A/google.csv', method: 'GET'});
+  assert.equal(google.statusCode, 200); assert.equal(google.body, googleCsv(run.googleRows));
+  const carsforsale = await handler({path: '/public/A/carsforsale.csv', method: 'GET'});
+  assert.equal(carsforsale.statusCode, 200); assert.equal(carsforsale.body, carsforsaleCsv(run.carsforsaleRows));
 });

@@ -1,4 +1,4 @@
-import { clearVehiclePhotoParts, preparePhotoApproval, projectedPhotoUrls, readVehiclePhotoUpload, removeVehiclePhotos, requireVehiclePhotoStore, selectVehiclePhotos, stageVehiclePhotoPart, VEHICLE_PHOTO_BODY_LIMIT, vehiclePhotoBase, vehiclePhotoPartKeys } from './vehicle-photos.js';
+import { clearVehiclePhotoParts, preparePhotoApproval, projectedPhotoUrls, publicBaseUrl, readVehiclePhotoUpload, removeVehiclePhotos, requireVehiclePhotoStore, selectVehiclePhotos, stageVehiclePhotoPart, VEHICLE_PHOTO_BODY_LIMIT, vehiclePhotoBase, vehiclePhotoPartKeys } from './vehicle-photos.js';
 import { createDealerSiteHandler, websiteSettings } from './dealer-site.js';
 import { createPublicInventoryHandler } from './public-inventory.js';
 import { searchRecords } from './repository.js';
@@ -70,7 +70,8 @@ export function parseBody(body?: string, limit = 64 * 1024): Record<string, unkn
 }
 export function createHandler(repositories: RepositoryFactory, decoder: VinDecoder, now = () => new Date(), documents?: DocumentStore, provider: QuickEntryProvider = new UnconfiguredProvider(), vendor: AnalyticsVendor = analyticsFromEnv({}), webhookSender: WebhookSender | undefined = undefined, options: {oauth?: McpOAuth; stripe?: StripeBilling; appBaseUrl?: string; assistantSeedLocalPlan?: boolean; assistantProvider?: AssistantProvider; photoPrepImageEditor?: PhotoPrepImageEditor; assistantEntitlement?: AssistantEntitlement; registration?: RegistrationConfig; pilotOperator?: PilotOperator; hosted?: boolean; mcp?: McpConfig; mail?: AccessRequestMail; turnstile?: TurnstileVerifier} = {}) {
   const photoBase = vehiclePhotoBase(options.appBaseUrl);
-  const publicInventory = createPublicInventoryHandler(documents, photoBase);
+  const publicBase = publicBaseUrl(options.appBaseUrl);
+  const publicInventory = createPublicInventoryHandler(documents, photoBase, publicBase);
   const dealerSite = createDealerSiteHandler(photoBase);
   const sender = options.hosted ? guardHostedWebhookSender(webhookSender ?? hostedWebhookSender()) : webhookSender ?? fetchWebhookSender;
   const postCommit = async (repo: TenantRepository, defer = false) => {
@@ -223,7 +224,7 @@ export function createHandler(repositories: RepositoryFactory, decoder: VinDecod
         if (/^\/quick-entry(\/|$)/.test(path)) return await quickEntry(request, principal, repository, now(), provider);
         if (/^\/fi-products(\/|$)/.test(path)) return await fiProducts(request, principal, repository, now(), request.agent);
         if (path === '/credit-applications') return await listCreditApplications(request, principal, repo);
-        if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repo, now(), photoBase);
+        if (/^\/feeds(\/|$)/.test(path)) return await feeds(request, principal, repo, now(), photoBase, publicBase);
         if (/^\/reports\/(technicians|departments|forecasts)([/.]|$)/.test(path)) return await reportsP3(request, repository, now());
         if (/^\/reports\/(turn|fi|custom|saved)([/.]|$)/.test(path)) return await reportsP2(request, principal, repo, now());
         if (/^\/reports(\/|$)/.test(path)) return await reports(request, repository, now(), record);

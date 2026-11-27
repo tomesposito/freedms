@@ -35,3 +35,13 @@ test('destination status escapes text and explains setup and honest limits (#205
   assert.ok(gated.includes('Cars.com')); assert.ok(gated.includes('Agreement-gated destinations'));
   assert.ok(gated.includes('&lt;b&gt;AutoTrader&lt;/b&gt;')); assert.ok(!gated.includes('<b>AutoTrader</b>'));
 });
+
+import { tenantIdFromFeedUrl } from '../src/feed.js';
+test('tenant id extraction works for relative and absolute feed URLs (#210)', () => {
+  assert.equal(tenantIdFromFeedUrl('/public/A/facebook.csv'), 'A');
+  assert.equal(tenantIdFromFeedUrl('https://app.example.test/public/A/facebook.csv'), 'A');
+  assert.equal(tenantIdFromFeedUrl('https://app.example.test/public/tenant-1/google.csv'), 'tenant-1');
+  assert.equal(tenantIdFromFeedUrl('not-a-feed-url'), '');
+  const hosted = facebookFeedHtml({enabled: true, feedUrl: 'https://app.example.test/public/A/facebook.csv', lastGeneratedAt: null, vehicleCount: null}, tenantIdFromFeedUrl('https://app.example.test/public/A/facebook.csv'));
+  assert.ok(hosted.includes('Feed URL for tenant A')); assert.ok(hosted.includes('value="https://app.example.test/public/A/facebook.csv"'));
+});

@@ -7,11 +7,11 @@ import { LocalTokens } from '../src/auth.js';
 import { facebookRow, facebookCsv, facebookColumns } from '../src/facebook-feed.js';
 const start = new Date('2026-10-22T12:00:00Z');
 const input: VehicleInput = {mileage: null, stockNumber: 'S2', vin: '1HGCM82633A004352', year: 2003, make: 'Honda', model: 'Accord', trim: 'EX', status: 'available', listPrice: 1234567, cost: 990000, reconCosts: [{description: 'Internal', amount: 100}], notes: 'Private note', dateStocked: '2026-10-01', location: 'Lot, "A"'};
-async function setup() {
+async function setup(options?: {appBaseUrl?: string}) {
   const repositories = new MemoryRepositories(); let now = start;
   const tokens = new LocalTokens('test-secret-must-be-at-least-32-characters', () => start.getTime());
   for (const tenantId of ['A', 'B']) await repositories.forTenant(tenantId).provision({id: tenantId, name: tenantId, createdAt: start.toISOString()}, {id: 'user', name: 'Test'}, {tenantId, userId: 'user', role: 'staff', active: true}, {id: 'provision', tenantId, actorId: 'user', aggregateId: tenantId, aggregateVersion: 1, type: 'tenant.created', occurredAt: start.toISOString(), deliveryStatus: 'pending'});
-  const handler = createHandler(repositories, {decode: async () => { throw new Error('No network'); }}, () => now);
+  const handler = createHandler(repositories, {decode: async () => { throw new Error('No network'); }}, () => now, undefined, undefined, undefined, undefined, options);
   const raw = (path: string, method = 'GET', body: unknown = {}, tenant = 'A', query?: ApiRequest['query']) => handler({method, path, query, claims: tokens.verify(tokens.issue('user', tenant)), body: JSON.stringify(body)});
   const call = async (path: string, method = 'GET', body: unknown = {}, tenant = 'A') => { const r = await raw(path, method, body, tenant); return {status: r.statusCode, ...JSON.parse(r.body)}; };
   const add = async (changes: Partial<VehicleInput> = {}, tenant = 'A') => (await call('/vehicles', 'POST', {...input, ...changes}, tenant)).data;
@@ -126,4 +126,25 @@ test('empty Facebook feed is header-only and combined snapshots respect the size
   const before = await repo.events();
   assert.equal((await call('/feeds/generate', 'POST')).status, 400);
   assert.equal((await repo.feedRuns()).length, 1); assert.deepEqual(await repo.events(), before);
+});
+
+test('configured public origin makes feed URLs and row links complete HTTPS addresses (#210)', async () => {
+  const origin = 'https://app.example.test';
+  const {call, add, handler} = await setup({appBaseUrl: origin});
+  const v = await add({mileage: 10000});
+  // Row builder prefixes the link with the configured origin; without one it stays relative.
+  assert.equal(facebookRow(v, 'A', 'A', [], origin).link, `${origin}/public/A/inventory.html`);
+  assert.equal(facebookRow(v, 'A', 'A', []).link, '/public/A/inventory.html');
+  // The status response shows complete URLs for every destination.
+  const before = (await call('/feeds/config')).data;
+  assert.equal(before.facebook.feedUrl, `${origin}/public/A/facebook.csv`);
+  assert.deepEqual(before.destinations.map((d: {feedUrl: string}) => d.feedUrl), [`${origin}/public/A/facebook.csv`, `${origin}/public/A/google.csv`, `${origin}/public/A/carsforsale.csv`]);
+  // Generated rows and the live-served CSV carry the same absolute link.
+  await call('/feeds/config', 'PUT', {...defaultFeedOptions, facebookEnabled: true});
+  const run = (await call('/feeds/generate', 'POST')).data;
+  assert.equal(run.facebookRows[0].link, `${origin}/public/A/inventory.html`);
+  const served = await handler({path: '/public/A/facebook.csv', method: 'GET'});
+  assert.equal(served.statusCode, 200);
+  assert.equal(served.body, facebookCsv(run.facebookRows));
+  assert.ok(served.body.includes(`${origin}/public/A/inventory.html`));
 });

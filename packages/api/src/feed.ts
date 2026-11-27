@@ -38,7 +38,7 @@ export function buildFeed(vehicles: Vehicle[], config: FeedOptions): Pick<FeedRu
 export function feedCsv(run: Pick<FeedRun, 'rows'>): string {
   return toCsv([['stockNumber', 'vin', 'year', 'make', 'model', 'trim', 'status', 'listPrice', 'dateStocked', 'location'], ...run.rows.map(r => [r.stockNumber, r.vin, String(r.year), r.make, r.model, r.trim, r.status, (r.listPriceCents / 100).toFixed(2), r.dateStocked, r.location])]);
 }
-export async function feeds(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date, photoBase = '') {
+export async function feeds(request: ApiRequest, principal: Principal, repo: TenantRepository, now: Date, photoBase = '', publicBase = '') {
   const path = request.path.replace(/\/$/, ''), method = request.method.toUpperCase();
   const download = /^\/feeds\/runs\/([^/]+)\.(csv|json)$/.exec(path);
   if (!download && !['/feeds/config', '/feeds/generate', '/feeds/runs'].includes(path)) throw missing();
@@ -65,12 +65,12 @@ export async function feeds(request: ApiRequest, principal: Principal, repo: Ten
     const status = async (id: FeedDestinationId, name: string, enabled: boolean, file: string, build: () => number): Promise<DestinationFeedStatus> => {
       const pointer = await repo.destinationFeedPointer(id);
       const current = pointer && config && pointer.fingerprint === fingerprintFor(id) ? pointer : undefined;
-      return {id, name, enabled, feedUrl: `/public/${principal.tenantId}/${file}`, lastGeneratedAt: pointer?.createdAt ?? null, vehicleCount: current ? build() : null};
+      return {id, name, enabled, feedUrl: `${publicBase}/public/${principal.tenantId}/${file}`, lastGeneratedAt: pointer?.createdAt ?? null, vehicleCount: current ? build() : null};
     };
-    const facebook = await status('facebook', 'Facebook Marketplace', config?.facebookEnabled ?? false, 'facebook.csv', () => buildFacebookRows(vehicles, config!, principal.tenantId, dealer, photoBase).length);
+    const facebook = await status('facebook', 'Facebook Marketplace', config?.facebookEnabled ?? false, 'facebook.csv', () => buildFacebookRows(vehicles, config!, principal.tenantId, dealer, photoBase, publicBase).length);
     const destinations = [facebook,
-      await status('google', destinationNames.google, config?.googleEnabled ?? false, 'google.csv', () => buildGoogleRows(vehicles, config!, principal.tenantId, dealer, photoBase).length),
-      await status('carsforsale', destinationNames.carsforsale, config?.carsforsaleEnabled ?? false, 'carsforsale.csv', () => buildCarsforsaleRows(vehicles, config!, principal.tenantId, dealer, photoBase).length)];
+      await status('google', destinationNames.google, config?.googleEnabled ?? false, 'google.csv', () => buildGoogleRows(vehicles, config!, principal.tenantId, dealer, photoBase, publicBase).length),
+      await status('carsforsale', destinationNames.carsforsale, config?.carsforsaleEnabled ?? false, 'carsforsale.csv', () => buildCarsforsaleRows(vehicles, config!, principal.tenantId, dealer, photoBase, publicBase).length)];
     return response(200, {data: {config: config ?? null, defaults: defaultFeedOptions, local, facebook: {enabled: facebook.enabled, feedUrl: facebook.feedUrl, lastGeneratedAt: facebook.lastGeneratedAt, vehicleCount: facebook.vehicleCount}, destinations, agreementGated: agreementGatedDestinations}});
   }
   requireWrite(principal, method);
@@ -86,9 +86,9 @@ export async function feeds(request: ApiRequest, principal: Principal, repo: Ten
   const vehicles = await repo.list({});
   const dealerName = (options.facebookEnabled || options.googleEnabled || options.carsforsaleEnabled) ? (await repo.tenant())!.name : '';
   const run: FeedRun = {id: randomUUID(), tenantId: principal.tenantId, actorId: principal.userId, createdAt: date, formats: [...options.formats], ...buildFeed(vehicles, options),
-    ...(options.facebookEnabled ? {facebookRows: buildFacebookRows(vehicles, options, principal.tenantId, dealerName, photoBase), facebookFingerprint: feedOptionsFingerprint(options)} : {}),
-    ...(options.googleEnabled ? {googleRows: buildGoogleRows(vehicles, options, principal.tenantId, dealerName, photoBase)} : {}),
-    ...(options.carsforsaleEnabled ? {carsforsaleRows: buildCarsforsaleRows(vehicles, options, principal.tenantId, dealerName, photoBase)} : {}),
+    ...(options.facebookEnabled ? {facebookRows: buildFacebookRows(vehicles, options, principal.tenantId, dealerName, photoBase, publicBase), facebookFingerprint: feedOptionsFingerprint(options)} : {}),
+    ...(options.googleEnabled ? {googleRows: buildGoogleRows(vehicles, options, principal.tenantId, dealerName, photoBase, publicBase)} : {}),
+    ...(options.carsforsaleEnabled ? {carsforsaleRows: buildCarsforsaleRows(vehicles, options, principal.tenantId, dealerName, photoBase, publicBase)} : {}),
     ...(options.facebookEnabled || options.googleEnabled || options.carsforsaleEnabled ? {feedFingerprints: {facebook: feedDestinationFingerprint(options, 'facebook'), google: feedDestinationFingerprint(options, 'google'), carsforsale: feedDestinationFingerprint(options, 'carsforsale')}} : {})};
   // Keep the immutable snapshot safely below Dynamo's 400 KB item limit in both adapters.
   if (Buffer.byteLength(JSON.stringify(run)) > 300000) throw invalid('Feed snapshot exceeds the local 300 KB run limit. Narrow the included statuses or reduce inventory before generating.');
