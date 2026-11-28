@@ -118,6 +118,37 @@ test('destination mapping, public serving, isolation, reconciliation and read-on
   assert.equal(synPhotos.image_link, 'https://img/1'); assert.equal(synPhotos.additional_image_link, 'https://img/2');
 });
 
+test('a generated Google link lands on the vehicle page, and the inventory fallback, after store substitution (#212)', async () => {
+  const {call, add, handler} = await setup();
+  const v = await add({mileage: 10000});
+  const reserved = await add({stockNumber: 'R1', vin: '1HGCM82633A004355', status: 'reserved'});
+  await call('/feeds/config', 'PUT', {...allOn, includedStatuses: ['available', 'reserved']});
+  const run = (await call('/feeds/generate', 'POST')).data;
+  const follow = (template: string) => {
+    const url = new URL(template.replace('{store_code}', 'STORE1'), 'https://dealer.test');
+    return handler({path: url.pathname, method: 'GET', query: Object.fromEntries(url.searchParams), sourceIp: 'shopper'});
+  };
+  // Available vehicle: the link template points at its vehicle page.
+  const availableRow = run.googleRows.find((r: {id: string}) => r.id === 'S2');
+  assert.ok(availableRow.link_template.startsWith(`/public/A/site/vehicles/${v.id}?store=`));
+  const page = await follow(availableRow.link_template);
+  assert.equal(page.statusCode, 200, page.body);
+  assert.ok(page.body.includes('2003 Honda Accord EX')); assert.ok(page.body.includes('Stock S2'));
+  // Non-available vehicle: the same template falls back to the inventory page, which must accept store too.
+  const reservedRow = run.googleRows.find((r: {id: string}) => r.id === 'R1');
+  assert.ok(reservedRow.link_template.startsWith('/public/A/site/inventory?store='));
+  const inventory = await follow(reservedRow.link_template);
+  assert.equal(inventory.statusCode, 200, inventory.body);
+  assert.ok(inventory.body.includes('Inventory —'));
+  // The store parameter changes no filtering: the inventory page still lists the available vehicle only.
+  assert.ok(inventory.body.includes('Stock S2') || inventory.body.includes('2003 Honda Accord EX'));
+  // Unknown query keys are still rejected on both routes, with and without store.
+  for (const [path, query] of [[`/public/A/site/vehicles/${v.id}`, {bogus: '1'}], [`/public/A/site/vehicles/${v.id}`, {store: 'STORE1', bogus: '1'}], ['/public/A/site/inventory', {store: 'STORE1', bogus: '1'}]] as const) {
+    assert.equal((await handler({path, method: 'GET', query, sourceIp: 'shopper'})).statusCode, 400, path);
+  }
+  assert.ok(reserved.id);
+});
+
 test('public destination feeds serve without ever calling feedRuns (#205)', async () => {
   const {call, add, repositories} = await setup();
   await call('/feeds/config', 'PUT', allOn);

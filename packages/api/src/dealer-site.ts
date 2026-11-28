@@ -57,7 +57,11 @@ export function createDealerSiteHandler(photoBase = '') {
     const key = `${tenantId}:${request.sourceIp ?? 'shared'}:${method}`;
     const bucket = buckets.get(key) ?? {start: time, count: 0}; buckets.set(key, bucket);
     if (++bucket.count > (method === 'POST' ? 10 : 120)) throw new ApiError(429, 'RATE_LIMITED', 'Too many requests. Try again later.');
-    const query = request.query ?? {}; onlyKeys(query, page === 'inventory' ? ['q', 'make', 'under', 'sort'] : []);
+    const query = {...request.query ?? {}}; onlyKeys(query, page === 'inventory' ? ['q', 'make', 'under', 'sort', 'store'] : vehicleId ? ['store'] : []);
+    // #212: Google Vehicle Ads appends ?store={store_code} to every feed link
+    // and substitutes a real code before the click. The value names the
+    // dealer's Google store, not a site filter, so accept it and drop it.
+    delete query.store;
     const settings = await repo.crmGet('website-settings', 'website');
     const s = {...websiteDefaults(tenant), ...settings};
     // An empty identity override falls back to the tenant's identity.
